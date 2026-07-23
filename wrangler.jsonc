@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "charcha",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-23",
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+
+  // The Deploy to Cloudflare button reads this file to decide what to provision,
+  // and rewrites `database_id` with the ID of the database it creates. The value
+  // below is a placeholder that exists only so the binding is well-formed before
+  // any deployment has happened.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "charcha",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ]
+}

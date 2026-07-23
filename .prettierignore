@@ -1,0 +1,10 @@
+dist/
+coverage/
+.wrangler/
+node_modules/
+package-lock.json
+src/worker-configuration.d.ts
+
+# Prose is hand-wrapped at 80 columns and its tables are hand-aligned; Prettier
+# reflows both, which turns every documentation edit into a diff of padding.
+*.md
