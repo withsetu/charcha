@@ -31,6 +31,19 @@ readers in order to comment.
 | Issues | https://github.com/withsetu/charcha/issues |
 | Site | https://charcha.dev |
 
+## Development
+
+Requires Node 22 or newer.
+
+```sh
+npm install
+npm run dev     # wrangler dev, with a local D1
+npm run check   # types, typecheck, lint, format, tests, embed budget — what CI runs
+```
+
+Tests run inside the Workers runtime via `@cloudflare/vitest-pool-workers`, against
+the same bindings the deployed Worker gets.
+
 ## License
 
 MIT

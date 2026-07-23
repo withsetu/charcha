@@ -4,8 +4,18 @@
   "description": "Self-hosted comments for static sites. Deploys to your own Cloudflare account.",
   "type": "module",
   "main": "index.js",
-  "files": ["index.js", "README.md"],
-  "keywords": ["comments", "static-site", "cloudflare", "workers", "ssg", "self-hosted"],
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "keywords": [
+    "comments",
+    "static-site",
+    "cloudflare",
+    "workers",
+    "ssg",
+    "self-hosted"
+  ],
   "homepage": "https://charcha.dev",
   "repository": {
     "type": "git",
@@ -15,5 +25,34 @@
     "url": "https://github.com/withsetu/charcha/issues"
   },
   "license": "MIT",
-  "author": "Mayank Gupta"
+  "author": "Mayank Gupta",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types ./src/worker-configuration.d.ts",
+    "types:check": "wrangler types ./src/worker-configuration.d.ts --check",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "check:size": "node scripts/bundle-size.mjs",
+    "check": "npm run types:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run check:size"
+  },
+  "dependencies": {
+    "hono": "^4.12.31"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.114.0"
+  }
 }
