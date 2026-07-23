@@ -1,0 +1,19 @@
+{
+  "name": "charcha",
+  "version": "0.0.1",
+  "description": "Self-hosted comments for static sites. Deploys to your own Cloudflare account.",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "README.md"],
+  "keywords": ["comments", "static-site", "cloudflare", "workers", "ssg", "self-hosted"],
+  "homepage": "https://charcha.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withsetu/charcha.git"
+  },
+  "bugs": {
+    "url": "https://github.com/withsetu/charcha/issues"
+  },
+  "license": "MIT",
+  "author": "Mayank Gupta"
+}
