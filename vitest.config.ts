@@ -1,5 +1,9 @@
-import { cloudflareTest } from '@cloudflare/vitest-pool-workers'
+import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers'
 import { defineConfig } from 'vitest/config'
+
+// Tests run against the migrations themselves, so a schema change that breaks a
+// query breaks a test rather than a deployment.
+const migrations = await readD1Migrations('./migrations')
 
 export default defineConfig({
   test: {
@@ -11,11 +15,13 @@ export default defineConfig({
           cloudflareTest({
             main: './src/index.ts',
             wrangler: { configPath: './wrangler.jsonc' },
+            miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
           }),
         ],
         test: {
           name: 'worker',
           include: ['test/worker/**/*.test.ts'],
+          setupFiles: ['./test/worker/apply-migrations.ts'],
         },
       },
       {
