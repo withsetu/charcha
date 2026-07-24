@@ -61,12 +61,6 @@ app.options('/comments', async (c) => {
   const decision = await resolveOrigin(c.env.DB, c.req.raw)
   return preflightResponse(decision.allowedOrigin)
 })
-=======
-// handleSubmit; the layers themselves are src/spam (#8), assembled per request
-// because their configuration is two optional secrets on `env`.
-// Enforced by test/worker/submit/route.test.ts and test/worker/spam/route.test.ts.
-app.post('/comments', (c) => handleSubmit(c, { spamCheck: createSpamCheck(c.env) }))
->>>>>>> 5f16661 (feat(refs #8): spam defence layers 1-5, cheapest-first and fail-safe)
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a

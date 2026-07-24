@@ -102,18 +102,22 @@ describe('layer 4 — rate limiting, per IP', () => {
 })
 
 describe('layer 4 — rate limiting, per thread', () => {
-  it('rejects once a page is taking comments faster than a conversation does', async () => {
+  it('holds for review once a page is taking comments faster than a conversation does', async () => {
     // The circuit breaker: no single IP is over its limit, but the thread itself
     // is being flooded from many addresses.
+    //
+    // Review rather than reject, because the commenter who trips this did nothing
+    // wrong — the page is busy. Rejecting would discard a real comment on the day a
+    // post found an audience; holding it keeps it and shows the moderator the burst.
     for (let i = 0; i < DEFAULT_MAX_PER_PAGE; i++) await seed({ at: t0 - 60, ip: `203.0.113.${i}` })
 
-    expect((await layer.run(contextFor()))?.action).toBe('reject')
+    expect((await layer.run(contextFor()))?.action).toBe('review')
   })
 
   it('counts comments the janitor purged, because the thread limit does not need an IP', async () => {
     for (let i = 0; i < DEFAULT_MAX_PER_PAGE; i++) await seed({ at: t0 - 60, ip: null })
 
-    expect((await layer.run(contextFor()))?.action).toBe('reject')
+    expect((await layer.run(contextFor()))?.action).toBe('review')
   })
 
   it('counts only this page, so a busy thread cannot close the rest of the site', async () => {

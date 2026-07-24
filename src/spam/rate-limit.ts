@@ -107,8 +107,20 @@ export function rateLimitLayer(config: RateLimitConfig): SpamLayer {
         if (recent >= maxPerIp) return { action: 'reject', reason: 'per-ip' }
       }
 
+      // Review, not reject — unlike the per-IP half above. A commenter who trips
+      // this has done nothing wrong: the *page* is busy, and they arrived after
+      // thirty other people. Rejecting discards a real person's writing on the day
+      // a post finally found an audience, with no queue entry and no recourse,
+      // which is the failure this limit exists to avoid rather than to cause.
+      //
+      // Raising the threshold would only move the trigger point; holding for review
+      // changes the failure mode. The write-budget argument that justifies rejecting
+      // per IP does not carry here either — one page pinned at this cap is 4,320
+      // rows/day, about 4% of the 100k daily write budget, so admitting the burst to
+      // the queue costs little and a moderator sees the flood in one place.
+      // Enforced by test/worker/spam/rate-limit.test.ts.
       const onPage = await countRecentCommentsOnPage(context.db, context.pageKey, since)
-      if (onPage >= maxPerPage) return { action: 'reject', reason: 'per-page' }
+      if (onPage >= maxPerPage) return { action: 'review', reason: 'per-page' }
 
       return null
     },
