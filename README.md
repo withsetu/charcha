@@ -23,6 +23,21 @@ readers in order to comment.
   classifier by default. Third-party spam services are optional and off by
   default, because they mean sending reader data elsewhere.
 
+## Documentation
+
+Written for the parts that exist; [docs/](docs/) says plainly what is not built yet.
+
+- [Will this stay free?](docs/free-tier.md) — the free-tier ceilings in plain
+  language, with a worked example
+- [Theming](docs/theming.md) — the HTML and class names Charcha emits, and how to
+  style them
+- [How a URL becomes a comment thread](docs/thread-identity.md) — which parts of a
+  page address decide where a comment lands
+
+Reporting a security problem: [SECURITY.md](SECURITY.md). Please do not open a public
+issue for one — this repository is public and every installation runs in someone
+else's Cloudflare account.
+
 ## Status
 
 | | |

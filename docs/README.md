@@ -1,0 +1,61 @@
+# Charcha documentation
+
+> **Charcha is not usable yet.** These pages document the parts that are built and the
+> contracts that are settled. Where something is decided but not yet implemented, it says
+> so. Nothing here describes a feature that does not exist as though you could use it.
+>
+> The v1 plan is [issue #1](https://github.com/withsetu/charcha/issues/1).
+
+## Available now
+
+| Page | What it covers |
+|---|---|
+| [Will this stay free?](free-tier.md) | The Cloudflare free-tier ceilings in plain language, a worked example, and what breaks if you reach one |
+| [Theming](theming.md) | The HTML and class names Charcha emits, how to style them, and the styling modes that are agreed but not yet built |
+| [How a URL becomes a comment thread](thread-identity.md) | Which parts of a page address decide which thread a comment lands in, and how to name a thread yourself |
+
+For reporting a security problem, see [SECURITY.md](../SECURITY.md). For running the
+project locally, see the [README](../README.md).
+
+## Not written yet, and why
+
+These are the remaining parts of
+[issue #17](https://github.com/withsetu/charcha/issues/17). Each is missing because the
+feature it would document does not exist — writing instructions for them now would mean
+describing software nobody can run.
+
+| Topic | Waiting on |
+|---|---|
+| Installing via the Deploy button, and the first-run flow | [#16](https://github.com/withsetu/charcha/issues/16) — the deploy flow |
+| Adding the embed to Astro, Hugo, Eleventy, Jekyll and plain HTML | [#5](https://github.com/withsetu/charcha/issues/5) — the embed script |
+| Configuring spam defence, and what each optional provider transmits | [#8](https://github.com/withsetu/charcha/issues/8), [#11](https://github.com/withsetu/charcha/issues/11) |
+| Migrating from Disqus | [#15](https://github.com/withsetu/charcha/issues/15) — the importer |
+| Moderating comments | [#13](https://github.com/withsetu/charcha/issues/13) — the dashboard |
+
+## What already works, if you are reading the code
+
+Two things are built and reachable, which is why the pages above can be written honestly:
+
+- **`POST /comments`** accepts a comment. It validates and size-caps every field, derives
+  the thread key itself rather than trusting the request, and returns the rendered
+  comment as HTML. The status code carries the outcome so a client never has to parse a
+  message to tell success from failure: `201` published, `202` accepted and awaiting
+  review, `400` rejected by validation, `403` rejected as spam, `413` body too large.
+- **`GET /health`** answers only if the Worker is running *and* its database binding
+  responds to a query, so it is a real liveness check rather than a static `ok`.
+
+New comments are held for review by default. The queue they land in is real; the
+interface for working through it is [#13](https://github.com/withsetu/charcha/issues/13).
+
+## A note on the spam defence, since it shapes the docs above
+
+Charcha's spam layers run locally and transmit nothing by default: a honeypot field, a
+time-to-submit check, Turnstile, rate limits, content heuristics, and a classifier
+trained on the site's own moderation decisions. Optional third-party providers are
+**off by default**, because enabling one means sending commenter data — IP address,
+email, comment text — to a company that is not you, which the site owner then has to
+disclose.
+
+When that configuration ships, its documentation will state exactly what each provider
+receives, before the switch that turns it on. That ordering is a commitment, not a
+formatting preference.
