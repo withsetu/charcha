@@ -127,14 +127,69 @@ Skills are installed globally, which only makes them *available*. Nothing invoke
 them for you, and two PRs went by on this project before anyone noticed none had
 been used. So the map below is part of the contract, not a suggestion.
 
+Naming: superpowers skills carry the `superpowers:` prefix; every other name is
+invoked as written (most are agent-skills playbooks, some — `impeccable`, `verify`,
+`dataviz`, `improve`, `deep-research` — are standalone or built in). Both libraries
+ship a `test-driven-development` and a debugging skill — the unprefixed
+agent-skills one is always the one meant here.
+
+### Scoping and design
+
 | When | Invoke |
 |---|---|
-| Scoping a new issue | `spec-driven-development`; `interview-me` when the ask is still vague |
-| Building anything | `test-driven-development` — the failing test comes first regardless |
-| Touching public input (#7, #8) | `security-and-hardening` |
-| Embed, theming, dashboard UI (#5, #6, #13) | `frontend-ui-engineering`, then `impeccable` for the polish pass |
+| The ask is still vague or just an idea | `interview-me` to extract what is actually wanted; `idea-refine` to stress-test it before it becomes an issue |
+| Scoping a new issue | `spec-driven-development`; then `planning-and-task-breakdown` to cut the spec into child issues |
+| A research spike — classifier model selection, crawler behaviour, provider comparison | `deep-research` — multi-source, adversarially verified, cited. Pairs with card rule 7 |
+| **Any design decision** — embed, theming, dashboard UI, marketing pages, any visual or UX choice (#5, #6, #13) | `impeccable` first, before code exists — `shape` to plan the surface, its sub-commands to build, refine and audit. `frontend-ui-engineering` rides along for implementation mechanics; it does not replace `impeccable` |
+| Designing an endpoint, module boundary or contract — `SpamProvider`, the embed↔Worker surface, the importer | `api-and-interface-design` — these boundaries outlive their first implementation |
+
+### Building
+
+| When | Invoke |
+|---|---|
+| Building anything | `test-driven-development` — the failing test comes first regardless; `incremental-implementation` when the change spans more than one file |
+| Building against platform APIs — Cloudflare, D1, Workers AI, Turnstile, Resend | `source-driven-development` — official docs, cited, never memory. This is card rule 7 as a workflow |
+| Touching public input (#7, #8) | `security-and-hardening`; `doubt-driven-development` for a fresh-context adversarial pass on the riskiest calls — sanitisation, rate limits, anything that fails open |
+| Charts or stats in the dashboard | `dataviz`, before the first line of chart code |
+| Anything that runs in production and can fail silently — the spam pipeline especially | `observability-and-instrumentation` — a layer that mis-classifies quietly is invisible without it |
+| Any bug, test failure or unexpected behaviour | `debugging-and-error-recovery` — root cause before fixes, no guess-and-check |
+
+### Quality and shipping
+
+| When | Invoke |
+|---|---|
+| Code works but reads poorly | `code-simplification` — behaviour-preserving only |
+| Performance work — embed budget pressure, D1 query shape, Worker latency | `performance-optimization` |
+| Before claiming anything works | `verify` — drive the real flow, not just tests; `superpowers:verification-before-completion` — no success claims without command output. This is card rule 3 |
 | Before **every** PR | `improve` over the branch, then `code-review-and-quality` |
-| Running several issues at once | superpowers: `using-git-worktrees`, `subagent-driven-development` |
+| Acting on review feedback | `superpowers:receiving-code-review` — verify each point technically; no performative agreement |
+| Touching CI | `ci-cd-and-automation` |
+| Docs, README, or recording a decision | `documentation-and-adrs` — the record goes in the GitHub issue or README, never committed spec files |
+| Cutting a release | `git-workflow-and-versioning` for the version/changelog mechanics, `shipping-and-launch` for launch readiness and rollback |
+| Removing or migrating a feature or API | `deprecation-and-migration` |
+| Running several issues at once | superpowers: `using-git-worktrees`, `subagent-driven-development`, `dispatching-parallel-agents` |
+
+### Deliberately not used
+
+Every other installed skill is excluded on purpose, not forgotten:
+
+- **Competing design-taste skills** — `design-taste-frontend`, `high-end-visual-design`,
+  `gpt-taste`, `emil-design-eng`, `minimalist-ui`, `industrial-brutalist-ui`,
+  `stitch-design-taste`, `apple-design`, `redesign-existing-projects`. `impeccable`
+  is the single design authority here; a second taste system fights the first.
+  `improve-animations` and `animation-vocabulary` may assist *inside* an
+  `impeccable` task, never set direction.
+- **Image generation** — `brandkit`, `imagegen-frontend-web`, `imagegen-frontend-mobile`.
+  Nothing in this repo produces imagery; revisit if brand or marketing-site work starts.
+- **superpowers overlaps** — `brainstorming` (the scoping rows own that job),
+  `requesting-code-review` and `finishing-a-development-branch` (the pre-PR row and
+  card rule 2 already fix this project's answer), `systematic-debugging` and
+  `test-driven-development` (agent-skills versions win, per the naming rule above),
+  `writing-plans` / `executing-plans` (plan files, below).
+- **Meta and hygiene** — `using-agent-skills`, `superpowers:using-superpowers`,
+  `context-engineering`, `full-output-enforcement`, `superpowers:writing-skills`.
+  This file is the methodology; a skill about using skills adds a layer, not value.
+- **`claude-api`** — Charcha calls Workers AI, not the Claude API.
 
 Two libraries, deliberately: [agent-skills](https://github.com/addyosmani/agent-skills)
 is a library of per-topic playbooks, [superpowers](https://github.com/obra/superpowers)
@@ -145,6 +200,13 @@ own the workflow.
 **Its plan files do not belong here.** `writing-plans` and `executing-plans` write
 plans to disk; this project keeps design in the GitHub issue, so `.superpowers/` is
 gitignored. Same rule as everything else: design lives in the issue.
+
+**`impeccable` reads product context from `PRODUCT.md`, which is gitignored** —
+it records positioning, and this file bans positioning from the public repo. If a
+session finds it missing, ask the owner for the current file first — init
+interviews whoever is present, and product decisions are the owner's to make —
+or run `/impeccable init` locally when the owner is the one answering. Never
+design without it, and never commit it.
 
 A local `SessionStart` hook surfaces this map, and a `PreToolUse` hook on
 `gh pr create` / `git push` asks whether `improve` has been run. Both live in
