@@ -1,7 +1,13 @@
 import { env, exports } from 'cloudflare:workers'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const origin = 'https://charcha.example'
+
+// Restoring inside the test body only runs when the test passes, so a failing
+// assertion would leave the mocked database in place for everything after it.
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('GET /health', () => {
   it('reports the Worker and its D1 binding as healthy', async () => {
@@ -26,8 +32,6 @@ describe('GET /health', () => {
 
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ status: 'degraded', database: 'error' })
-
-    vi.restoreAllMocks()
   })
 })
 
