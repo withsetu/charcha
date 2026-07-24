@@ -53,8 +53,42 @@ export const REQUIRED_LOCKFILE = 'pnpm-lock.yaml'
  */
 export const SUPPORTED_LOCKFILE_VERSIONS = ['9.0']
 
+/**
+ * pnpm *major* versions `packageManager` may pin.
+ *
+ * The same constraint as `SUPPORTED_LOCKFILE_VERSIONS`, one layer up: that one
+ * is the lockfile format the build image reads, this one is the pnpm major that
+ * writes it. Keeping them adjacent is the only place a reader sees they are one
+ * constraint rather than two, and moving one without the other is the mistake
+ * both exist to catch.
+ *
+ * Why the pin needs a gate of its own: the format assertion catches the
+ * *symptom*, a lockfile the image cannot read. It does not catch the cause, and
+ * it cannot catch it in both directions — pnpm 9 writes lockfileVersion 9.0, so
+ * a downgrade to the 9 line passes the format check while dev and CI resolve on
+ * a version the deploy container does not run. That is the drift #52 was
+ * actually about.
+ *
+ * A list rather than a hardcoded major, because that is how the transition gets
+ * made: when Cloudflare moves the image to pnpm 11 there is a window where both
+ * are fine, `['10', '11']` says so in one line, and narrowing back to `['11']`
+ * is the deliberate second step.
+ *
+ * Verified 2026-07-24: the Workers Builds v3 image ships pnpm 10.11.1, and the
+ * only override is a `PNPM_VERSION` build variable set in the Cloudflare
+ * dashboard — which a site owner clicking Deploy cannot set.
+ * Source: https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
+ *
+ * Enforced by test/node/lockfile-guard.test.ts.
+ */
+export const SUPPORTED_PNPM_MAJORS = ['10']
+
 // `lockfileVersion: '9.0'` — pnpm quotes it, but bare YAML scalars are valid too.
 const LOCKFILE_VERSION = /^lockfileVersion:\s*['"]?([0-9]+(?:\.[0-9]+)*)['"]?\s*$/m
+
+// Deliberately unanchored at the end: `corepack use pnpm` appends an integrity
+// hash, as `pnpm@10.34.5+sha512.<hash>`, and that pin is exact and correct.
+const PNPM_PIN = /^pnpm@(\d+)\.\d+\.\d+/
 
 async function exists(path) {
   try {
@@ -117,7 +151,8 @@ export async function checkLockfiles({ cwd = process.cwd() } = {}) {
   // Builds takes its pnpm version from the build image or a dashboard
   // `PNPM_VERSION` variable, neither of which a one-click deploy can set. That
   // is why the pin must stay on the 10 line: the image ships pnpm 10.x, and the
-  // lockfile has to stay readable by it.
+  // lockfile has to stay readable by it. That last part is asserted below
+  // against SUPPORTED_PNPM_MAJORS, not merely described here.
   // Source: https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
   let declared = null
   try {
@@ -131,17 +166,32 @@ export async function checkLockfiles({ cwd = process.cwd() } = {}) {
     })
   }
 
-  if (declared !== null && !/^pnpm@\d+\.\d+\.\d+/.test(declared)) {
-    violations.push({
-      status: 'wrong-package-manager',
-      message: `package.json declares packageManager '${declared}' — it must pin an exact pnpm version, as \`pnpm@x.y.z\``,
-    })
-  } else if (declared === null) {
+  const pin = declared === null ? null : PNPM_PIN.exec(declared)
+
+  if (declared === null) {
     violations.push({
       status: 'no-package-manager',
       message:
         'package.json has no `packageManager` field — nothing pins the pnpm version for ' +
         'contributors or CI, which is the drift #52 was caused by',
+    })
+  } else if (pin === null) {
+    violations.push({
+      status: 'wrong-package-manager',
+      message: `package.json declares packageManager '${declared}' — it must pin an exact pnpm version, as \`pnpm@x.y.z\``,
+    })
+  } else if (!SUPPORTED_PNPM_MAJORS.includes(pin[1])) {
+    violations.push({
+      status: 'unsupported-pnpm-major',
+      message:
+        `package.json pins packageManager '${declared}', and the Cloudflare build image runs pnpm ` +
+        `${SUPPORTED_PNPM_MAJORS.map((one) => `${one}.x`).join(', ')}. A different major resolves ` +
+        `differently and writes a different lockfileVersion, and pnpm does not fail on a lockfile ` +
+        `it cannot read — it warns and resolves fresh, so a one-click deploy would install a tree ` +
+        `nobody locked. The number to raise is not this one: confirm what the build image ships ` +
+        `(https://developers.cloudflare.com/workers/ci-cd/builds/build-image/), then move ` +
+        `SUPPORTED_PNPM_MAJORS and SUPPORTED_LOCKFILE_VERSIONS together. A deployer's only lever ` +
+        `is a PNPM_VERSION dashboard variable, which a one-click deploy never sets.`,
     })
   }
 
@@ -165,7 +215,8 @@ if (isCli) {
   }
 
   console.log(
-    `[ok] pnpm is the only lockfile here, its version is pinned, and its format is one the ` +
-      `Cloudflare build image reads (${SUPPORTED_LOCKFILE_VERSIONS.join(', ')})`,
+    `[ok] pnpm is the only lockfile here, its version is pinned to a major the Cloudflare build ` +
+      `image runs (${SUPPORTED_PNPM_MAJORS.map((one) => `${one}.x`).join(', ')}), and its format ` +
+      `is one that image reads (${SUPPORTED_LOCKFILE_VERSIONS.join(', ')})`,
   )
 }

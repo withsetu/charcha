@@ -162,4 +162,70 @@ describe('checkLockfiles', () => {
       expect(statuses(result)).toEqual(['unreadable-lockfile-version'])
     })
   })
+
+  // The lockfile-format assertion above catches the symptom — a lockfile the
+  // build image cannot read. This catches the cause: `packageManager` moving off
+  // the major the image actually runs. Both directions matter and, before #67,
+  // only one was guarded.
+  describe('pnpm major version', () => {
+    // No plain "accepts pnpm 10" case here: `writeHealthyRepo` already pins
+    // 10.34.5, so the suite's first test covers it. A second one would pass with
+    // this guard deleted, which is the shape card rule 6 exists to keep out.
+    it('accepts the corepack integrity hash that may follow the version', async () => {
+      // `corepack use pnpm` writes `pnpm@10.34.5+sha512.<hash>`. The pin is
+      // still exact and still on 10; rejecting it would fail a repository that
+      // is correct.
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write(
+        'package.json',
+        JSON.stringify({ packageManager: 'pnpm@10.34.5+sha512.abc123def456' }),
+      )
+
+      expect((await checkLockfiles({ cwd })).ok).toBe(true)
+    })
+
+    it('fails a newer major, which would write a lockfile the deploy image resolves past', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@11.0.0' }))
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unsupported-pnpm-major'])
+    })
+
+    // pnpm 9 writes lockfileVersion 9.0, so the format assertion passes it. Dev
+    // and CI would still be resolving on a version the deploy container does not
+    // run, which is the drift #52 was about — a ceiling check would miss it.
+    it('fails an older major, which the lockfile-format assertion alone would let through', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@9.15.9' }))
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unsupported-pnpm-major'])
+    })
+
+    it('does not also report a shape violation, so one problem reads as one problem', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@11.0.0' }))
+
+      expect(statuses(await checkLockfiles({ cwd }))).not.toContain('wrong-package-manager')
+    })
+
+    // #67: the next person to hit this gate must read it as "confirm what
+    // Cloudflare ships, then move the constant", not "raise the number until CI
+    // is green". That only happens if the message says where the truth lives.
+    it('names the build image and the override, rather than just the wrong version', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@11.0.0' }))
+
+      const [violation] = (await checkLockfiles({ cwd })).violations
+
+      expect(violation?.message).toContain('11.0.0')
+      expect(violation?.message).toContain('PNPM_VERSION')
+      expect(violation?.message).toContain('developers.cloudflare.com')
+    })
+  })
 })

@@ -74,7 +74,11 @@ the same bindings the deployed Worker gets.
 that pin — Workers Builds installs the pnpm its build image ships, and there is
 no repo-side way to change it. Both are on pnpm 10.x writing
 `lockfileVersion: '9.0'`, so this is expected to be fine. It is written down
-because if it ever is not, the build does not go red. pnpm **ignores** a
+because if it ever is not, the build does not go red. `pnpm check` asserts both
+halves — that the pin stays on a major the image runs, and that the lockfile
+stays in a format that major writes — so this repository cannot drift off the
+image quietly. What that gate cannot see is the image moving underneath it,
+which is why the rest of this section exists. pnpm **ignores** a
 lockfile it considers incompatible and resolves dependencies fresh, so a green
 build can have installed a tree nobody locked or tested. Read the build log for:
 
