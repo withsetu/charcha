@@ -19,7 +19,7 @@ import { countRecentCommentsByIpHash, countRecentCommentsOnPage } from '../db'
 import type { SpamCheckContext } from '../submit/spam'
 import type { LayerOutcome, SpamLayer } from './layer'
 import { announceOnce } from './log'
-import { clientIp, hashIp } from './ip'
+import { clientIp, hashIp, usableIpSecret } from './ip'
 
 /**
  * How many comments one address may post inside the window.
@@ -62,7 +62,7 @@ export interface RateLimitConfig {
 }
 
 export function rateLimitLayer(config: RateLimitConfig): SpamLayer {
-  const secret = config.ipSecret?.trim()
+  const secret = usableIpSecret(config.ipSecret) ?? undefined
   const maxPerIp = config.maxPerIp ?? DEFAULT_MAX_PER_IP
   const maxPerPage = config.maxPerPage ?? DEFAULT_MAX_PER_PAGE
   const windowSeconds = config.windowSeconds ?? DEFAULT_WINDOW_SECONDS

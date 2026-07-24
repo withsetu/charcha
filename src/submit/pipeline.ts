@@ -13,6 +13,7 @@ import { renderComments } from '../render'
 import { getOrCreateThread, insertComment, isReplyTarget } from '../db'
 import type { StoredComment } from '../db'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'
+import { clientIp, hashIp, usableIpSecret } from '../spam/ip'
 import { computeBodyHash } from './hash'
 import { parseComment } from './schema'
 import type { SpamCheck } from './spam'
@@ -31,6 +32,18 @@ export interface SubmitDeps {
    */
   significantParams?: readonly string[]
   strings?: CommentStrings
+  /**
+   * The HMAC key for `comments.ip_hash`. Absent means no hash is stored at all,
+   * because an unkeyed hash of an address is reversible by anyone willing to walk
+   * the address space — there is no fallback better than storing nothing.
+   *
+   * Storing this is what makes the per-IP half of the rate limit real: it counts
+   * rows by `ip_hash`, so without a write here it queries an always-empty column
+   * and admits every address (#65). It is also what gives #19's retention janitor
+   * something to purge.
+   * Enforced by test/worker/submit/ip-hash.test.ts.
+   */
+  ipSecret?: string
 }
 
 export type SubmitResult =
@@ -108,6 +121,14 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     }
   }
 
+  // Hashed here rather than at the boundary, so a comment the spam layers rejected
+  // costs no HMAC and leaves no trace: the reject path returns before this line.
+  // Both halves must hold for a hash to exist — a configured key and an address
+  // the edge actually gave us — and the raw address is never passed on.
+  const secret = usableIpSecret(deps.ipSecret)
+  const ip = secret === null ? null : clientIp(deps.request)
+  const ipHash = ip === null || secret === null ? null : await hashIp(ip, secret)
+
   // No status is passed: insertComment derives it from byOwner, which this public
   // path never sets, so the comment is stored `pending` and enters the moderation
   // queue. A public handler that could choose the status could self-approve.
@@ -118,6 +139,7 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     authorEmail: comment.authorEmail ?? null,
     body: comment.body,
     bodyHash,
+    ipHash,
     now: deps.now,
   })
 
