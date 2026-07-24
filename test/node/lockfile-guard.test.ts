@@ -111,4 +111,55 @@ describe('checkLockfiles', () => {
     expect(result.ok).toBe(false)
     expect(statuses(result)).toContain('unreadable-package-json')
   })
+
+  // The Cloudflare build image ships pnpm 10.11.1 and reads lockfileVersion
+  // 9.0. On a lockfile it cannot read, pnpm *warns* and resolves fresh rather
+  // than failing — so a one-click deploy would go green having installed a tree
+  // nobody locked. Nothing else in this repository would notice.
+  describe('lockfile format version', () => {
+    it('accepts the version the Cloudflare build image reads', async () => {
+      await writeHealthyRepo()
+
+      expect((await checkLockfiles({ cwd })).ok).toBe(true)
+    })
+
+    it('accepts it unquoted, which is also valid YAML', async () => {
+      await write('pnpm-lock.yaml', 'lockfileVersion: 9.0\n')
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@10.34.5' }))
+
+      expect((await checkLockfiles({ cwd })).ok).toBe(true)
+    })
+
+    it('fails a newer lockfile format, which the deploy image would silently ignore', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '10.0'\n")
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@10.34.5' }))
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unsupported-lockfile-version'])
+      expect(result.violations[0]?.message).toContain('10.0')
+    })
+
+    // dependabot/dependabot-core#9684: Dependabot rewrote a 9.0 lockfile as 6.0.
+    it('fails an older lockfile format, which is how a bot rewrite has regressed before', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '6.0'\n")
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@10.34.5' }))
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unsupported-lockfile-version'])
+    })
+
+    it('fails a lockfile with no version at all rather than assuming one', async () => {
+      await write('pnpm-lock.yaml', 'settings:\n  autoInstallPeers: true\n')
+      await write('package.json', JSON.stringify({ packageManager: 'pnpm@10.34.5' }))
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unreadable-lockfile-version'])
+    })
+  })
 })

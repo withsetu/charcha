@@ -29,6 +29,33 @@ export const FOREIGN_LOCKFILES = [
 
 export const REQUIRED_LOCKFILE = 'pnpm-lock.yaml'
 
+/**
+ * Lockfile *format* versions the Cloudflare Workers Builds image can read.
+ *
+ * This is a separate pin from `packageManager`, and it is the one that reaches a
+ * one-click deploy. Workers Builds takes its pnpm version from the build image
+ * (v3 ships pnpm 10.11.1) or a `PNPM_VERSION` dashboard variable — neither of
+ * which a site owner clicking Deploy can set — so charcha has to stay
+ * *compatible with* the image rather than dictate to it.
+ *
+ * The reason this is a gate and not a note: handed a lockfile it cannot read,
+ * pnpm emits `WARN Ignoring not compatible lockfile` and **resolves fresh**
+ * rather than failing. The deploy goes green having installed a tree nobody
+ * locked and nobody tested, and the person it breaks for is a site owner who
+ * never sees this repository. Nothing else here would notice.
+ *
+ * It is checked now because Dependabot rewrites this file on a schedule (see
+ * .github/dependabot.yml), and a bot rewriting the format version is not
+ * hypothetical: dependabot/dependabot-core#9684 is a 9.0 lockfile regressed to
+ * 6.0.
+ *
+ * Source: https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
+ */
+export const SUPPORTED_LOCKFILE_VERSIONS = ['9.0']
+
+// `lockfileVersion: '9.0'` — pnpm quotes it, but bare YAML scalars are valid too.
+const LOCKFILE_VERSION = /^lockfileVersion:\s*['"]?([0-9]+(?:\.[0-9]+)*)['"]?\s*$/m
+
 async function exists(path) {
   try {
     await access(path)
@@ -60,6 +87,28 @@ export async function checkLockfiles({ cwd = process.cwd() } = {}) {
       status: 'missing-lockfile',
       message: `${REQUIRED_LOCKFILE} does not exist — the dependency tree is unpinned`,
     })
+  } else {
+    const lockfile = await readFile(join(cwd, REQUIRED_LOCKFILE), 'utf8')
+    const version = LOCKFILE_VERSION.exec(lockfile)?.[1] ?? null
+
+    if (version === null) {
+      violations.push({
+        status: 'unreadable-lockfile-version',
+        message:
+          `${REQUIRED_LOCKFILE} declares no \`lockfileVersion\` — the format it is in cannot be ` +
+          'established, so it cannot be shown to be one the Cloudflare build image reads',
+      })
+    } else if (!SUPPORTED_LOCKFILE_VERSIONS.includes(version)) {
+      violations.push({
+        status: 'unsupported-lockfile-version',
+        message:
+          `${REQUIRED_LOCKFILE} is lockfileVersion '${version}', and the Cloudflare build image ` +
+          `reads ${SUPPORTED_LOCKFILE_VERSIONS.map((one) => `'${one}'`).join(', ')}. pnpm does not ` +
+          'fail on a lockfile it cannot read — it warns and resolves fresh, so a one-click deploy ' +
+          'would install a tree nobody locked. Re-resolve with pnpm 10.x, or move the pin ' +
+          'deliberately.',
+      })
+    }
   }
 
   // A `packageManager` field is what pins the pnpm version for contributors
@@ -115,5 +164,8 @@ if (isCli) {
     process.exit(1)
   }
 
-  console.log('[ok] pnpm is the only lockfile here, and its version is pinned')
+  console.log(
+    `[ok] pnpm is the only lockfile here, its version is pinned, and its format is one the ` +
+      `Cloudflare build image reads (${SUPPORTED_LOCKFILE_VERSIONS.join(', ')})`,
+  )
 }
