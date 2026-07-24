@@ -15,9 +15,20 @@
 # (https://docs.github.com/en/actions/reference/security/secure-use).
 # Dependabot *version updates*, configured below, are what keeps these current.
 #
-# npm is deliberately not configured here yet — see the tracking issue on the
-# repository. Dependency bumps need a changelog review per PR, which is a
-# different piece of work from turning the scanning on.
+# Two different Dependabot mechanisms are easy to confuse, so to be explicit
+# about which one this file is:
+#
+#   Dependabot *security updates* — repo setting, already enabled on this
+#     repository. Opens a PR when an advisory is published against something in
+#     the tree. Nothing in this file configures it.
+#   Dependabot *version updates* — this file. Routine bumps on a schedule,
+#     advisory or not. It is the only one of the two that moves a SHA-pinned
+#     action, because a pinned action has no version for an advisory to match.
+#
+# npm is deliberately absent here. Security updates for npm are already covered
+# by the repo setting above, and routine npm version bumps need a changelog
+# review per PR — a different piece of work from turning the scanning on, and
+# tracked separately.
 
 version: 2
 updates:
