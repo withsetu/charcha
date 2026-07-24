@@ -121,6 +121,36 @@ Out of v1 — but v1 must not preclude it. See the HTML-not-JSON decision.
 - **Deferred scope becomes a labelled issue in the same session.** Never a TODO
   comment.
 
+## Skills
+
+Skills are installed globally, which only makes them *available*. Nothing invokes
+them for you, and two PRs went by on this project before anyone noticed none had
+been used. So the map below is part of the contract, not a suggestion.
+
+| When | Invoke |
+|---|---|
+| Scoping a new issue | `spec-driven-development`; `interview-me` when the ask is still vague |
+| Building anything | `test-driven-development` — the failing test comes first regardless |
+| Touching public input (#7, #8) | `security-and-hardening` |
+| Embed, theming, dashboard UI (#5, #6, #13) | `frontend-ui-engineering`, then `impeccable` for the polish pass |
+| Before **every** PR | `improve` over the branch, then `code-review-and-quality` |
+| Running several issues at once | superpowers: `using-git-worktrees`, `subagent-driven-development` |
+
+Two libraries, deliberately: [agent-skills](https://github.com/addyosmani/agent-skills)
+is a library of per-topic playbooks, [superpowers](https://github.com/obra/superpowers)
+is a workflow methodology. This file is already the methodology, so superpowers is
+used for the parts it uniquely offers — worktrees and parallel subagents — and not to
+own the workflow.
+
+**Its plan files do not belong here.** `writing-plans` and `executing-plans` write
+plans to disk; this project keeps design in the GitHub issue, so `.superpowers/` is
+gitignored. Same rule as everything else: design lives in the issue.
+
+A local `SessionStart` hook surfaces this map, and a `PreToolUse` hook on
+`gh pr create` / `git push` asks whether `improve` has been run. Both live in
+`.claude/settings.local.json`, uncommitted — the contract is public, the machine
+config is not.
+
 ## Relationship to Setu
 
 Charcha is standalone. It knows nothing about [Setu](https://github.com/withsetu/setu)

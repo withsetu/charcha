@@ -9,3 +9,11 @@ dist/
 .DS_Store
 coverage/
 .turbo/
+
+# Local machine config: hooks and permissions belong to a developer, not to a repo
+# whose root Cloudflare treats as a deploy root.
+.claude/settings.local.json
+
+# Scratch written by the superpowers skills. Design lives in the GitHub issue, so
+# plan files must never be committed here.
+.superpowers/
