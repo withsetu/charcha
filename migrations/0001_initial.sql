@@ -45,10 +45,28 @@ CREATE TABLE comments (
 );
 
 -- Threading stops at two levels. `depth` alone cannot say so, because the rule is
--- about the parent's depth, so the database enforces it and fails closed if a
--- future code path forgets. One row read per insert, against 100k writes a day.
--- Enforced by test/worker/db/comments.test.ts.
+-- about the parent's depth, so the database enforces it rather than the caller.
+-- One indexed row read per guard that fires, against 100k writes a day.
+--
+-- Two triggers, because a rule enforced only on insert is not a rule: `update
+-- comments set parent_id = ...` walks past a BEFORE INSERT guard and nests a
+-- reply three deep (#29). SQLite has no `INSERT OR UPDATE` trigger, so the pair
+-- is written out twice rather than shared.
+--
+-- `UPDATE OF` fires on a column appearing in the SET clause, not on its value
+-- changing, so moderation — status, moderated_at, body — never reaches these.
+-- It also silently ignores column names that do not exist, which means a typo or
+-- a rename here disarms the guard without any error: the tests are the only
+-- thing that would notice.
+-- Enforced by test/worker/db/threading-triggers.test.ts.
 CREATE TRIGGER comments_depth_guard BEFORE INSERT ON comments
+WHEN NEW.parent_id IS NOT NULL
+ AND (SELECT depth FROM comments WHERE id = NEW.parent_id) <> 0
+BEGIN
+  SELECT RAISE(ABORT, 'replies may not be nested more than one level');
+END;
+
+CREATE TRIGGER comments_depth_guard_on_update BEFORE UPDATE OF parent_id, thread_id ON comments
 WHEN NEW.parent_id IS NOT NULL
  AND (SELECT depth FROM comments WHERE id = NEW.parent_id) <> 0
 BEGIN
@@ -58,9 +76,22 @@ END;
 -- A reply must be on the page it is replying to. `parent_id` arrives from a public
 -- form, so without this a comment can be attached to a conversation on a different
 -- page — which renders as a reply with no parent in sight, and lets anyone graft
--- their comment onto a thread they were not posting to.
--- Enforced by test/worker/db/comments.test.ts.
+-- their comment onto a thread they were not posting to. This rule lives only here:
+-- unlike depth, no CHECK constraint restates it, so the trigger is the whole of it.
+--
+-- Paired on update for the same reason as the depth guard: `update comments set
+-- thread_id = ...` would otherwise move a comment onto a page it was never posted
+-- to (#29). Both directions of the edge are covered when the *reply* is the row
+-- being written; moving a row that has replies of its own is #60.
+-- Enforced by test/worker/db/threading-triggers.test.ts.
 CREATE TRIGGER comments_parent_thread_guard BEFORE INSERT ON comments
+WHEN NEW.parent_id IS NOT NULL
+ AND (SELECT thread_id FROM comments WHERE id = NEW.parent_id) <> NEW.thread_id
+BEGIN
+  SELECT RAISE(ABORT, 'a reply must be on the same page as the comment it replies to');
+END;
+
+CREATE TRIGGER comments_parent_thread_guard_on_update BEFORE UPDATE OF parent_id, thread_id ON comments
 WHEN NEW.parent_id IS NOT NULL
  AND (SELECT thread_id FROM comments WHERE id = NEW.parent_id) <> NEW.thread_id
 BEGIN
