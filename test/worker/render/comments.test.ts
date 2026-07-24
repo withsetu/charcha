@@ -33,6 +33,23 @@ describe('renderComments', () => {
     expect(html).toContain('<p>Nice post.</p>')
   })
 
+  it('produces exactly this markup, so a change to the shape has to be deliberate', () => {
+    // Written out rather than snapshotted: the embed inserts this string with
+    // innerHTML and a site's stylesheet targets it, so the shape is as much a
+    // contract as the class names are.
+    expect(renderComments([comment({ id: 1, authorName: 'Maya', body: 'Nice post.' })])).toBe(
+      '<ol class="charcha-comments">' +
+        '<li class="charcha-comment" id="charcha-comment-1">' +
+        '<div class="charcha-comment-header">' +
+        '<span class="charcha-comment-author">Maya</span>' +
+        '<time class="charcha-comment-time" datetime="2025-07-23T19:46:40.000Z">2025-07-23</time>' +
+        '</div>' +
+        '<div class="charcha-comment-body"><p>Nice post.</p></div>' +
+        '</li>' +
+        '</ol>',
+    )
+  })
+
   it('renders a page with no comments as an empty container, not as copy', () => {
     // Wording an empty state is a design decision that belongs to the embed and
     // the theming contract (#5, #6). A renderer that invents English here would
