@@ -5,13 +5,20 @@
 -- is a fixed two queries regardless of comment count, and comments_by_thread is
 -- what keeps a hot page from reading every comment in the database.
 
+-- Size caps are in the schema as well as at the request boundary, because the
+-- boundary is not the only writer: the Disqus importer (#15) writes here too. Card
+-- rule 5 — size caps everywhere, fail closed.
+-- Enforced by test/worker/db/limits.test.ts.
 CREATE TABLE threads (
   id         INTEGER PRIMARY KEY,
   page_key   TEXT    NOT NULL UNIQUE, -- canonical page identity, sent by the embed
   page_url   TEXT,                    -- last seen absolute URL, for the dashboard
   title      TEXT,                    -- last seen page title, for the queue
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  CHECK (length(page_key) BETWEEN 1 AND 512),
+  CHECK (page_url IS NULL OR length(page_url) <= 2048),
+  CHECK (title    IS NULL OR length(title)    <= 300)
 );
 
 CREATE TABLE comments (
@@ -30,7 +37,10 @@ CREATE TABLE comments (
   created_at   INTEGER NOT NULL,
   moderated_at INTEGER,
   CHECK (parent_id IS NOT NULL OR depth = 0),
-  CHECK (parent_id IS NULL     OR depth = 1)
+  CHECK (parent_id IS NULL     OR depth = 1),
+  CHECK (length(author_name)  BETWEEN 1 AND 80),
+  CHECK (length(body)         BETWEEN 1 AND 10000),
+  CHECK (author_email IS NULL OR length(author_email) <= 254)
 );
 
 -- Threading stops at two levels. `depth` alone cannot say so, because the rule is
@@ -42,6 +52,18 @@ WHEN NEW.parent_id IS NOT NULL
  AND (SELECT depth FROM comments WHERE id = NEW.parent_id) <> 0
 BEGIN
   SELECT RAISE(ABORT, 'replies may not be nested more than one level');
+END;
+
+-- A reply must be on the page it is replying to. `parent_id` arrives from a public
+-- form, so without this a comment can be attached to a conversation on a different
+-- page — which renders as a reply with no parent in sight, and lets anyone graft
+-- their comment onto a thread they were not posting to.
+-- Enforced by test/worker/db/comments.test.ts.
+CREATE TRIGGER comments_parent_thread_guard BEFORE INSERT ON comments
+WHEN NEW.parent_id IS NOT NULL
+ AND (SELECT thread_id FROM comments WHERE id = NEW.parent_id) <> NEW.thread_id
+BEGIN
+  SELECT RAISE(ABORT, 'a reply must be on the same page as the comment it replies to');
 END;
 
 CREATE TABLE comment_vectors (

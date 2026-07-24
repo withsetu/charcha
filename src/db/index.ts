@@ -52,8 +52,16 @@ export interface NewComment {
   body: string
   bodyHash: string
   ipHash?: string | null
+  /**
+   * Set only for comments written from the moderation dashboard by the signed-in
+   * owner, which are published without passing through the queue.
+   *
+   * There is deliberately no `status` here. A public submission handler that can
+   * be handed a status is a public submission handler that can be made to
+   * self-approve — so status is derived from this flag and nothing else.
+   * Enforced by test/worker/db/comments.test.ts.
+   */
   byOwner?: boolean
-  status?: CommentStatus
   now: number
 }
 
@@ -96,7 +104,12 @@ export const PAGE_COMMENTS_SQL = `select ${RENDERABLE_COLUMNS.split(', ')
   .join(', ')}
      from comments c
      join threads t on t.id = c.thread_id
-    where t.page_key = ?1 and c.status = 'approved'
+    where t.page_key = ?1
+      and c.status = 'approved'
+      and (
+        c.parent_id is null
+        or exists (select 1 from comments p where p.id = c.parent_id and p.status = 'approved')
+      )
     order by c.created_at, c.id`
 
 function toThread(row: ThreadRow): Thread {
@@ -147,8 +160,8 @@ export async function getOrCreateThread(
       `insert into threads (page_key, page_url, title, created_at, updated_at)
        values (?1, ?2, ?3, ?4, ?4)
        on conflict (page_key) do update set
-         page_url   = excluded.page_url,
-         title      = excluded.title,
+         page_url   = coalesce(excluded.page_url, threads.page_url),
+         title      = coalesce(excluded.title, threads.title),
          updated_at = excluded.updated_at
        returning *`,
     )
@@ -182,7 +195,7 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
       input.authorEmail ?? null,
       input.body,
       input.bodyHash,
-      input.status ?? 'pending',
+      input.byOwner === true ? 'approved' : 'pending',
       input.byOwner === true ? 1 : 0,
       input.ipHash ?? null,
       input.now,
@@ -217,24 +230,34 @@ export async function listPageComments(
   return results.map(toRenderable)
 }
 
-/** Records a moderation decision, and refuses to pretend it moderated nothing. */
+/**
+ * Records a moderation decision, and refuses to pretend it moderated nothing.
+ *
+ * Hiding a comment hides the replies underneath it. Otherwise removing a spam
+ * comment leaves the replies to it on the page, answering something no reader can
+ * see — the moderator believes they took down a conversation and took down half of
+ * it. Approving does *not* cascade: each reply is still judged on its own.
+ * Enforced by test/worker/db/comments.test.ts.
+ */
 export async function setCommentStatus(
   db: D1Database,
   commentId: number,
   status: CommentStatus,
   now: number,
 ): Promise<StoredComment> {
-  const row = await db
+  const { results } = await db
     .prepare(
       `update comments set status = ?2, moderated_at = ?3
         where id = ?1
+           or (parent_id = ?1 and ?2 in ('spam', 'deleted'))
        returning id, thread_id, parent_id, depth, author_name, body, by_owner, status,
                  created_at, moderated_at`,
     )
     .bind(commentId, status, now)
-    .first<CommentRow>()
+    .all<CommentRow>()
 
-  if (row === null) throw new Error(`no comment ${commentId} to moderate`)
+  const row = results.find((candidate) => candidate.id === commentId)
+  if (row === undefined) throw new Error(`no comment ${commentId} to moderate`)
   return toStored(row)
 }
 

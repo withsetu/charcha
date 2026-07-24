@@ -60,6 +60,18 @@ describe('getOrCreateThread', () => {
   })
 })
 
+describe('getOrCreateThread, revisited', () => {
+  it('keeps the stored title when a later write does not carry one', async () => {
+    const first = await seedThread()
+
+    const second = await getOrCreateThread(db, { pageKey: first.pageKey, now: t0 + 60 })
+
+    expect(second.title).toBe('Leaving the comment industry')
+    expect(second.pageUrl).toBe(first.pageUrl)
+    expect(second.updatedAt).toBe(t0 + 60)
+  })
+})
+
 describe('insertComment', () => {
   it('holds a new comment for review rather than publishing it', async () => {
     const thread = await seedThread()
@@ -128,6 +140,53 @@ describe('insertComment', () => {
         now: t0 + 20,
       }),
     ).rejects.toThrow(/more than one level/)
+  })
+
+  it('refuses a reply whose parent lives on a different page', async () => {
+    const pageA = await seedThread('/post-a')
+    const pageB = await seedThread('/post-b')
+    const rootOfA = await insertComment(db, {
+      threadId: pageA.id,
+      authorName: 'A',
+      body: 'root of A',
+      bodyHash: 'h1',
+      now: t0,
+    })
+
+    await expect(
+      insertComment(db, {
+        threadId: pageB.id,
+        parentId: rootOfA.id,
+        authorName: 'Grafter',
+        body: 'a reply grafted onto another page',
+        bodyHash: 'h2',
+        now: t0 + 10,
+      }),
+    ).rejects.toThrow(/same page/i)
+  })
+
+  it('publishes an owner comment without holding it, and holds everyone else', async () => {
+    const thread = await seedThread()
+
+    const fromOwner = await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Maya',
+      body: 'answering from the dashboard',
+      bodyHash: 'h1',
+      byOwner: true,
+      now: t0,
+    })
+    const fromReader = await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Reader',
+      body: 'a reader comment',
+      bodyHash: 'h2',
+      now: t0 + 1,
+    })
+
+    expect(fromOwner.status).toBe('approved')
+    expect(fromOwner.byOwner).toBe(true)
+    expect(fromReader.status).toBe('pending')
   })
 
   it('refuses a comment on a thread that does not exist', async () => {
@@ -272,6 +331,113 @@ describe('listPageComments', () => {
     // site burns the 5M row reads/day free allowance.
     expect(results).toHaveLength(20)
     expect(meta.rows_read).toBeLessThan(30)
+  })
+})
+
+describe('hiding a comment', () => {
+  async function seedRootAndReply() {
+    const thread = await seedThread()
+    const root = await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Spammer',
+      body: 'buy pills',
+      bodyHash: 'h1',
+      now: t0,
+    })
+    const reply = await insertComment(db, {
+      threadId: thread.id,
+      parentId: root.id,
+      authorName: 'Replier',
+      body: 'answering the spam',
+      bodyHash: 'h2',
+      now: t0 + 10,
+    })
+    await setCommentStatus(db, root.id, 'approved', t0 + 20)
+    await setCommentStatus(db, reply.id, 'approved', t0 + 20)
+    return { thread, root, reply }
+  }
+
+  it('takes the replies underneath it off the page too', async () => {
+    const { thread, root } = await seedRootAndReply()
+
+    await setCommentStatus(db, root.id, 'spam', t0 + 30)
+    const comments = await listPageComments(db, thread.pageKey)
+
+    expect(comments).toEqual([])
+  })
+
+  // The page read hides a reply whose parent is not approved, so the test above
+  // passes whether or not the status actually cascaded. This one fails only if the
+  // reply's own record was left behind — which is what the moderation queue and
+  // the classifier's training data would then disagree about.
+  it('marks the replies spam in the record, not just on the page', async () => {
+    const { root, reply } = await seedRootAndReply()
+
+    await setCommentStatus(db, root.id, 'spam', t0 + 30)
+
+    const stored = await db
+      .prepare('select status, moderated_at from comments where id = ?1')
+      .bind(reply.id)
+      .first<{ status: string; moderated_at: number | null }>()
+    expect(stored?.status).toBe('spam')
+    expect(stored?.moderated_at).toBe(t0 + 30)
+  })
+
+  it('does the same when a comment is deleted', async () => {
+    const { thread, root } = await seedRootAndReply()
+
+    await setCommentStatus(db, root.id, 'deleted', t0 + 30)
+
+    expect(await listPageComments(db, thread.pageKey)).toEqual([])
+  })
+
+  it('never shows a reply whose parent is still waiting for review', async () => {
+    const thread = await seedThread()
+    const root = await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Root',
+      body: 'still in the queue',
+      bodyHash: 'h1',
+      now: t0,
+    })
+    const reply = await insertComment(db, {
+      threadId: thread.id,
+      parentId: root.id,
+      authorName: 'Replier',
+      body: 'approved before its parent was',
+      bodyHash: 'h2',
+      now: t0 + 10,
+    })
+    await setCommentStatus(db, reply.id, 'approved', t0 + 20)
+
+    const comments = await listPageComments(db, thread.pageKey)
+
+    expect(comments).toEqual([])
+  })
+
+  it('does not approve the replies when the parent is approved — each is judged alone', async () => {
+    const thread = await seedThread()
+    const root = await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Root',
+      body: 'a root comment',
+      bodyHash: 'h1',
+      now: t0,
+    })
+    const reply = await insertComment(db, {
+      threadId: thread.id,
+      parentId: root.id,
+      authorName: 'Replier',
+      body: 'an unreviewed reply',
+      bodyHash: 'h2',
+      now: t0 + 10,
+    })
+
+    await setCommentStatus(db, root.id, 'approved', t0 + 20)
+    const comments = await listPageComments(db, thread.pageKey)
+
+    expect(comments.map((comment) => comment.id)).toEqual([root.id])
+    expect(comments.map((comment) => comment.id)).not.toContain(reply.id)
   })
 })
 
