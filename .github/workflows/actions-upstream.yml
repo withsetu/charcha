@@ -1,0 +1,67 @@
+# `pnpm check:actions` proves every `uses:` is *shaped* like a full commit SHA
+# with a `# vX.Y.Z` comment. It runs offline, inside `pnpm check`, and so cannot
+# prove the SHA was ever published by the action's own repository — which GitHub
+# explicitly asks of you: "when selecting a SHA, you should verify it is from the
+# action's repository and not a repository fork".
+# Source: https://docs.github.com/en/actions/reference/security/secure-use
+#
+# This workflow is that other half, and it is deliberately *not* a step in the
+# CI job. `pnpm check` is offline and deterministic on purpose; folding a GitHub
+# API call into it would let an outage redden the whole gate, and a gate that
+# goes red when GitHub has a bad minute is a gate people learn to re-run until it
+# is green. Keeping it separate also means its status check reads for itself.
+#
+# scripts/actions-upstream.mjs can only exit non-zero for a deterministic,
+# repository-caused reason. A rate limit, a 5xx or an unreachable network are
+# reported as UNVERIFIED skips and exit 0 — loudly, naming every pin that went
+# unchecked, so a skip can never be mistaken for a pass.
+#
+# The `schedule` trigger is not redundant with the pull-request one. A PR run
+# proves the pin was right when it was written; the weekly run is what notices an
+# upstream tag being *moved* afterwards — which is exactly what a compromised
+# action repository looks like, and nothing else in this repository would see it.
+#
+# Reasoning in full on https://github.com/withsetu/charcha/issues/35.
+
+name: Actions upstream
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, 06:00 UTC. A failure here mails the repository admins.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actions-upstream-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No dependency install: the script imports nothing but `node:fs/promises`,
+      # `node:path` and the global `fetch`. That is not an accident — a check on
+      # the supply chain that first has to install the supply chain is checking
+      # the tree it already trusted.
+      #
+      # The token buys headroom, not access: everything read here is public. A
+      # shared runner's IP gets 60 unauthenticated requests/hour and somebody
+      # else's job can spend them, where `github.token` gets 1,000/hour for this
+      # repository.
+      # Source: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+      - name: Pinned actions match the tags their comments name
+        run: node scripts/actions-upstream.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
