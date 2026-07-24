@@ -468,15 +468,33 @@ if (isCli) {
   let lockfile
   let installed
   let prodKeys
+  let declaredDependencies
   try {
     lockfile = await readLockfile()
     installed = await readInstalledLicences()
     prodKeys = new Set((await readInstalledLicences({ prod: true })).map((entry) => entry.key))
+    const manifest = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8'))
+    declaredDependencies = Object.keys(manifest.dependencies ?? {})
   } catch (error) {
     console.error(
       `licence-policy: could not read the dependency tree: ${
         error instanceof Error ? error.message : String(error)
       }`,
+    )
+    process.exit(1)
+  }
+
+  // `--prod` is the only thing separating the strict tier from the permissive
+  // one, and an empty result from it looks exactly like a project with no
+  // runtime dependencies. Left unchecked, a subprocess that failed to produce
+  // the production graph would move every package into the dev tier, which is
+  // the looser of the two — a fail-open direction the package-lock.json version
+  // of this script did not have.
+  if (declaredDependencies.length > 0 && prodKeys.size === 0) {
+    console.error(
+      `licence-policy: package.json declares ${declaredDependencies.length} runtime dependencies ` +
+        'but `pnpm licenses list --prod` reported none, so every package would be judged against ' +
+        'the permissive development allowlist. Refusing to check on that basis.',
     )
     process.exit(1)
   }

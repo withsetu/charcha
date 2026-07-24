@@ -15,8 +15,7 @@
 //
 // Enforced by test/node/lockfile-guard.test.ts.
 
-import { access } from 'node:fs/promises'
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** Lockfiles from package managers this project does not use. */
