@@ -151,7 +151,16 @@ function canonicalQuery(params: URLSearchParams, significant: readonly string[])
   for (const [name, value] of params) if (wanted.has(name)) kept.push([name, value])
   if (kept.length === 0) return ''
 
-  kept.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]))
+  // By code point, never localeCompare(). Collation reports 0 for strings that are
+  // merely equivalent — a soft hyphen is ignorable — and a stable sort then falls
+  // back to the order the parameters happened to arrive in, so one page gets two
+  // keys. It is ICU-dependent too, and the v1.1 build-time renderer does not run
+  // in workerd; both paths have to agree on the key or SSR renders someone else's
+  // conversation.
+  // Enforced by test/worker/page-key.test.ts.
+  kept.sort(([nameA, valueA], [nameB, valueB]) =>
+    nameA < nameB ? -1 : nameA > nameB ? 1 : valueA < valueB ? -1 : valueA > valueB ? 1 : 0,
+  )
   return `?${new URLSearchParams(kept).toString()}`
 }
 
@@ -211,8 +220,11 @@ export function derivePageKey(input: PageKeyInput): PageKeyResult {
 
   let pageKey: string
   if (rawThread !== '') {
-    if (!THREAD_ID.test(rawThread.normalize('NFC'))) return reject('invalid-thread-id')
-    pageKey = `id:${rawThread}`
+    // Validated and stored as the same string. Checking one form and persisting
+    // another is how a guard comes to pass on a value that was never the one saved.
+    const threadId = rawThread.normalize('NFC')
+    if (!THREAD_ID.test(threadId)) return reject('invalid-thread-id')
+    pageKey = `id:${threadId}`
   } else if (urlKey !== null) {
     pageKey = urlKey
   } else {

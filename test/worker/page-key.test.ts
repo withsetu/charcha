@@ -108,6 +108,20 @@ describe('the shape of a page key', () => {
     if (!result.ok) return
     expect(result.pageUrl).toBe('https://example.com/post')
   })
+
+  it('never records credentials that were embedded in the URL', () => {
+    // A browser will report https://user:pass@site/page as location.href quite
+    // happily. page_url is stored and then rendered in the moderation queue, so
+    // rebuilding it from URL.origin — which is scheme, host and port, and nothing
+    // else — is what keeps a password out of the database and off the dashboard.
+    const result = derivePageKey({ url: 'https://alice:hunter2@example.com/post' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.pageUrl).toBe('https://example.com/post')
+    expect(result.pageUrl).not.toContain('hunter2')
+    expect(result.pageKey).toBe('/post')
+  })
 })
 
 describe('query parameters', () => {
@@ -149,6 +163,21 @@ describe('query parameters', () => {
     expect(keyFor({ url: 'https://example.com/item?id=42', significantParams })).not.toBe(
       keyFor({ url: 'https://example.com/item?id=43', significantParams }),
     )
+  })
+
+  it('orders significant parameters by code point, not by locale collation', () => {
+    // "co<soft hyphen>de".localeCompare("code") is 0 — collation treats a soft
+    // hyphen as ignorable — so a stable sort would leave these two in whatever
+    // order they arrived in, and one page would get two keys depending on how the
+    // link was written. Locale collation is also ICU-dependent, and the v1.1
+    // build-time renderer does not run in workerd.
+    const significantParams = ['tag']
+    const ignorable = 'co­de'
+
+    expect(ignorable.localeCompare('code')).toBe(0)
+    expect(
+      keyFor({ url: `https://example.com/p?tag=${ignorable}&tag=code`, significantParams }),
+    ).toBe(keyFor({ url: `https://example.com/p?tag=code&tag=${ignorable}`, significantParams }))
   })
 
   it('matches a significant parameter by exact name, not by prefix', () => {
