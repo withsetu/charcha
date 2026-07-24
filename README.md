@@ -24,6 +24,18 @@ readers in order to comment.
   classifier by default. Third-party spam services are optional and off by
   default, because they mean sending reader data elsewhere.
 
+## Adding it to a page
+
+```html
+<div id="charcha"></div>
+<script src="https://your-worker.example.workers.dev/embed.js" defer></script>
+```
+
+That is the whole integration. `embed.js` is under 6 KB gzipped, ships no framework
+and no Markdown parser, and is served as a static asset so it costs your deployment
+nothing against the Cloudflare request budget. [Theming](docs/theming.md) covers the
+attributes, the class names and the three styling modes.
+
 ## Documentation
 
 Written for the parts that exist; [docs/](docs/) says plainly what is not built yet.

@@ -1,6 +1,12 @@
 node_modules/
 dist/
 .wrangler/
+
+# The built embed. Source is src/embed/; `pnpm build` produces this, and both
+# `wrangler dev` and `wrangler deploy` run that build first (wrangler.jsonc). A
+# committed bundle would drift from its source with nothing failing (#5).
+public/embed.js
+public/embed.js.map
 .dev.vars
 .env
 .env.*

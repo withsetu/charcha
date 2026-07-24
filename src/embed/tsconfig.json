@@ -1,0 +1,19 @@
+{
+  // The embed is the one part of this repository that runs in a browser rather than
+  // in workerd, so it is the one part that needs the DOM lib — and it must *not*
+  // see the Worker's ambient types, which redeclare `fetch`, `Response` and friends
+  // with Cloudflare's shapes. Two libs in one program is how `document` ends up
+  // typed against a runtime that has none.
+  //
+  // The root tsconfig excludes src/embed for the same reason, and `pnpm typecheck`
+  // runs both projects.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "types": []
+  },
+  // The root project excludes this directory; that exclusion is inherited by
+  // `extends` and has to be cleared here, or this project has no inputs at all.
+  "include": ["."],
+  "exclude": []
+}

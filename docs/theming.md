@@ -4,12 +4,35 @@ Charcha's design goal is to be invisible: the comment widget should look like pa
 your site, not like something bolted onto it. It achieves that by owning as little of
 the appearance as possible.
 
-> **Status.** The class names and HTML structure below are **shipped and stable** — they
-> are what the renderer emits today, and a test asserts the exact set so a rename cannot
-> happen by accident. The styling *modes* and the CSS custom properties further down are
-> **decided but not yet built** ([#6](https://github.com/withsetu/charcha/issues/6)),
-> and are documented here so you can see the contract you would be styling against. They
-> are marked where they appear.
+> **Status.** Everything on this page is **built**: the class names and HTML structure,
+> the three styling modes, and the custom properties. A test asserts the exact set of
+> class names and the exact list of properties, so a rename cannot happen by accident.
+> Nobody has deployed Charcha to production yet
+> ([#16](https://github.com/withsetu/charcha/issues/16)).
+
+## Adding Charcha to a page
+
+Two lines. The `<script>` names your deployment once, and the widget takes the address
+from there.
+
+```html
+<div id="charcha"></div>
+<script src="https://your-worker.example.workers.dev/embed.js" defer></script>
+```
+
+| Attribute | On | What it does |
+|---|---|---|
+| `data-styles` | the mount element | `inherit` *(default)*, `tokens` or `bare` — see below |
+| `data-thread` | the mount element | Pins the conversation to a slug of your choosing instead of the page's path. Use it when the same conversation appears at more than one address, or when your CDN rewrites paths |
+| `data-api` | the mount element | The deployment address, if it is not where `embed.js` was served from |
+| `data-charcha` | any element | An alternative to `id="charcha"`, for pages that mount more than one widget |
+
+`embed.js` is served as a **static asset**, so fetching it costs your deployment nothing
+against the Cloudflare request budget — only the comment read does. It is
+[under 6 KB gzipped](https://github.com/withsetu/charcha/issues/5) and enforced at 10 KB.
+
+Your deployment must be told which origins may use it, or the browser will refuse every
+response ([#57](https://github.com/withsetu/charcha/issues/57)).
 
 ## The markup Charcha produces
 
@@ -50,10 +73,14 @@ A page with no comments yet renders one element instead:
 
 ## The class names
 
-All ten. This list is a **public API**: your stylesheet targets these directly, so
-renaming one would silently break the appearance of every site that had styled it.
-Changing this list is a breaking change, and a test asserts both that every name here is
-emitted and that nothing outside it is.
+Two lists, because two things emit markup: the **renderer**, which produces the comments
+themselves and also runs on the server-rendering paths, and the **embed**, which produces
+the widget around them. Both are a **public API**: your stylesheet targets these
+directly, so renaming one would silently break the appearance of every site that had
+styled it. Changing either list is a breaking change, and a test asserts both that every
+name here is emitted and that nothing outside it is.
+
+### From the renderer — the comments
 
 | Class | Where |
 |---|---|
@@ -67,6 +94,35 @@ emitted and that nothing outside it is.
 | `charcha-comment-body` | The rendered comment text |
 | `charcha-replies` | The nested `<ol>` holding one comment's replies |
 | `charcha-empty` | Shown instead of the list when there are no comments |
+| `charcha-truncated` | A notice below the list when the page holds more comments than one read returns |
+
+### From the embed — the widget
+
+| Class | Where |
+|---|---|
+| `charcha-root` | The widget's outer element. `box-sizing: border-box` is set on it and everything inside |
+| `charcha-status` | A live region: loading, a read failure, or the confirmation after you post |
+| `charcha-retry` | The button offered when the comments could not be loaded |
+| `charcha-thread` | The element the rendered comments are placed into |
+| `charcha-comment-actions` | The row holding one comment's Reply button |
+| `charcha-reply-button` | Reply. Only on top-level comments — there is no third level |
+| `charcha-pending` | The badge on your own just-posted comment, awaiting review |
+| `charcha-form` | The composer |
+| `charcha-form-replying` | Added to the composer while it is mounted under a comment as a reply |
+| `charcha-reply-header` | The "Replying to …" row inside the composer |
+| `charcha-reply-to` | The "Replying to …" text |
+| `charcha-cancel-reply` | The button that dismisses the reply |
+| `charcha-toolbar` | The formatting toolbar, a real `role="toolbar"` |
+| `charcha-toolbar-button` | One formatting button |
+| `charcha-fields` | The name-and-email row |
+| `charcha-field` | One labelled field |
+| `charcha-label` | A field's `<label>` |
+| `charcha-input` | The name and email `<input>`s |
+| `charcha-textarea` | The comment `<textarea>` |
+| `charcha-hint` | The line under the email field |
+| `charcha-error` | The message shown when a comment was not accepted |
+| `charcha-actions` | The row holding the submit button |
+| `charcha-submit` | Post comment |
 
 Notes that will save you a surprise:
 
@@ -115,14 +171,10 @@ a light background and on a dark one, without a media query and without knowing 
 about the surrounding page. That is the same technique Charcha's own default stylesheet
 uses, for the same reason.
 
-## Styling modes — decided, not yet built
+## Styling modes
 
-> **Not implemented yet** — [#6](https://github.com/withsetu/charcha/issues/6). Written
-> down because it is the agreed contract, not because you can use it today.
-
-Charcha will ship three modes, chosen in the dashboard and mirrored as an attribute on
-the embed so the setting can live in your site's repository rather than only in a
-database:
+Three, chosen with an attribute on the mount element so the setting lives in your site's
+repository rather than only in a database:
 
 ```html
 <div id="charcha" data-styles="bare"></div>
@@ -131,16 +183,22 @@ database:
 | Mode | What Charcha sends | Who owns the appearance |
 |---|---|---|
 | `inherit` *(default)* | A small default stylesheet | Charcha, deriving everything from your page |
-| `tokens` | The default stylesheet plus your overrides | You, through a set of custom properties |
+| `tokens` | The default stylesheet, with thirteen properties open to you | You, through those properties |
 | `bare` | No CSS at all | You, entirely |
 
-**The default stylesheet will name no colour and no typeface.** Every surface, rule and
-muted label is mixed out of the host page's own `currentColor` and inherited font:
+`inherit` is deliberately **not** overridable: in that mode Charcha owns the appearance,
+and if you want to change something you ask for `tokens`. That is what makes the choice
+between them mean something rather than being two names for one stylesheet.
+
+**The default stylesheet names no colour and no typeface.** Every surface, rule and muted
+label is mixed out of your page's own `currentColor`, and every size is relative to your
+own font:
 
 ```css
---cc-muted:   color-mix(in oklab, currentColor 58%, transparent);
---cc-line:    color-mix(in oklab, currentColor 16%, transparent);
---cc-surface: color-mix(in oklab, currentColor  5%, transparent);
+--cc-muted:        color-mix(in oklab, currentColor 70%, transparent);
+--cc-line:         color-mix(in oklab, currentColor 20%, transparent);
+--cc-control-line: color-mix(in oklab, currentColor 55%, transparent);
+--cc-surface:      color-mix(in oklab, currentColor  5%, transparent);
 ```
 
 This is also how dark mode is handled: there is no widget theme to switch, no media
@@ -150,13 +208,64 @@ nothing on a reader's machine.
 
 `bare` mode is why the class names above are a public API rather than an internal detail.
 
+### The thirteen properties
+
+In `tokens` mode, set any of these anywhere they will be inherited — `:root`, or the
+element around the widget. Setting none of them is identical to `inherit`.
+
+| Property | Default | What it is |
+|---|---|---|
+| `--charcha-muted` | `currentColor` at 70% | Timestamps, hints, status text |
+| `--charcha-line` | `currentColor` at 20% | Rules between comments, and beside a quote |
+| `--charcha-control-line` | `currentColor` at 55% | The border of every input and button |
+| `--charcha-surface` | `currentColor` at 5% | Button and code-block fills |
+| `--charcha-surface-strong` | `currentColor` at 11% | The same, on hover |
+| `--charcha-radius` | `0.5em` | Corner radius |
+| `--charcha-gap` | `1.25em` | The vertical rhythm between comments |
+| `--charcha-pad` | `0.75em` | Inner padding |
+| `--charcha-indent` | `1.25em` | How far a reply is indented |
+| `--charcha-font-size` | `1em` | The widget's base size, relative to yours |
+| `--charcha-line-height` | `1.55` | |
+| `--charcha-focus` | `currentColor` | The focus ring |
+| `--charcha-focus-width` | `2px` | |
+
+`--charcha-line` and `--charcha-control-line` are separate on purpose. A rule between two
+comments is decoration and looks right when it is faint; the border of a text input is
+what tells a reader the control is there, and WCAG requires it at 3:1 against the
+background. One property cannot be both without failing one of the two jobs.
+
 ## Accessibility
 
-Charcha targets WCAG 2.1 AA. Two parts of that are yours rather than ours, because they
-depend on the page around the widget:
+Charcha targets WCAG 2.1 AA, and the widget is built to it: a real `<form>` with real
+`<label>`s, a real `role="toolbar"` you can drive with the arrow keys, focus that moves
+into the reply composer when you open it and onto your comment when you post it, and
+errors associated with their field rather than signalled by colour. **No state in the
+widget is carried by colour alone** — which is both a WCAG requirement and the only thing
+that can work when the palette belongs to somebody else.
 
-- **Contrast.** The default stylesheet derives from `currentColor`, which inherits your
-  text colour — so it is legible wherever your body text is. If you override colours,
-  check contrast yourself; Charcha cannot see the background it is sitting on.
+Measured in a browser against a light host (`#1f1d1b` on `#fdfcfa`) and a dark one
+(`#e6e8ea` on `#0f1216`), with the same stylesheet and nothing telling it which was
+which:
+
+| | light | dark | needs |
+|---|---|---|---|
+| Comment text | 16.4:1 | 15.3:1 | 4.5:1 |
+| Timestamps, hints, status | 6.2:1 | 7.9:1 | 4.5:1 |
+| Input and button borders | 3.7:1 | 5.2:1 | 3:1 |
+
+Two parts are yours rather than ours, because they depend on the page around the widget:
+
+- **Contrast, if your own is marginal.** Everything above is mixed from your text colour,
+  so it is as legible as your body text is — but mixing toward transparent can only
+  *reduce* contrast. If your own text sits near the 4.5:1 floor, no ratio Charcha picks
+  can keep the muted labels above it; `tokens` mode is the answer there.
 - **Heading order.** Charcha emits no headings. If you put a "Comments" heading above the
   widget, give it the level that fits your page's outline.
+
+## If your site sets a Content-Security-Policy
+
+The default stylesheet is written into the page as a `<style>` element, so a policy with
+`style-src 'self'` and no `'unsafe-inline'` will block it. The widget still works — you
+get the markup with no CSS, which is `bare` mode — but you will want to either allow the
+style or choose `bare` deliberately and ship your own. You will also need `connect-src`
+to include your Charcha deployment, and `script-src` to allow it to serve `embed.js`.

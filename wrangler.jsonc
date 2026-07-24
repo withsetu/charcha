@@ -8,6 +8,44 @@
   },
   "upload_source_maps": true,
 
+  // The embed ships as a static asset rather than from a Worker route (#5).
+  // "Requests to static assets are free and unlimited. Requests to the Worker script
+  // [...] are billed according to Workers pricing"
+  // (https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/,
+  // checked 2026-07-24). After the read-path work in #20 it is the request count and
+  // not the database that bounds a site on the free tier, so serving embed.js from
+  // the Worker would make every page view cost two requests instead of one and halve
+  // a site's ceiling from ~100k to ~50k page views a day.
+  //
+  // Every default here is load-bearing and deliberately left unset:
+  //   - `run_worker_first` defaults to false. Setting it — for any pattern covering
+  //     embed.js — makes those requests invoke and bill the Worker, which is exactly
+  //     the cost this binding exists to avoid.
+  //   - `not_found_handling` defaults to "none". Cloudflare serves a matching asset
+  //     without invoking the Worker and otherwise falls through to it, which is what
+  //     keeps GET/POST/OPTIONS /comments and /health reaching Hono. The
+  //     "single-page-application" and "404-page" modes send navigation requests
+  //     straight to asset serving instead, and would break the read path.
+  // https://developers.cloudflare.com/workers/static-assets/routing/worker-script/
+  "assets": {
+    "directory": "./public"
+  },
+
+  // public/embed.js is a build output and is gitignored, so it has to be built
+  // before the directory above is uploaded. Wrangler runs this before `deploy` and
+  // watches it during `dev`.
+  //
+  // **Workers Builds does not honour this** — "Currently, Workers Builds does not
+  // honor the configurations set in Custom Builds within your Wrangler configuration
+  // file" (https://developers.cloudflare.com/workers/ci-cd/builds/configuration/,
+  // checked 2026-07-24). What covers the Deploy button instead is the `build` script
+  // in package.json, which the button detects and pre-populates
+  // (https://developers.cloudflare.com/workers/platform/deploy-buttons/). Both exist
+  // because they cover different paths, not by duplication.
+  "build": {
+    "command": "pnpm build"
+  },
+
   // Daily retention janitor: nulls comments.ip_hash past the configured window so
   // the IP-derived identifier does not live in the database forever (#19). One
   // trigger, well inside the Free plan's 5-per-account limit. The window itself is
