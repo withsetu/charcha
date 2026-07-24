@@ -261,24 +261,84 @@ export async function setCommentStatus(
   return toStored(row)
 }
 
-/** The triage queue: one status across every thread, newest first. */
-export async function listModerationQueue(
-  db: D1Database,
-  status: CommentStatus,
-  limit: number,
-): Promise<QueuedComment[]> {
-  const { results } = await db
-    .prepare(
-      `select c.id, c.thread_id, c.parent_id, c.depth, c.author_name, c.body, c.by_owner,
+/**
+ * The queue page size when the caller does not choose one — a screenful of triage,
+ * not an inbox.
+ */
+export const DEFAULT_QUEUE_LIMIT = 50
+
+/**
+ * The largest page the queue will ever return, whatever it is asked for.
+ *
+ * Rows read are the free tier's budget: 5M/day across the whole account. A page of
+ * 200 costs at most 200 of them, so it takes 25,000 page loads to matter — where an
+ * unclamped `limit` of 100,000 spends 2% of the day in one click. It is a memory
+ * bound as much as a billing one: a row here carries a body of up to 10,000
+ * characters and a Worker isolate has 128 MB.
+ * Enforced by test/worker/db/queue-limit.test.ts.
+ */
+export const MAX_QUEUE_LIMIT = 200
+
+/**
+ * Turns whatever the caller had into a page size that is safe to send to D1.
+ *
+ * Silent, not loud. This value reaches the data layer from the dashboard's own
+ * query string, so the caller is the site owner rather than an attacker, and a
+ * paginating UI that asks one row past the cap should get a full page rather than
+ * an error where its queue used to be. Rejecting is the right answer on a public
+ * endpoint, where an out-of-range value is evidence of probing and there is nobody
+ * to inconvenience; it is the wrong answer here, where failing loudly empties the
+ * screen of the one person doing the moderating. Either way the read is bounded,
+ * which is the property that costs money — so the clamp is the guard and an error
+ * would only be noise.
+ *
+ * `unknown`, because the value arrives from a query string where nothing TypeScript
+ * believes survives: strings, `undefined`, `NaN` and `Infinity` all reach here in
+ * practice. A page size that is not a finite whole number of at least one is not a
+ * page size, and becomes the default.
+ * Enforced by test/worker/db/queue-limit.test.ts.
+ */
+function clampQueueLimit(limit: unknown): number {
+  const parsed = typeof limit === 'string' ? Number(limit) : limit
+  if (typeof parsed !== 'number' || !Number.isFinite(parsed)) return DEFAULT_QUEUE_LIMIT
+
+  // Truncates rather than rounds, so no fractional value can widen the read.
+  const whole = Math.floor(parsed)
+  if (whole < 1) return DEFAULT_QUEUE_LIMIT
+  return Math.min(whole, MAX_QUEUE_LIMIT)
+}
+
+/**
+ * The triage queue read, as a constant so that the query plan can be asserted
+ * against the statement this project actually sends rather than against a copy of
+ * it in a test.
+ * Enforced by test/worker/db/query-plan.test.ts.
+ */
+export const MODERATION_QUEUE_SQL = `select c.id, c.thread_id, c.parent_id, c.depth, c.author_name, c.body, c.by_owner,
               c.status, c.created_at, c.moderated_at,
               t.page_key, t.title as page_title
          from comments c
          join threads t on t.id = c.thread_id
         where c.status = ?1
         order by c.created_at desc, c.id desc
-        limit ?2`,
-    )
-    .bind(status, limit)
+        limit ?2`
+
+/**
+ * The triage queue: one status across every thread, newest first, one bounded page.
+ *
+ * The page size is clamped here rather than in the handler that happens to be in
+ * front of it, so the bound holds for every caller — the dashboard, the importer,
+ * and whatever calls this next — instead of for whichever one remembered.
+ * Enforced by test/worker/db/queue-limit.test.ts.
+ */
+export async function listModerationQueue(
+  db: D1Database,
+  status: CommentStatus,
+  limit?: unknown,
+): Promise<QueuedComment[]> {
+  const { results } = await db
+    .prepare(MODERATION_QUEUE_SQL)
+    .bind(status, clampQueueLimit(limit))
     .all<QueuedCommentRow>()
 
   return results.map((row) => ({

@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import { PAGE_COMMENTS_SQL } from '../../../src/db'
+import { MODERATION_QUEUE_SQL, PAGE_COMMENTS_SQL } from '../../../src/db'
 
 const db = env.DB
 
@@ -34,5 +34,36 @@ describe('the page read', () => {
     const plan = await planOf(PAGE_COMMENTS_SQL, '/hello')
 
     expect(plan).toMatch(/SEARCH t/)
+  })
+})
+
+describe('the moderation queue read', () => {
+  // The clamp bounds the rows *returned*; only the index bounds the rows *read*.
+  // Without comments_by_status a queue of ten pending comments still reads every
+  // approved comment in the database to find them, so the cheapest page in the
+  // dashboard grows with the busiest site on the account.
+  it('seeks the status on an index rather than scanning the comments table', async () => {
+    const plan = await planOf(MODERATION_QUEUE_SQL, 'pending', 50)
+
+    expect(plan).toMatch(/SEARCH c USING INDEX comments_by_status/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('resolves each comment thread without scanning threads either', async () => {
+    const plan = await planOf(MODERATION_QUEUE_SQL, 'pending', 50)
+
+    expect(plan).toMatch(/SEARCH t USING INTEGER PRIMARY KEY/)
+  })
+
+  it('takes the newest rows from the index rather than sorting the whole status', async () => {
+    const plan = await planOf(MODERATION_QUEUE_SQL, 'pending', 50)
+
+    // comments_by_status is (status, created_at DESC), so `created_at desc` is the
+    // index's own order and the limit stops the read early. SQLite still sorts the
+    // `id desc` tiebreak — "LAST TERM OF ORDER BY" — which only ever buffers rows
+    // sharing one timestamp. A whole-clause sort is the failure this rules out: it
+    // would mean every row of that status is read before the limit is applied, so
+    // the clamp would bound what comes back and nothing about what it cost.
+    expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
   })
 })
