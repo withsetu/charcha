@@ -214,11 +214,12 @@ export function renderMarkdown(source: string): string {
   // module. Every rule below composes the fragments this produces with literal
   // markup, so nothing is escaped twice and nothing is missed.
   const lines = escapeHtml(source.replace(/\r\n?/g, '\n')).split('\n')
+  const lineAt = (at: number) => lines[at] ?? ''
   const out: string[] = []
   let index = 0
 
   while (index < lines.length) {
-    const line = lines[index] ?? ''
+    const line = lineAt(index)
 
     if (line.startsWith(FENCE)) {
       // The info string after the fence is attacker-controlled text that would
@@ -226,8 +227,8 @@ export function renderMarkdown(source: string): string {
       // into a class: `class` is the one attribute a host stylesheet trusts.
       const content: string[] = []
       index += 1
-      while (index < lines.length && !(lines[index] ?? '').startsWith(FENCE)) {
-        content.push(lines[index] ?? '')
+      while (index < lines.length && !lineAt(index).startsWith(FENCE)) {
+        content.push(lineAt(index))
         index += 1
       }
       index += 1
@@ -237,8 +238,8 @@ export function renderMarkdown(source: string): string {
 
     if (line.startsWith(QUOTE_MARKER)) {
       const quoted: string[] = []
-      while (index < lines.length && (lines[index] ?? '').startsWith(QUOTE_MARKER)) {
-        const rest = (lines[index] ?? '').slice(QUOTE_MARKER.length)
+      while (index < lines.length && lineAt(index).startsWith(QUOTE_MARKER)) {
+        const rest = lineAt(index).slice(QUOTE_MARKER.length)
         quoted.push(renderInline(rest.startsWith(' ') ? rest.slice(1) : rest))
         index += 1
       }
@@ -248,8 +249,8 @@ export function renderMarkdown(source: string): string {
 
     if (isListItem(line)) {
       const items: string[] = []
-      while (index < lines.length && isListItem(lines[index] ?? '')) {
-        items.push('<li>', renderInline((lines[index] ?? '').slice(2)), '</li>')
+      while (index < lines.length && isListItem(lineAt(index))) {
+        items.push('<li>', renderInline(lineAt(index).slice(2)), '</li>')
         index += 1
       }
       out.push('<ul>', ...items, '</ul>')
@@ -262,8 +263,8 @@ export function renderMarkdown(source: string): string {
     }
 
     const paragraph: string[] = []
-    while (index < lines.length && isProse(lines[index] ?? '')) {
-      paragraph.push(renderInline(lines[index] ?? ''))
+    while (index < lines.length && isProse(lineAt(index))) {
+      paragraph.push(renderInline(lineAt(index)))
       index += 1
     }
     // A single newline is a line break rather than a space. Comment boxes are
