@@ -86,6 +86,19 @@ interface QueuedCommentRow extends CommentRow {
 
 const RENDERABLE_COLUMNS = 'id, parent_id, depth, author_name, body, by_owner, created_at'
 
+/**
+ * The page read, as a constant so that the query plan can be asserted against the
+ * statement this project actually sends rather than against a copy of it in a test.
+ * Enforced by test/worker/db/query-plan.test.ts.
+ */
+export const PAGE_COMMENTS_SQL = `select ${RENDERABLE_COLUMNS.split(', ')
+  .map((column) => `c.${column}`)
+  .join(', ')}
+     from comments c
+     join threads t on t.id = c.thread_id
+    where t.page_key = ?1 and c.status = 'approved'
+    order by c.created_at, c.id`
+
 function toThread(row: ThreadRow): Thread {
   return {
     id: row.id,
@@ -197,15 +210,7 @@ export async function listPageComments(
   pageKey: string,
 ): Promise<RenderableComment[]> {
   const { results } = await db
-    .prepare(
-      `select ${RENDERABLE_COLUMNS.split(', ')
-        .map((column) => `c.${column}`)
-        .join(', ')}
-         from comments c
-         join threads t on t.id = c.thread_id
-        where t.page_key = ?1 and c.status = 'approved'
-        order by c.created_at, c.id`,
-    )
+    .prepare(PAGE_COMMENTS_SQL)
     .bind(pageKey)
     .all<Omit<CommentRow, 'thread_id' | 'status' | 'moderated_at'>>()
 
