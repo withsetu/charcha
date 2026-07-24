@@ -209,12 +209,27 @@ describe('a moderation queue page size arriving as a string', () => {
   })
 })
 
-describe('the moderation queue page size, as a promise to the free tier', () => {
-  it('keeps the worst case a single moderator can spend within reach of the daily allowance', () => {
-    // 5M row reads/day on the free tier, shared across the account. At this cap a
-    // request costs at most MAX_QUEUE_LIMIT rows, so it takes tens of thousands of
-    // page loads to matter — where an unclamped `limit` spends 2% of the day in one.
-    expect(MAX_QUEUE_LIMIT).toBeLessThanOrEqual(5_000_000 / 10_000)
+describe('the cap itself', () => {
+  // A tripwire on the constants rather than on the code: the clamp keeps working
+  // perfectly if someone raises MAX_QUEUE_LIMIT to 100,000, and every test above
+  // still passes. These are the two ceilings that make the number a cap at all.
+
+  it('keeps the worst-case page well inside the memory a Worker isolate has', () => {
+    // A body is capped at 10,000 characters by the schema, against 128 MB per
+    // isolate. 8 MB of comment bodies leaves room for the rest of the request and
+    // still allows a far larger page than triage needs.
+    const worstCaseBodyBytes = MAX_QUEUE_LIMIT * 10_000
+    expect(worstCaseBodyBytes).toBeLessThanOrEqual(8 * 1024 * 1024)
+  })
+
+  it('keeps a single queue load a rounding error against the day of row reads', () => {
+    // 5M row reads/day on the free tier, shared across the account. At most one
+    // row read per row returned, so a page must stay under a thousandth of the day
+    // — where the unclamped `limit=100000` in the issue spent 2% of it in one click.
+    expect(MAX_QUEUE_LIMIT).toBeLessThanOrEqual(5_000_000 / 1_000)
+  })
+
+  it('never hands back a default page larger than the maximum page', () => {
     expect(DEFAULT_QUEUE_LIMIT).toBeLessThanOrEqual(MAX_QUEUE_LIMIT)
   })
 })
