@@ -50,7 +50,8 @@
     "check": "pnpm types:check && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm check:size && pnpm check:lockfile && pnpm check:licences && pnpm check:actions && pnpm check:audit"
   },
   "dependencies": {
-    "hono": "^4.12.31"
+    "hono": "^4.12.31",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.8",
