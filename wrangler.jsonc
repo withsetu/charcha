@@ -8,6 +8,14 @@
   },
   "upload_source_maps": true,
 
+  // Daily retention janitor: nulls comments.ip_hash past the configured window so
+  // the IP-derived identifier does not live in the database forever (#19). One
+  // trigger, well inside the Free plan's 5-per-account limit. The window itself is
+  // the `ip_hash_retention_days` setting, not this schedule.
+  "triggers": {
+    "crons": ["0 4 * * *"]
+  },
+
   // The Deploy to Cloudflare button reads this file to decide what to provision,
   // and rewrites `database_id` with the ID of the database it creates. The value
   // below is a placeholder that exists only so the binding is well-formed before

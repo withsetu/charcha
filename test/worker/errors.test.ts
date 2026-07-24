@@ -1,6 +1,6 @@
 import { exports } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import app from '../../src/index'
+import { app } from '../../src/index'
 
 // The pool gives tests the *same* app instance the Worker serves, so a route
 // registered here is a route the real error handler sees.

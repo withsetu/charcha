@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import { MODERATION_QUEUE_SQL, PAGE_COMMENTS_SQL } from '../../../src/db'
+import { MODERATION_QUEUE_SQL, PAGE_COMMENTS_SQL, PURGE_IP_HASH_SQL } from '../../../src/db'
 
 const db = env.DB
 
@@ -65,5 +65,19 @@ describe('the moderation queue read', () => {
     // would mean every row of that status is read before the limit is applied, so
     // the clamp would bound what comes back and nothing about what it cost.
     expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
+  })
+})
+
+describe('the ip_hash purge', () => {
+  // comments_by_ip is partial — `WHERE ip_hash IS NOT NULL` — so the purge seeks it
+  // and never sees a row it has already nulled. That is what makes the retention
+  // sweep cost grow with the retention window rather than with the whole table: a
+  // full scan would re-read every already-purged comment on the busiest account
+  // every day. #19 depends on this index, not merely on the query being correct.
+  it('seeks the partial ip index rather than scanning the comments table', async () => {
+    const plan = await planOf(PURGE_IP_HASH_SQL, 1000)
+
+    expect(plan).toMatch(/USING INDEX comments_by_ip/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })
