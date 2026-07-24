@@ -43,8 +43,13 @@ export const COMMENT_CLASS_NAMES = [
  * Same contract as MARKDOWN_ELEMENTS: adding an element to the markup without
  * adding it here fails test/worker/render/vocabulary.test.ts, which asserts that
  * nothing outside the two lists ever reaches the page — whatever the input.
+ *
+ * `p` appears in both lists on purpose. The empty state emits one from this
+ * file, and the vocabulary test unions the two lists — so leaving it out here
+ * would still pass while making this comment untrue, which is the worse of the
+ * two failures.
  */
-export const COMMENT_ELEMENTS = ['ol', 'li', 'div', 'span', 'time'] as const
+export const COMMENT_ELEMENTS = ['ol', 'li', 'div', 'span', 'time', 'p'] as const
 
 /**
  * Date's own range, converted to the unix seconds this project stores. Past it,
@@ -52,6 +57,18 @@ export const COMMENT_ELEMENTS = ['ol', 'li', 'div', 'span', 'time'] as const
  * whole page down with it.
  */
 const MAX_TIMESTAMP_SECONDS = 8_640_000_000_000
+
+/**
+ * The ordinary shape of an ISO instant, `YYYY-MM-DDTHH:mm:ss.sssZ`.
+ *
+ * Outside four-digit years `toISOString` returns the expanded form —
+ * `+275760-09-13T00:00:00.000Z` — and reading a date and a time out of that by
+ * position produces `+275760-09 3T00:`, which is not a date and does not look
+ * like a bug to anyone reading the page. A shape this narrow is what makes the
+ * slicing below safe to do by position at all.
+ * Enforced by test/worker/render/comments.test.ts.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
 /**
  * The timestamp: the date and the time, from the row rather than from a clock.
@@ -72,7 +89,12 @@ const MAX_TIMESTAMP_SECONDS = 8_640_000_000_000
 function renderTime(createdAt: number): string {
   if (!Number.isFinite(createdAt) || Math.abs(createdAt) > MAX_TIMESTAMP_SECONDS) return ''
 
+  // Two guards, catching different things: the range check is what stops
+  // toISOString throwing, and the shape check is what stops it returning a form
+  // these slices cannot read.
   const iso = new Date(createdAt * 1000).toISOString()
+  if (!ISO_INSTANT.test(iso)) return ''
+
   const shown = `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`
   return `<time class="charcha-comment-time" datetime="${iso}">${shown}</time>`
 }

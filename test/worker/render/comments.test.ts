@@ -170,6 +170,30 @@ describe('renderComments', () => {
     expect(html).not.toContain('<time')
     expect(html).toContain('charcha-comment-body')
   })
+
+  it('omits the timestamp for a year outside four digits, rather than printing rubble', () => {
+    // Past year 9999 toISOString switches to the expanded form
+    // (+275760-09-13T00:00:00.000Z), and reading a date and a time out of it by
+    // position yields "+275760-09 3T00: UTC" — a string that is not a date and
+    // does not look like a bug until somebody reads it.
+    const html = renderComments([
+      comment({ id: 1, createdAt: 8.64e12 }),
+      comment({ id: 2, createdAt: 253_402_300_800 }),
+      comment({ id: 3, createdAt: -62_167_219_201 }),
+    ])
+
+    expect(html).not.toContain('<time')
+  })
+
+  it('still renders the years that are real', () => {
+    const html = renderComments([
+      comment({ id: 1, createdAt: 0 }),
+      comment({ id: 2, createdAt: 253_402_300_799 }),
+    ])
+
+    expect(html).toContain('>1970-01-01 00:00 UTC</time>')
+    expect(html).toContain('>9999-12-31 23:59 UTC</time>')
+  })
 })
 
 describe('a page nobody has commented on', () => {
