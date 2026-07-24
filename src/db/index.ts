@@ -287,6 +287,55 @@ export async function listPageComments(db: D1Database, pageKey: string): Promise
 }
 
 /**
+ * The parent-eligibility read, as a constant so the query plan can be asserted
+ * against the statement this project actually sends rather than a copy of it in a
+ * test.
+ *
+ * `id = ?1` is the INTEGER PRIMARY KEY, so this is one row seek however large the
+ * table is. The remaining predicates are all on that row.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/reply-target.test.ts.
+ */
+export const REPLY_TARGET_SQL = `select 1 as eligible
+     from comments
+    where id = ?1
+      and thread_id = ?2
+      and status = 'approved'
+      and depth = 0`
+
+/**
+ * Whether `parentId` names a comment this thread may be replied to (#48).
+ *
+ * The triggers `comments_depth_guard` and `comments_parent_thread_guard` already
+ * refuse an ineligible parent, correctly — but they `RAISE(ABORT)`, so insertComment
+ * throws and the submission path returns 500 for what is the reader's mistake. This
+ * read exists to make that a 400. It does not replace the triggers: they stay as the
+ * backstop that holds for a caller who never checked, including the importer.
+ *
+ * Four conditions, one row: the comment exists, it is on this thread, it is
+ * `approved`, and it is at depth 0. `approved` is part of eligibility rather than
+ * merely a nicety — a reader cannot see a pending or spam comment, so cannot have
+ * clicked reply on one, and an id that names one was guessed. The caller must give
+ * every failure the same answer, or this becomes an oracle over the moderation
+ * queue.
+ *
+ * The id is checked before the database is asked, because a public endpoint should
+ * not spend a query proving that `-1` is not a comment.
+ * Enforced by test/worker/db/reply-target.test.ts.
+ */
+export async function isReplyTarget(
+  db: D1Database,
+  threadId: number,
+  parentId: number,
+): Promise<boolean> {
+  if (!Number.isInteger(parentId) || parentId < 1) return false
+
+  const row = await db.prepare(REPLY_TARGET_SQL).bind(parentId, threadId).first<{
+    eligible: number
+  }>()
+  return row !== null
+}
+
+/**
  * Records a moderation decision, and refuses to pretend it moderated nothing.
  *
  * Hiding a comment hides the replies underneath it. Otherwise removing a spam

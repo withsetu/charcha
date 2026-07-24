@@ -5,6 +5,7 @@ import {
   MODERATION_QUEUE_SQL,
   PAGE_COMMENTS_SQL,
   PURGE_IP_HASH_SQL,
+  REPLY_TARGET_SQL,
 } from '../../../src/db'
 
 const db = env.DB
@@ -83,6 +84,19 @@ describe('the moderation queue read', () => {
     // would mean every row of that status is read before the limit is applied, so
     // the clamp would bound what comes back and nothing about what it cost.
     expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
+  })
+})
+
+describe('the parent-eligibility read', () => {
+  // This runs on the submission path, which is the public write endpoint, and it
+  // runs before any write. A scan here would let anyone make the busiest thread on
+  // the site read every comment in the database by sending a reply with a made-up
+  // parentId — cheap for them, and paid for out of the account's 5M rows/day.
+  it('seeks the primary key rather than scanning the comments table', async () => {
+    const plan = await planOf(REPLY_TARGET_SQL, 1, 1)
+
+    expect(plan).toMatch(/USING INTEGER PRIMARY KEY/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })
 
