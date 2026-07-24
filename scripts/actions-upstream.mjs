@@ -21,9 +21,9 @@
 // tells every session to run before pushing. Putting a GitHub API call in it
 // would make the whole gate fail when GitHub is slow rather than when this
 // repository is wrong — and a gate that goes red for an outage is a gate people
-// learn to re-run until it is green. So this runs as its own CI job
-// (`.github/workflows/ci.yml`), and its failure taxonomy is built so that it can
-// only ever go red for a deterministic, repository-caused reason:
+// learn to re-run until it is green. So this runs as its own workflow
+// (`.github/workflows/actions-upstream.yml`), and its failure taxonomy is built
+// so that it can only ever go red for a deterministic, repository-caused reason:
 //
 //   mismatch / unknown-tag / not-pinned / unresolvable  → exit 1. The repo is
 //     wrong, and re-running will not change the answer.
@@ -35,9 +35,9 @@
 // Rate limits, for the record: 60 requests/hour unauthenticated, 1,000/hour per
 // repository for GITHUB_TOKEN inside Actions
 // (https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
-// This repository resolves three pins, deduplicated, so neither ceiling is in
-// play — the token is here so a shared runner IP's 60/hour cannot be spent by
-// somebody else's job.
+// This repository resolves a handful of pins, deduplicated by repository and
+// tag, so neither ceiling is in play — the token is here so a shared runner IP's
+// 60/hour cannot be spent by somebody else's job.
 //
 // Enforced by test/node/actions-upstream.test.ts.
 
@@ -63,7 +63,7 @@ const FULL_SHA = /^[0-9a-f]{40}$/
  * @param {string} tag
  * @returns {string[]}
  */
-export function TAG_CANDIDATES_FOR(tag) {
+export function tagCandidatesFor(tag) {
   return tag.startsWith('v') ? [tag, tag.slice(1)] : [tag, `v${tag}`]
 }
 
@@ -142,7 +142,7 @@ function isInfrastructureStatus(status) {
  * @returns {Promise<{ kind: 'commit', sha: string } | { kind: 'unknown-tag' } | { kind: 'skipped', reason: string } | { kind: 'unresolvable', reason: string }>}
  */
 async function resolveTag(fetchImpl, headers, owner, repo, tag) {
-  for (const candidate of TAG_CANDIDATES_FOR(tag)) {
+  for (const candidate of tagCandidatesFor(tag)) {
     let response
     try {
       response = await fetchImpl(`${API}/repos/${owner}/${repo}/git/ref/tags/${candidate}`, {
@@ -167,6 +167,16 @@ async function resolveTag(fetchImpl, headers, owner, repo, tag) {
     }
 
     if (object?.type === 'tag') {
+      // The API response is external data, and this is the one field from it
+      // that gets interpolated back into a URL. Validate before dereferencing
+      // rather than trusting the shape.
+      if (!FULL_SHA.test(object.sha ?? '')) {
+        return {
+          kind: 'unresolvable',
+          reason: `refs/tags/${candidate} names a tag object with no usable SHA`,
+        }
+      }
+
       let tagResponse
       try {
         tagResponse = await fetchImpl(`${API}/repos/${owner}/${repo}/git/tags/${object.sha}`, {

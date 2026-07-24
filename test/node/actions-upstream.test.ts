@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { checkUpstream, parsePin, TAG_CANDIDATES_FOR } from '../../scripts/actions-upstream.mjs'
+import { checkUpstream, parsePin, tagCandidatesFor } from '../../scripts/actions-upstream.mjs'
 
 let cwd: string
 
@@ -116,10 +116,10 @@ describe('parsePin', () => {
   })
 })
 
-describe('TAG_CANDIDATES_FOR', () => {
+describe('tagCandidatesFor', () => {
   it('tries the comment verbatim first, then the other v-prefix convention', () => {
-    expect(TAG_CANDIDATES_FOR('v7.0.1')).toEqual(['v7.0.1', '7.0.1'])
-    expect(TAG_CANDIDATES_FOR('7.0.1')).toEqual(['7.0.1', 'v7.0.1'])
+    expect(tagCandidatesFor('v7.0.1')).toEqual(['v7.0.1', '7.0.1'])
+    expect(tagCandidatesFor('7.0.1')).toEqual(['7.0.1', 'v7.0.1'])
   })
 })
 
