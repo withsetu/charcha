@@ -33,13 +33,20 @@ readers in order to comment.
 
 ## Development
 
-Requires Node 22 or newer.
+Requires Node 22 (see `.nvmrc`) and pnpm, which `package.json` pins with
+`packageManager` — `corepack enable` is enough to get the right version.
 
 ```sh
-npm install
-npm run dev     # wrangler dev, with a local D1
-npm run check   # types, typecheck, lint, format, tests, embed budget — what CI runs
+pnpm install
+pnpm dev     # wrangler dev, with a local D1
+pnpm check   # types, typecheck, lint, format, tests, embed budget — what CI runs
 ```
+
+**pnpm, not npm.** `npm install` here writes a `package-lock.json` that records
+only the platform it ran on: resolving on macOS drops the Linux-only packages CI
+needs, and CI is where that surfaces. `pnpm check` fails if a foreign lockfile
+appears. Background on
+[issue #52](https://github.com/withsetu/charcha/issues/52).
 
 Tests run inside the Workers runtime via `@cloudflare/vitest-pool-workers`, against
 the same bindings the deployed Worker gets.

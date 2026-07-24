@@ -26,6 +26,10 @@
   },
   "license": "MIT",
   "author": "Mayank Gupta",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
@@ -39,10 +43,11 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "check:size": "node scripts/bundle-size.mjs",
+    "check:lockfile": "node scripts/lockfile-guard.mjs",
     "check:licences": "node scripts/licence-policy.mjs",
     "check:actions": "node scripts/actions-pinned.mjs",
-    "check:audit": "npm audit --omit=dev --audit-level=low && npm audit --audit-level=high",
-    "check": "npm run types:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run check:size && npm run check:licences && npm run check:actions && npm run check:audit"
+    "check:audit": "pnpm audit --prod --audit-level=low && pnpm audit --audit-level=high",
+    "check": "pnpm types:check && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm check:size && pnpm check:lockfile && pnpm check:licences && pnpm check:actions && pnpm check:audit"
   },
   "dependencies": {
     "hono": "^4.12.31"
@@ -59,5 +64,11 @@
     "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10",
     "wrangler": "^4.114.0"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
   }
 }

@@ -25,10 +25,16 @@
 #     advisory or not. It is the only one of the two that moves a SHA-pinned
 #     action, because a pinned action has no version for an advisory to match.
 #
-# npm is deliberately absent here. Security updates for npm are already covered
-# by the repo setting above, and routine npm version bumps need a changelog
-# review per PR — a different piece of work from turning the scanning on, and
-# tracked separately.
+# The JavaScript ecosystem is deliberately absent here. Security updates for it
+# are already covered by the repo setting above, and routine dependency bumps
+# need a changelog review per PR — a different piece of work from turning the
+# scanning on, and tracked separately.
+#
+# When that is turned on, the ecosystem key is `npm` even though this project
+# resolves with pnpm (#52): Dependabot files pnpm under the `npm` ecosystem and
+# updates `pnpm-lock.yaml` from it. It supports pnpm v7–v10, which is one of the
+# reasons `packageManager` pins the 10 line rather than 11.
+# Source: https://docs.github.com/en/code-security/dependabot/ecosystems-supported-by-dependabot/supported-ecosystems-and-repositories
 
 version: 2
 updates:

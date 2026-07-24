@@ -17,10 +17,33 @@
 // Unknown, missing or unparseable licences fail. Widening either allowlist is a
 // deliberate edit to this file and shows up in review, which is the point.
 //
+// Where the data comes from, and why it changed with #52
+// ------------------------------------------------------
+// This script used to parse `package-lock.json`, which carried a `license` field
+// per entry, so macOS and the Linux runner judged an identical package set.
+// `pnpm-lock.yaml` carries no licence metadata at all — `grep -ci license` over
+// it returns 0 — so parsing the lockfile cannot implement this policy, whatever
+// YAML parser were added. Licences come from `pnpm licenses list --json`, which
+// reads what is *installed*, and that is a real narrowing: foreign-platform
+// optional binaries (`@esbuild/*`, `@img/sharp-*`, `lightningcss-*`, the
+// `@emnapi/*` wasm chain) are absent from any one machine's install.
+//
+// So the lockfile is still read — for the package *set*, which it does record
+// completely and platform-independently. Every lockfile entry not covered by the
+// licence report must be one the lockfile itself marks `optional`, meaning
+// reachable only through optional edges and so legitimately absent here. An
+// uncovered entry that is *not* optional means the install is partial —
+// `--prod`, `--no-optional`, a half-finished install — and the gate fails rather
+// than reporting a clean tree it never looked at.
+//
 // Enforced by test/node/licence-policy.test.ts.
 
+import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
+
+const run = promisify(execFile)
 
 // Permissive only. Every entry may be sublicensed under MIT by a site owner
 // redeploying this Worker, needing at most attribution.
@@ -55,8 +78,9 @@ export const POLICY = { prod: PROD_ALLOWED, dev: DEV_ALLOWED }
 
 /**
  * Tokenises an SPDX licence expression. Operators are matched case-insensitively
- * because npm metadata is not consistent about them; identifiers are compared
- * case-insensitively too, per the SPDX spec's case-insensitive identifiers.
+ * because registry metadata is not consistent about them; identifiers are
+ * compared case-insensitively too, per the SPDX spec's case-insensitive
+ * identifiers.
  *
  * @param {string} expression
  * @returns {string[]}
@@ -164,90 +188,206 @@ export function isAllowed(expression, allowedList) {
   return evaluateExpression(expression, allowed)
 }
 
+/** A 2-space-indented block key, quoted or bare. */
+const BLOCK_KEY = /^ {2}(?! )(?:'([^']+)'|"([^"]+)"|([^\s:][^:]*)):\s*$/
+
 /**
- * Which allowlist applies to a lockfile entry.
+ * The complete package set recorded by a `pnpm-lock.yaml`, with whether the
+ * lockfile marks each entry optional.
  *
- * `dev` marks a package reachable only from devDependencies; `devOptional`,
- * one reachable only from dev or optional edges. Anything else is treated as
- * production — including plain `optional` production deps, which a bundler can
- * still reach. Defaulting to the stricter tier is the fail-closed direction.
+ * Two blocks are read, and the split matters:
  *
- * @param {Record<string, unknown>} entry
- * @returns {'dev' | 'prod'}
+ *   `packages:`  the resolution graph — every platform's variant, recorded
+ *                regardless of where the install ran. This is the set npm's
+ *                lockfile could not be trusted to hold (#52), and the reason
+ *                this file can still speak about a whole tree.
+ *   `snapshots:` the same identifiers with peer suffixes, carrying
+ *                `optional: true` on anything reachable only through optional
+ *                edges.
+ *
+ * `optional` rather than `cpu:`/`os:` is what marks an entry as legitimately
+ * absent from an install, because it is transitive: `@emnapi/core` has no
+ * platform fields of its own and is reached only through `@img/sharp-wasm32`,
+ * which does. pnpm has already computed that closure; recomputing it here would
+ * be a worse copy of it.
+ *
+ * A line scanner rather than a YAML dependency, deliberately. Three field names
+ * are needed from a file this repository generates itself with a pnpm version
+ * pinned by `packageManager`, and a supply-chain gate that adds supply-chain
+ * surface in order to run is a poor trade. The cost is that the scanner must
+ * fail loudly on a shape it does not recognise rather than quietly return less —
+ * hence the lockfileVersion guard and the empty-result failure in
+ * `checkLicences`.
+ *
+ * @param {string} source contents of pnpm-lock.yaml
+ * @returns {{ version: string | null, packages: Array<{ name: string, version: string, key: string, optional: boolean }> }}
  */
-export function tierOf(entry) {
-  return entry.dev === true || entry.devOptional === true ? 'dev' : 'prod'
+export function parseLockfilePackages(source) {
+  const lines = source.split(/\r?\n/)
+
+  const versionLine = lines.find((line) => line.startsWith('lockfileVersion:'))
+  const version =
+    versionLine === undefined
+      ? null
+      : versionLine.slice('lockfileVersion:'.length).trim().replace(/['"]/g, '')
+
+  const packages = new Map()
+  const optionalKeys = new Set()
+  let block = null
+  let current = null
+
+  for (const line of lines) {
+    if (/^\S/.test(line)) {
+      const name = line.slice(0, line.indexOf(':'))
+      block = name === 'packages' || name === 'snapshots' ? name : null
+      current = null
+      continue
+    }
+    if (block === null) continue
+
+    const entry = BLOCK_KEY.exec(line)
+    if (entry !== null) {
+      // A snapshot key carries its peer resolutions —
+      // `vite@8.1.5(esbuild@0.28.1)` — which the `packages:` key does not.
+      const raw = entry[1] ?? entry[2] ?? entry[3] ?? ''
+      const parenthesis = raw.indexOf('(')
+      current = parenthesis === -1 ? raw : raw.slice(0, parenthesis)
+
+      if (block === 'packages' && !packages.has(current)) {
+        const at = current.lastIndexOf('@')
+        packages.set(current, {
+          name: at > 0 ? current.slice(0, at) : current,
+          version: at > 0 ? current.slice(at + 1) : '',
+          key: current,
+          optional: false,
+        })
+      }
+      continue
+    }
+
+    if (block === 'snapshots' && current !== null && /^ {4}optional:\s*true\s*$/.test(line)) {
+      optionalKeys.add(current)
+    }
+  }
+
+  for (const key of optionalKeys) {
+    const entry = packages.get(key)
+    if (entry !== undefined) entry.optional = true
+  }
+
+  return { version, packages: [...packages.values()] }
 }
 
 /**
- * @param {{ lockfile: Record<string, any>, policy?: typeof POLICY }} options
- * @returns {{ ok: boolean, violations: Array<object>, counts: Record<string, number> }}
+ * Flattens `pnpm licenses list --json` — which is keyed by licence expression,
+ * with one entry per package and an array of versions — into one record per
+ * name@version.
+ *
+ * @param {Record<string, Array<{ name: string, versions?: string[], license?: string }>>} report
+ * @returns {Array<{ name: string, version: string, key: string, licence: string }>}
  */
-export function checkLicences({ lockfile, policy = POLICY }) {
+export function flattenLicenceReport(report) {
+  const flattened = []
+  for (const [expression, entries] of Object.entries(report ?? {})) {
+    for (const entry of entries ?? []) {
+      for (const version of entry.versions ?? []) {
+        flattened.push({
+          name: entry.name,
+          version,
+          key: `${entry.name}@${version}`,
+          licence: entry.license ?? expression,
+        })
+      }
+    }
+  }
+  return flattened
+}
+
+/**
+ * Which allowlist applies to an installed package.
+ *
+ * `pnpm licenses list --prod` reports the production graph — `dependencies`
+ * plus `optionalDependencies` — computed from the lockfile importers. Anything
+ * in it is production, including a plain optional production dep, which a
+ * bundler can still reach. Everything else is reachable only as build tooling.
+ *
+ * @param {string} key `name@version`
+ * @param {Set<string>} prodKeys
+ * @returns {'dev' | 'prod'}
+ */
+export function tierOf(key, prodKeys) {
+  return prodKeys.has(key) ? 'prod' : 'dev'
+}
+
+/**
+ * Both inputs are validated rather than trusted, so they are typed as the loose
+ * shapes a caller might actually hand over: an unreadable lockfile and an empty
+ * report are results this function reports, not preconditions it may assume
+ * away.
+ *
+ * @param {{
+ *   installed: unknown,
+ *   prodKeys?: Set<string>,
+ *   lockfile: { version?: unknown, packages?: unknown } | null | undefined,
+ *   policy?: typeof POLICY,
+ * }} options
+ * @returns {{ ok: boolean, violations: Array<any>, counts: Record<string, number>, coverage: { inspected: number, locked: number, skipped: number } }}
+ */
+export function checkLicences({ installed, prodKeys = new Set(), lockfile, policy = POLICY }) {
   const violations = []
   const counts = { prod: 0, dev: 0 }
+  const locked = lockfile?.packages
+  const coverage = { inspected: 0, locked: Array.isArray(locked) ? locked.length : 0, skipped: 0 }
 
-  const packages = lockfile?.packages
+  const fail = (status, message) => ({
+    ok: false,
+    counts,
+    coverage,
+    violations: [
+      { name: '(lockfile)', version: null, tier: 'prod', licence: null, status, message },
+    ],
+  })
 
-  // A lockfile this script cannot read is not a pass. `packages` is absent in
-  // lockfileVersion 1, and an empty map means the checker is inspecting nothing
-  // while reporting success — the failure mode this gate exists to avoid.
-  if (packages === undefined || packages === null || typeof packages !== 'object') {
-    return {
-      ok: false,
-      counts,
-      violations: [
-        {
-          name: '(lockfile)',
-          version: null,
-          tier: 'prod',
-          licence: null,
-          status: 'unreadable-lockfile',
-          message:
-            'package-lock.json has no `packages` map — lockfileVersion 2 or 3 is required for licence data',
-        },
-      ],
-    }
+  // A lockfile this script cannot read is not a pass. Neither is one written in
+  // a shape the scanner above was not built for: it would return fewer
+  // packages, and fewer packages is indistinguishable from a clean tree.
+  if (!Array.isArray(locked)) {
+    return fail('unreadable-lockfile', 'pnpm-lock.yaml could not be parsed — nothing was checked')
   }
 
-  const entries = Object.entries(packages).filter(([path]) => path !== '')
-
-  if (entries.length === 0) {
-    return {
-      ok: false,
-      counts,
-      violations: [
-        {
-          name: '(lockfile)',
-          version: null,
-          tier: 'prod',
-          licence: null,
-          status: 'empty-lockfile',
-          message: 'no packages found in the lockfile — nothing was checked',
-        },
-      ],
-    }
+  if (typeof lockfile?.version !== 'string' || !/^9\./.test(lockfile.version)) {
+    return fail(
+      'unsupported-lockfile',
+      `pnpm-lock.yaml is lockfileVersion '${lockfile?.version}', and this checker only reads 9.x — ` +
+        'update scripts/licence-policy.mjs for the new shape rather than trusting a partial read',
+    )
   }
 
-  for (const [path, entry] of entries) {
-    // A workspace link is a pointer; the linked package is checked at its own
-    // path and would otherwise be counted, and reported, twice.
-    if (entry.link === true) continue
+  if (locked.length === 0) {
+    return fail('empty-lockfile', 'no packages found in pnpm-lock.yaml — nothing was checked')
+  }
 
-    const tier = tierOf(entry)
+  if (!Array.isArray(installed) || installed.length === 0) {
+    return fail(
+      'nothing-installed',
+      'pnpm licenses list reported no packages — run `pnpm install` before the licence gate',
+    )
+  }
+
+  for (const entry of installed) {
+    const { name, version, key, licence } = entry
+    const tier = tierOf(key, prodKeys)
     const allowedList = policy[tier]
-    const name = entry.name ?? path.replace(/^.*node_modules\//, '')
-    const version = entry.version ?? null
     counts[tier] += 1
+    coverage.inspected += 1
 
-    const licence = entry.license
-
-    if (typeof licence !== 'string' || licence.trim() === '') {
+    // pnpm reports a package with no `license` field as the string 'Unknown'.
+    if (typeof licence !== 'string' || licence.trim() === '' || licence === 'Unknown') {
       violations.push({
         name,
         version,
         tier,
-        licence: licence === undefined ? null : licence,
+        licence: typeof licence === 'string' ? licence : null,
         status: 'no-licence',
         message: `${name}@${version} (${tier}) declares no licence — it cannot be redistributed on trust`,
       })
@@ -283,36 +423,70 @@ export function checkLicences({ lockfile, policy = POLICY }) {
     }
   }
 
-  return { ok: violations.length === 0, violations, counts }
+  // Coverage. A licence report is only as good as the install it was taken
+  // from, and a partial install would otherwise read as a small clean tree.
+  const inspectedKeys = new Set(installed.map((entry) => entry.key))
+  for (const entry of locked) {
+    if (inspectedKeys.has(entry.key)) continue
+    if (entry.optional) {
+      coverage.skipped += 1
+      continue
+    }
+    violations.push({
+      name: entry.name,
+      version: entry.version,
+      tier: 'prod',
+      licence: null,
+      status: 'uncovered',
+      message: `${entry.key} is a non-optional entry in pnpm-lock.yaml but was not installed — the licence report is incomplete, so nothing can be concluded from it`,
+    })
+  }
+
+  return { ok: violations.length === 0, violations, counts, coverage }
 }
 
 /**
  * @param {{ cwd?: string }} options
  */
 export async function readLockfile({ cwd = process.cwd() } = {}) {
-  const raw = await readFile(join(cwd, 'package-lock.json'), 'utf8')
-  return JSON.parse(raw)
+  return parseLockfilePackages(await readFile(join(cwd, 'pnpm-lock.yaml'), 'utf8'))
+}
+
+/**
+ * @param {{ cwd?: string, prod?: boolean }} options
+ */
+export async function readInstalledLicences({ cwd = process.cwd(), prod = false } = {}) {
+  const args = ['licenses', 'list', '--json']
+  if (prod) args.push('--prod')
+  const { stdout } = await run('pnpm', args, { cwd, maxBuffer: 64 * 1024 * 1024 })
+  return flattenLicenceReport(JSON.parse(stdout))
 }
 
 const isCli = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 
 if (isCli) {
   let lockfile
+  let installed
+  let prodKeys
   try {
     lockfile = await readLockfile()
+    installed = await readInstalledLicences()
+    prodKeys = new Set((await readInstalledLicences({ prod: true })).map((entry) => entry.key))
   } catch (error) {
     console.error(
-      `licence-policy: could not read package-lock.json: ${
+      `licence-policy: could not read the dependency tree: ${
         error instanceof Error ? error.message : String(error)
       }`,
     )
     process.exit(1)
   }
 
-  const { ok, violations, counts } = checkLicences({ lockfile })
+  const { ok, violations, counts, coverage } = checkLicences({ installed, prodKeys, lockfile })
 
   console.log(
-    `[licences] checked ${counts.prod} production and ${counts.dev} development packages from package-lock.json`,
+    `[licences] checked ${counts.prod} production and ${counts.dev} development packages ` +
+      `(${coverage.inspected} of ${coverage.locked} in pnpm-lock.yaml; ` +
+      `${coverage.skipped} not installable on this platform)`,
   )
 
   for (const violation of violations) {

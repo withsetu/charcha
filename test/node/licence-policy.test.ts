@@ -3,22 +3,26 @@ import {
   DEV_ALLOWED,
   PROD_ALLOWED,
   checkLicences,
+  flattenLicenceReport,
   isAllowed,
+  parseLockfilePackages,
   tierOf,
 } from '../../scripts/licence-policy.mjs'
 
-/** A lockfileVersion 3 shaped fixture. */
-const lockfile = (packages: Record<string, unknown>) => ({
-  name: 'charcha',
-  lockfileVersion: 3,
-  packages: { '': { name: 'charcha', license: 'MIT' }, ...packages },
+const split = (key: string) => {
+  const at = key.lastIndexOf('@')
+  return { name: key.slice(0, at), version: key.slice(at + 1), key }
+}
+
+/** A parsed pnpm-lock.yaml, as `parseLockfilePackages` returns one. */
+const lockfile = (entries: Array<[string, boolean?]>) => ({
+  version: '9.0',
+  packages: entries.map(([key, optional = false]) => ({ ...split(key), optional })),
 })
 
-const pkg = (license: unknown, extra: Record<string, unknown> = {}) => ({
-  version: '1.0.0',
-  license,
-  ...extra,
-})
+/** A flattened `pnpm licenses list --json` report. */
+const installed = (entries: Array<[string, unknown]>) =>
+  entries.map(([key, licence]) => ({ ...split(key), licence }))
 
 describe('SPDX expression evaluation', () => {
   it('allows a bare identifier on the allowlist', () => {
@@ -86,36 +90,177 @@ describe('SPDX expression evaluation', () => {
   })
 })
 
-describe('tierOf', () => {
-  it('treats dev and devOptional packages as development', () => {
-    expect(tierOf({ dev: true })).toBe('dev')
-    expect(tierOf({ devOptional: true })).toBe('dev')
+describe('parseLockfilePackages', () => {
+  // Trimmed from the real pnpm-lock.yaml: one plain package, one platform
+  // binary, one wasm-fallback package that carries no platform fields of its
+  // own, and the `snapshots:` block that marks the latter two optional.
+  const source = [
+    "lockfileVersion: '9.0'",
+    '',
+    'settings:',
+    '  autoInstallPeers: true',
+    '',
+    'importers:',
+    '',
+    '  .:',
+    '    dependencies:',
+    '      hono:',
+    '        specifier: ^4.12.31',
+    '        version: 4.12.31',
+    '',
+    'packages:',
+    '',
+    "  '@emnapi/core@1.11.1':",
+    '    resolution: {integrity: sha512-aaa==}',
+    '',
+    "  '@img/sharp-libvips-linux-x64@1.3.1':",
+    '    resolution: {integrity: sha512-bbb==}',
+    '    cpu: [x64]',
+    '    os: [linux]',
+    '',
+    '  hono@4.12.31:',
+    '    resolution: {integrity: sha512-ccc==}',
+    "    engines: {node: '>=16.9.0'}",
+    '',
+    'snapshots:',
+    '',
+    "  '@emnapi/core@1.11.1':",
+    '    dependencies:',
+    "      '@emnapi/wasi-threads': 1.2.2",
+    '    optional: true',
+    '',
+    "  '@img/sharp-libvips-linux-x64@1.3.1':",
+    '    optional: true',
+    '',
+    '  hono@4.12.31: {}',
+    '',
+  ].join('\n')
+
+  it('reads the whole packages block, scoped and unscoped alike', () => {
+    const { version, packages } = parseLockfilePackages(source)
+
+    expect(version).toBe('9.0')
+    expect(packages.map((entry: { key: string }) => entry.key)).toEqual([
+      '@emnapi/core@1.11.1',
+      '@img/sharp-libvips-linux-x64@1.3.1',
+      'hono@4.12.31',
+    ])
   })
 
-  it('treats everything else as production, including optional production deps', () => {
-    expect(tierOf({})).toBe('prod')
-    expect(tierOf({ optional: true })).toBe('prod')
-    expect(tierOf({ dev: false })).toBe('prod')
+  it('splits a scoped identifier at the last @, not the first', () => {
+    const { packages } = parseLockfilePackages(source)
+
+    expect(packages[0]).toMatchObject({ name: '@emnapi/core', version: '1.11.1' })
+    expect(packages[2]).toMatchObject({ name: 'hono', version: '4.12.31' })
+  })
+
+  it('takes optionality from snapshots, so it is transitive rather than per-platform', () => {
+    // @emnapi/core has no cpu/os of its own — it is optional only because
+    // everything that reaches it is. Reading cpu/os alone would miss it, which
+    // is exactly what a licence gate must not do quietly.
+    const { packages } = parseLockfilePackages(source)
+
+    expect(packages.map((entry: { optional: boolean }) => entry.optional)).toEqual([
+      true,
+      true,
+      false,
+    ])
+  })
+
+  it('ignores blocks other than packages and snapshots', () => {
+    // `importers:` holds the specifier `^4.12.31` at the same indent shape as a
+    // package key; counting it would inflate the total the coverage check uses.
+    const { packages } = parseLockfilePackages(source)
+
+    expect(packages).toHaveLength(3)
+  })
+
+  it('strips the peer suffix from a snapshot key so it matches its package entry', () => {
+    const withPeers = [
+      "lockfileVersion: '9.0'",
+      'packages:',
+      '  vite@8.1.5:',
+      '    resolution: {integrity: sha512-ddd==}',
+      'snapshots:',
+      '  vite@8.1.5(@types/node@22.20.1)(esbuild@0.28.1):',
+      '    optional: true',
+    ].join('\n')
+
+    expect(parseLockfilePackages(withPeers).packages[0]).toMatchObject({
+      key: 'vite@8.1.5',
+      optional: true,
+    })
+  })
+})
+
+describe('flattenLicenceReport', () => {
+  it('turns the licence-keyed report into one record per name@version', () => {
+    const flattened = flattenLicenceReport({
+      'MIT OR Apache-2.0': [
+        { name: 'wrangler', versions: ['4.114.0'], license: 'MIT OR Apache-2.0' },
+      ],
+      MIT: [{ name: 'hono', versions: ['4.12.31', '4.12.30'], license: 'MIT' }],
+    })
+
+    expect(flattened).toEqual([
+      {
+        name: 'wrangler',
+        version: '4.114.0',
+        key: 'wrangler@4.114.0',
+        licence: 'MIT OR Apache-2.0',
+      },
+      { name: 'hono', version: '4.12.31', key: 'hono@4.12.31', licence: 'MIT' },
+      { name: 'hono', version: '4.12.30', key: 'hono@4.12.30', licence: 'MIT' },
+    ])
+  })
+
+  it('falls back to the grouping key when an entry carries no licence of its own', () => {
+    expect(flattenLicenceReport({ ISC: [{ name: 'x', versions: ['1.0.0'] }] })).toEqual([
+      { name: 'x', version: '1.0.0', key: 'x@1.0.0', licence: 'ISC' },
+    ])
+  })
+})
+
+describe('tierOf', () => {
+  it('treats a package in the production graph as production', () => {
+    expect(tierOf('hono@4.12.31', new Set(['hono@4.12.31']))).toBe('prod')
+  })
+
+  it('treats everything else as development, because only build tooling is left', () => {
+    expect(tierOf('eslint@10.7.0', new Set(['hono@4.12.31']))).toBe('dev')
+  })
+
+  it('keeps an optional production dependency in the production tier', () => {
+    // `pnpm licenses list --prod` covers dependencies *and*
+    // optionalDependencies, and a bundler can still reach an optional one.
+    expect(tierOf('fsevents@2.3.3', new Set(['fsevents@2.3.3']))).toBe('prod')
   })
 })
 
 describe('checkLicences', () => {
+  const prodKeys = new Set(['hono@1.0.0'])
+
   it('passes a tree whose licences are all within policy', () => {
     const result = checkLicences({
-      lockfile: lockfile({
-        'node_modules/hono': pkg('MIT'),
-        'node_modules/eslint': pkg('MIT', { dev: true }),
-      }),
+      installed: installed([
+        ['hono@1.0.0', 'MIT'],
+        ['eslint@1.0.0', 'MIT'],
+      ]),
+      prodKeys,
+      lockfile: lockfile([['hono@1.0.0'], ['eslint@1.0.0']]),
     })
 
     expect(result.ok).toBe(true)
     expect(result.violations).toEqual([])
     expect(result.counts).toEqual({ prod: 1, dev: 1 })
+    expect(result.coverage).toEqual({ inspected: 2, locked: 2, skipped: 0 })
   })
 
   it('fails a copyleft package in the production tree', () => {
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/lightningcss': pkg('MPL-2.0') }),
+      installed: installed([['lightningcss@1.0.0', 'MPL-2.0']]),
+      prodKeys: new Set(['lightningcss@1.0.0']),
+      lockfile: lockfile([['lightningcss@1.0.0']]),
     })
 
     expect(result.ok).toBe(false)
@@ -130,7 +275,8 @@ describe('checkLicences', () => {
 
   it('allows that same package when it is only build tooling', () => {
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/lightningcss': pkg('MPL-2.0', { dev: true }) }),
+      installed: installed([['lightningcss@1.0.0', 'MPL-2.0']]),
+      lockfile: lockfile([['lightningcss@1.0.0']]),
     })
 
     expect(result.ok).toBe(true)
@@ -138,7 +284,8 @@ describe('checkLicences', () => {
 
   it('fails strong copyleft even in the development tree', () => {
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/readability-cli': pkg('GPL-3.0-only', { dev: true }) }),
+      installed: installed([['readability-cli@1.0.0', 'GPL-3.0-only']]),
+      lockfile: lockfile([['readability-cli@1.0.0']]),
     })
 
     expect(result.ok).toBe(false)
@@ -147,17 +294,29 @@ describe('checkLicences', () => {
 
   it('fails a package that declares no licence at all', () => {
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/mystery': { version: '1.0.0' } }),
+      installed: installed([['mystery@1.0.0', undefined]]),
+      lockfile: lockfile([['mystery@1.0.0']]),
     })
 
     expect(result.ok).toBe(false)
     expect(result.violations[0]).toMatchObject({ status: 'no-licence', name: 'mystery' })
   })
 
+  it("fails pnpm's 'Unknown' placeholder rather than evaluating it as an identifier", () => {
+    const result = checkLicences({
+      installed: installed([['mystery@1.0.0', 'Unknown']]),
+      lockfile: lockfile([['mystery@1.0.0']]),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.violations[0]).toMatchObject({ status: 'no-licence' })
+  })
+
   it('fails a licence field that is not a string, rather than coercing it', () => {
     // The deprecated `{ type, url }` form. Reading `.type` would be a guess.
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/old': pkg({ type: 'MIT' }) }),
+      installed: installed([['old@1.0.0', { type: 'MIT' }]]),
+      lockfile: lockfile([['old@1.0.0']]),
     })
 
     expect(result.ok).toBe(false)
@@ -166,42 +325,81 @@ describe('checkLicences', () => {
 
   it('fails an unparseable licence expression rather than skipping it', () => {
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/weird': pkg('MIT AND') }),
+      installed: installed([['weird@1.0.0', 'MIT AND']]),
+      lockfile: lockfile([['weird@1.0.0']]),
     })
 
     expect(result.ok).toBe(false)
     expect(result.violations[0]).toMatchObject({ status: 'unparseable', name: 'weird' })
   })
 
-  it('fails a lockfile with no packages map instead of reporting a clean tree', () => {
-    const result = checkLicences({ lockfile: { name: 'charcha', lockfileVersion: 1 } })
+  it('fails a lockfile it could not parse instead of reporting a clean tree', () => {
+    const result = checkLicences({
+      installed: installed([['hono@1.0.0', 'MIT']]),
+      lockfile: { version: '9.0', packages: null },
+    })
 
     expect(result.ok).toBe(false)
     expect(result.violations[0]).toMatchObject({ status: 'unreadable-lockfile' })
   })
 
-  it('fails an empty tree instead of passing having checked nothing', () => {
-    const result = checkLicences({ lockfile: { lockfileVersion: 3, packages: {} } })
+  it('fails a lockfile version the scanner was not written for', () => {
+    // A newer pnpm could reshape the file, and a scanner that quietly matched
+    // fewer lines would report a smaller tree as a clean one.
+    const result = checkLicences({
+      installed: installed([['hono@1.0.0', 'MIT']]),
+      lockfile: { version: '10.0', packages: [{ ...split('hono@1.0.0'), optional: false }] },
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.violations[0]).toMatchObject({ status: 'unsupported-lockfile' })
+  })
+
+  it('fails an empty lockfile instead of passing having checked nothing', () => {
+    const result = checkLicences({
+      installed: installed([['hono@1.0.0', 'MIT']]),
+      lockfile: lockfile([]),
+    })
 
     expect(result.ok).toBe(false)
     expect(result.violations[0]).toMatchObject({ status: 'empty-lockfile' })
   })
 
-  it('skips workspace links so the linked package is not judged twice', () => {
+  it('fails when nothing is installed, rather than passing on an empty report', () => {
+    const result = checkLicences({ installed: [], lockfile: lockfile([['hono@1.0.0']]) })
+
+    expect(result.ok).toBe(false)
+    expect(result.violations[0]).toMatchObject({ status: 'nothing-installed' })
+  })
+
+  it('fails a lockfile entry that is missing from the report and is not optional', () => {
+    // The gate reads what is installed, so a partial install — `--prod`,
+    // `--no-optional`, an interrupted one — would otherwise look like a small
+    // clean tree. This is what keeps the narrowed data source honest.
     const result = checkLicences({
-      lockfile: lockfile({
-        'node_modules/pkg': { link: true, resolved: 'packages/pkg' },
-        'packages/pkg': pkg('MIT'),
-      }),
+      installed: installed([['hono@1.0.0', 'MIT']]),
+      lockfile: lockfile([['hono@1.0.0'], ['eslint@1.0.0']]),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.violations[0]).toMatchObject({ status: 'uncovered', name: 'eslint' })
+  })
+
+  it('accepts an optional lockfile entry that this platform cannot install', () => {
+    const result = checkLicences({
+      installed: installed([['hono@1.0.0', 'MIT']]),
+      lockfile: lockfile([['hono@1.0.0'], ['@img/sharp-linux-x64@1.0.0', true]]),
     })
 
     expect(result.ok).toBe(true)
-    expect(result.counts.prod).toBe(1)
+    expect(result.coverage).toEqual({ inspected: 1, locked: 2, skipped: 1 })
   })
 
   it('applies a caller-supplied policy, so the tiers are not hard-coded into the walk', () => {
     const result = checkLicences({
-      lockfile: lockfile({ 'node_modules/hono': pkg('MIT') }),
+      installed: installed([['hono@1.0.0', 'MIT']]),
+      prodKeys,
+      lockfile: lockfile([['hono@1.0.0']]),
       policy: { prod: ['ISC'], dev: ['ISC'] },
     })
 
