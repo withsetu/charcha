@@ -13,6 +13,8 @@ coverage/
 # Local machine config: hooks and permissions belong to a developer, not to a repo
 # whose root Cloudflare treats as a deploy root.
 .claude/settings.local.json
+# Agent worktrees are whole nested checkouts of this repo (#54).
+.claude/worktrees/
 
 # Scratch written by the superpowers skills. Design lives in the GitHub issue, so
 # plan files must never be committed here.

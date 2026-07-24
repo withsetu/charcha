@@ -2,6 +2,7 @@ dist/
 coverage/
 .wrangler/
 node_modules/
+.claude/
 pnpm-lock.yaml
 src/worker-configuration.d.ts
 

@@ -9,6 +9,7 @@ export default tseslint.config(
       'coverage/**',
       '.wrangler/**',
       'node_modules/**',
+      '.claude/**',
       'src/worker-configuration.d.ts',
     ],
   },
