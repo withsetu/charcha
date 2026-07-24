@@ -58,8 +58,13 @@ const FENCE = '```'
  */
 const QUOTE_MARKER = '&gt;'
 
+/**
+ * Whether a URL may be emitted into an href. The length cap lives in readLink,
+ * where it is applied before the URL is sliced out — in one place only, because
+ * a guard enforced twice is a guard neither of whose copies can be shown to
+ * fire, and a security test that cannot fail reads exactly like one that passes.
+ */
 function isSafeUrl(url: string): boolean {
-  if (url.length === 0 || url.length > MAX_URL_LENGTH) return false
   if (UNSAFE_URL_CHARACTER.test(url)) return false
   return HTTP_URL.test(url)
 }
@@ -96,8 +101,9 @@ function readLink(
 
   const urlEnd = nextParen(textEnd + 2)
   if (urlEnd === -1) return null
-  // Measured before slicing: the point of the cap is that an absurd URL costs
-  // nothing to refuse.
+  // Measured before slicing, so that refusing an absurd URL costs nothing —
+  // and it is the only place the cap is applied.
+  // Enforced by test/worker/render/markdown.test.ts.
   if (urlEnd - textEnd - 2 > MAX_URL_LENGTH) return null
 
   const url = escaped.slice(textEnd + 2, urlEnd)

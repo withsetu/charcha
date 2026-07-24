@@ -268,6 +268,12 @@ describe('link URLs', () => {
     expect(await eventHandlerAttributes(html)).toEqual([])
   })
 
+  it('refuses a link label longer than a label has any reason to be', async () => {
+    const html = renderMarkdown(`[${'a'.repeat(600)}](https://ok.example/)`)
+
+    expect(await hrefs(html)).toEqual([])
+  })
+
   it('refuses a URL longer than any real one, rather than emitting it', async () => {
     const html = renderMarkdown(`[x](https://ok.example/${'a'.repeat(4000)})`)
 
