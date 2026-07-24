@@ -10,7 +10,7 @@ importers:
     dependencies:
       hono:
         specifier: ^4.12.31
-        version: 4.12.31
+        version: 4.12.32
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -911,8 +911,8 @@ packages:
     resolution: {integrity: sha512-Czmyns5dUsq4seFBR/Kdydhmo8y9kC79hiSkPn0YcGtNnYWnrgt0vjrSjx9tspoDGWm2CMarffRuLjM4xUz8xg==}
     engines: {node: '>=18'}
 
-  hono@4.12.31:
-    resolution: {integrity: sha512-zJIHFrl6bq3RDd2YusFNCDlM8qUprxKswyi/OPzPyzKDdyBXDqWx8bZlZ7R+saTdSTatUmb3O7K4SspGPaEOQg==}
+  hono@4.12.32:
+    resolution: {integrity: sha512-XcuyW9qE2kJn07PkecMOBd5Vq/hMy7mmGw+idz1yblbg9N17ijJODrvPkn7/dwL3Kulj8LcRJ69DLOWf91dRUg==}
     engines: {node: '>=16.9.0'}
 
   ignore@5.3.2:
@@ -2071,7 +2071,7 @@ snapshots:
 
   globals@17.7.0: {}
 
-  hono@4.12.31: {}
+  hono@4.12.32: {}
 
   ignore@5.3.2: {}
 
