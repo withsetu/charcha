@@ -275,9 +275,19 @@ from the build image or a `PNPM_VERSION` dashboard variable, and a site owner
 clicking Deploy can set neither. So charcha must stay *compatible with* the image
 rather than dictate to it — **keep the pin on pnpm 10.x**, which is what the
 image ships (10.11.1), and keep the lockfile at `lockfileVersion: '9.0'`, which
-that version reads. Moving to a newer pnpm major would break the one-click
-deploy, silently, for everyone but us. `.nvmrc` is the exception: Workers Builds
-does read it, so Node is genuinely pinned everywhere.
+that version reads.
+
+The reason that is a rule and not a preference: on an incompatible lockfile pnpm
+emits `WARN Ignoring not compatible lockfile` and **resolves fresh** rather than
+failing. A deploy would go green having installed a tree nobody locked or
+tested, which is precisely what the gates on
+[#23](https://github.com/withsetu/charcha/issues/23) assume cannot happen. A
+newer pnpm major would therefore break one-click deploy silently, for everyone
+but us. README has the troubleshooting entry, including the `PNPM_VERSION`
+dashboard variable that is the only lever a deployer has.
+
+`.nvmrc` is the exception: Workers Builds does read it, so Node is genuinely
+pinned everywhere.
 
 | Thing | Where |
 |---|---|

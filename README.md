@@ -51,6 +51,38 @@ appears. Background on
 Tests run inside the Workers runtime via `@cloudflare/vitest-pool-workers`, against
 the same bindings the deployed Worker gets.
 
+## Troubleshooting a deploy
+
+**pnpm version mismatch.** `pnpm-lock.yaml` is written by the pnpm that
+`package.json` pins with `packageManager`, but a Cloudflare deploy does not use
+that pin — Workers Builds installs the pnpm its build image ships, and there is
+no repo-side way to change it. Both are on pnpm 10.x writing
+`lockfileVersion: '9.0'`, so this is expected to be fine. It is written down
+because if it ever is not, the build does not go red. pnpm **ignores** a
+lockfile it considers incompatible and resolves dependencies fresh, so a green
+build can have installed a tree nobody locked or tested. Read the build log for:
+
+```
+ WARN  Ignoring not compatible lockfile at /path/to/pnpm-lock.yaml
+```
+
+The variants that do fail the build, listed so they are greppable:
+
+```
+ERR_PNPM_OUTDATED_LOCKFILE
+ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE
+  Cannot perform a frozen installation because the lockfile needs updates
+Cannot install with "frozen-lockfile" because pnpm-lock.yaml is absent
+```
+
+The fix for any of them is to set the build's pnpm version explicitly: in the
+Cloudflare dashboard, **Settings → Build → Build Variables and Secrets**, add
+`PNPM_VERSION` with the version from `packageManager`. That variable is the only
+lever pnpm has there — there is no `.nvmrc` equivalent for it, and build
+configuration in `wrangler.jsonc` is not read. Nobody has deployed Charcha yet
+([#16](https://github.com/withsetu/charcha/issues/16)), so none of this has been
+exercised; it is a contingency written before it is needed rather than after.
+
 ## License
 
 MIT
