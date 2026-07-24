@@ -293,7 +293,7 @@ describe('CORS — the origin allowlist over HTTP', () => {
     expect(response.headers.get('access-control-allow-origin')).toBe(site)
   })
 
-  it('sends no allow-origin header on a write from an unlisted origin', async () => {
+  it('refuses a write from an unlisted origin outright, and stores nothing', async () => {
     await allowOrigin(site)
 
     const response = await exports.default.fetch(`${worker}/comments`, {
@@ -302,6 +302,66 @@ describe('CORS — the origin allowlist over HTTP', () => {
       body: JSON.stringify({ authorName: 'Evil', body: 'hello', url: `${site}/notes/leaving` }),
     })
 
+    expect(response.status).toBe(403)
+    expect(response.headers.get('access-control-allow-origin')).toBeNull()
+    const count = await db.prepare('select count(*) as n from comments').first<{ n: number }>()
+    expect(count?.n).toBe(0)
+  })
+
+  // The regression this whole check exists for. `text/plain` is a CORS-safelisted
+  // content type, so this POST is a *simple request* and no browser preflights it —
+  // an origin policy enforced only at OPTIONS is one an attacker opts out of by
+  // changing a single header. Before the real-request check, this stored a comment
+  // and answered 202.
+  // https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
+  it('refuses a simple-request write that skipped the preflight entirely', async () => {
+    await allowOrigin(site)
+
+    const response = await exports.default.fetch(`${worker}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', origin: 'https://evil.example' },
+      body: JSON.stringify({ authorName: 'Evil', body: 'hello', url: `${site}/notes/leaving` }),
+    })
+
+    expect(response.status).toBe(403)
+    const count = await db.prepare('select count(*) as n from comments').first<{ n: number }>()
+    expect(count?.n).toBe(0)
+  })
+
+  it('refuses every write when the owner has configured nothing at all', async () => {
+    const response = await exports.default.fetch(`${worker}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: site },
+      body: JSON.stringify({ authorName: 'Maya', body: 'hello', url: `${site}/notes/leaving` }),
+    })
+
+    expect(response.status).toBe(403)
+  })
+
+  it('still accepts a write that carries no Origin, so curl and the importer work', async () => {
+    // Refusing here would stop no attack — anything that can omit the header was
+    // never subject to CORS — and would break every non-browser caller.
+    const response = await exports.default.fetch(`${worker}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ authorName: 'Maya', body: 'hello', url: `${site}/notes/leaving` }),
+    })
+
+    expect(response.status).toBe(202)
+  })
+
+  it('still answers a read from an unlisted origin, withholding only the header', async () => {
+    // The read is deliberately not symmetric with the write: no side effect, public
+    // HTML, and refusing would break the v1.1 server-rendering paths.
+    await allowOrigin(site)
+    await seedConversation()
+
+    const response = await read(
+      { url: `${site}/notes/leaving` },
+      { origin: 'https://evil.example' },
+    )
+
+    expect(response.status).toBe(200)
     expect(response.headers.get('access-control-allow-origin')).toBeNull()
   })
 })
@@ -352,10 +412,10 @@ describe('OPTIONS /comments — the preflight', () => {
     expect(response.headers.get('access-control-allow-origin')).toBeNull()
   })
 
-  // The submit endpoint takes application/json, which is not a CORS-safelisted
-  // content type, so every cross-origin POST from the embed is preflighted. The
-  // preflight is therefore the gate that actually stops another site's page from
-  // posting into this deployment's queue from a reader's browser.
+  // The embed sends application/json, which is not a CORS-safelisted content type,
+  // so the embed's own submissions are preflighted and this is what lets them
+  // through. It is not the gate — see 'refuses a simple-request write that skipped
+  // the preflight entirely' above, which is what is.
   // https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
   it('never approves credentials on the preflight either', async () => {
     await allowOrigin(site)

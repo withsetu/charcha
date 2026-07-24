@@ -7,14 +7,28 @@
 //
 // **What this is, and what it is not.** CORS is a browser rule, not a server-side
 // authorisation check: anything that is not a browser — curl, a script, the v1.1
-// build-time renderer — ignores every header in this file. So the allowlist is a
-// misuse guard, not a security boundary. What it genuinely stops is another site's
-// page posting into this deployment's moderation queue from a reader's browser:
-// POST /comments takes application/json, which is not a CORS-safelisted content
-// type, so every cross-origin submission is preflighted and a refused preflight
-// means the request is never sent. The defence against a script is #8's spam
-// layers and the moderation queue, and it always was.
+// build-time renderer — sends no `Origin` and ignores every header in this file. So
+// the allowlist is a misuse guard, not a security boundary; the defence against a
+// script is #8's spam layers and the moderation queue, and it always was. What this
+// does stop is another site's *page* posting into this deployment's queue from a
+// reader's browser, which is the case a reader cannot see and did not consent to.
+//
+// **The preflight is not that gate, and assuming it was is the bug this file was
+// written with.** The embed sends `application/json`, which is not CORS-safelisted,
+// so the embed's own submissions are preflighted — but an attacker chooses their own
+// content type, and `text/plain` makes the very same POST a *simple request* that no
+// browser preflights at all. A policy enforced only at `OPTIONS` is therefore a
+// policy an attacker opts out of by changing one header. So the write refuses a
+// present-but-unlisted `Origin` on the real request too, which is the check that
+// holds whatever the content type is, and which also makes de-listing an origin take
+// effect immediately rather than after a cached preflight expires.
 // https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
+//
+// The read does not refuse, deliberately: it has no side effect, its HTML is public
+// to anything that can make a request at all, and refusing would break the v1.1
+// server-rendering paths for nothing. Withholding the header is the whole of the
+// read's policy; the write needs more because a write happens whether or not the
+// caller can read the answer.
 //
 // Fail closed: an unconfigured deployment allows no origin. Card rule 5.
 // Enforced by test/worker/cors.test.ts and test/worker/read/route.test.ts.
@@ -175,6 +189,21 @@ export function withCors(response: Response, allowedOrigin: string | null): Resp
 }
 
 /**
+ * What the request's `Origin` was, and what may be echoed back for it.
+ *
+ * Both, because "no Origin at all" and "an Origin that is not listed" are different
+ * situations that need different answers, and a single nullable string cannot tell
+ * them apart. The first is a script or a build; the second is a browser on a page
+ * the owner never authorised.
+ */
+export interface OriginDecision {
+  /** The `Origin` header, or null when the request carried none — not a browser. */
+  requestOrigin: string | null
+  /** The origin to echo back, or null when there is nothing to echo. */
+  allowedOrigin: string | null
+}
+
+/**
  * Resolves the inbound request's origin against the owner's allowlist.
  *
  * A request with no `Origin` header skips the settings read entirely: it is not a
@@ -182,10 +211,46 @@ export function withCors(response: Response, allowedOrigin: string | null): Resp
  * sees, and the v1.1 build-time renderer should not pay a D1 read for a policy that
  * cannot apply to it.
  */
-export async function resolveOrigin(db: D1Database, request: Request): Promise<string | null> {
+export async function resolveOrigin(db: D1Database, request: Request): Promise<OriginDecision> {
   const requestOrigin = request.headers.get('origin')
-  if (requestOrigin === null) return null
-  return matchOrigin(requestOrigin, await readAllowedOrigins(db))
+  if (requestOrigin === null) return { requestOrigin: null, allowedOrigin: null }
+  return {
+    requestOrigin,
+    allowedOrigin: matchOrigin(requestOrigin, await readAllowedOrigins(db)),
+  }
+}
+
+/**
+ * Whether this is a browser on a page the owner has not authorised.
+ *
+ * True only when an `Origin` arrived and did not match. A request with no `Origin`
+ * is not a browser page and is not this check's business — refusing it would block
+ * curl, the importer and the v1.1 build-time renderer while stopping no attack,
+ * since anything that can omit the header was never subject to CORS in the first
+ * place.
+ * Enforced by test/worker/read/route.test.ts.
+ */
+export function isUnlistedBrowserOrigin(decision: OriginDecision): boolean {
+  return decision.requestOrigin !== null && decision.allowedOrigin === null
+}
+
+/**
+ * The refusal for a write from an unlisted browser origin.
+ *
+ * Plain text and a 403, matching the preflight's refusal and the route house style.
+ * It carries no allow-origin header, so the page that sent it cannot read this
+ * message either — it is for the site owner reading logs or driving curl, which is
+ * the only audience that can act on it.
+ */
+export function unlistedOriginResponse(): Response {
+  return new Response('That origin is not allowed to comment on this site.', {
+    status: 403,
+    headers: {
+      ...corsHeaders(null),
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  })
 }
 
 /**

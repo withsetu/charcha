@@ -109,7 +109,11 @@ export async function handleRead(
   c: Context<{ Bindings: Env }>,
   config: ReadRouteConfig = {},
 ): Promise<Response> {
-  const allowedOrigin = await resolveOrigin(c.env.DB, c.req.raw)
+  // The read withholds the header from an unlisted origin but still answers, unlike
+  // the write, which refuses outright. The asymmetry is the point: this has no side
+  // effect and its HTML is public to anything that can make a request, so refusing
+  // would break the v1.1 server-rendering paths and stop no attack. See src/cors.ts.
+  const { allowedOrigin } = await resolveOrigin(c.env.DB, c.req.raw)
 
   // The size caps and the parsing both belong to derivePageKey, which the
   // submission path uses too — one implementation of the trust boundary, so the two
