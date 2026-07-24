@@ -55,14 +55,45 @@ describe('normalising an address to the unit that is one commenter', () => {
   })
 
   it('does not fold an IPv4-mapped address into a single bucket', () => {
-    // ::ffff:203.0.113.9 carries a whole IPv4 address in its last group. Truncating
-    // it to a /64 would put every IPv4 commenter behind one key and rate-limit the
-    // internet as one person.
+    // ::ffff:203.0.113.9 carries a whole IPv4 address in its low 32 bits. Folding
+    // it to a /64 would put every IPv4 commenter behind one key, so one flooder
+    // would rate-limit the entire IPv4 internet off the site.
     expect(normaliseIp('::ffff:203.0.113.9')).not.toBe(normaliseIp('::ffff:198.51.100.7'))
   })
 
+  it('does not fold the hex spelling of a mapped address either', () => {
+    // The dotted and hex forms are the same bits. A guard that reads the spelling
+    // catches only one of them, and the hex form is the one that reaches the /64.
+    expect(normaliseIp('::ffff:cb00:7109')).not.toBe(normaliseIp('::ffff:c633:6407'))
+  })
+
+  it('reads the dotted and hex spellings of one mapped address as one key', () => {
+    // 203.0.113.9 is 0xcb00 0x7109. If these disagreed, the per-IP counter would
+    // reset the moment the spelling changed.
+    expect(normaliseIp('::ffff:203.0.113.9')).toBe(normaliseIp('::ffff:cb00:7109'))
+  })
+
+  it('does not fold the NAT64 well-known prefix, which real mobile carriers use', () => {
+    // 64:ff9b::/96 embeds IPv4 exactly as ::ffff:0:0/96 does, and is live traffic
+    // rather than a curiosity.
+    expect(normaliseIp('64:ff9b::203.0.113.9')).not.toBe(normaliseIp('64:ff9b::198.51.100.7'))
+    expect(normaliseIp('64:ff9b::cb00:7109')).toBe(normaliseIp('64:ff9b::203.0.113.9'))
+  })
+
+  it('keeps loopback out of the folded namespace', () => {
+    expect(normaliseIp('::1')).not.toBe(normaliseIp('::2'))
+  })
+
+  it('cannot be made to collide with a folded prefix by spelling one out', () => {
+    // The folded form is namespaced, so a header whose literal value looks like a
+    // prefix key lands somewhere else entirely.
+    expect(normaliseIp('2001:db8:1:2:3:4:5:6')).not.toBe('2001:db8:1:2')
+    expect(normaliseIp('2001:db8:1:2:3:4:5:6')).not.toBe(normaliseIp('v6-64:2001:db8:1:2'))
+  })
+
   it('passes an unparseable address through rather than merging it with anything', () => {
-    expect(normaliseIp('not:an:address:at:all:!!')).toBe('not:an:address:at:all:!!')
+    expect(normaliseIp('not:an:address:at:all:!!')).not.toBe(normaliseIp('also:not:one:!!'))
+    expect(normaliseIp('not:an:address:at:all:!!')).toContain('not:an:address:at:all:!!')
   })
 })
 

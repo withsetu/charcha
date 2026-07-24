@@ -542,11 +542,20 @@ export async function purgeExpiredIpHashes(
  * src/spam/ for the reason the file header gives: every query lives in one place,
  * so the 50-per-invocation budget is countable without reading the whole Worker.
  *
- * All three are counts or an existence check against an index, never a scan, so
- * the submission path costs the same three reads on a page with three comments
- * and on a page with three thousand.
- * Enforced by test/worker/spam/rate-limit.test.ts, test/worker/spam/content.test.ts
- * and test/worker/db/query-plan.test.ts.
+ * All three are counts or an existence check, and none of them scans a table:
+ * the submission path issues the same three statements on a page with three
+ * comments and on a page with three thousand.
+ *
+ * **The statement count is constant; the row-read cost of the middle one is
+ * not.** `RECENT_ON_PAGE_SQL` has no `status` predicate, and the only index that
+ * starts at `thread_id` is `comments_by_thread (thread_id, status, created_at,
+ * id)` — so SQLite seeks the thread and then filters its entries on
+ * `created_at`, reading one index entry per comment on the page. That is bounded
+ * by the page rather than by the database, but it is not the seek the other two
+ * get. Closing it needs a `(thread_id, created_at)` index and therefore a
+ * migration, which is #67.
+ * Enforced by test/worker/spam/query-plan.test.ts, which asserts the constrained
+ * columns of each plan rather than only the absence of the word SCAN.
  */
 
 /**
@@ -590,24 +599,33 @@ export async function countRecentCommentsOnPage(
 }
 
 /**
- * Whether this exact body has already been posted to this page.
+ * Whether this exact body has been posted to this page since `since`.
  *
  * `limit 1` and no count: the question is existence, and a spam blast of the same
  * body should not cost one row read per copy already stored. Matches
  * `comments_by_body`, which is `(thread_id, body_hash)`.
+ *
+ * Status is deliberately not filtered — a body already marked spam is the one
+ * most worth refusing a second time. `since` is what keeps that from becoming a
+ * permanent, invisible ban on a piece of text: see DUPLICATE_WINDOW_SECONDS.
  */
 export const DUPLICATE_BODY_SQL = `select 1 as hit
      from comments c
      join threads t on t.id = c.thread_id
     where t.page_key = ?1
       and c.body_hash = ?2
+      and c.created_at >= ?3
     limit 1`
 
 export async function hasDuplicateBodyOnPage(
   db: D1Database,
   pageKey: string,
   bodyHash: string,
+  since: number,
 ): Promise<boolean> {
-  const row = await db.prepare(DUPLICATE_BODY_SQL).bind(pageKey, bodyHash).first<{ hit: number }>()
+  const row = await db
+    .prepare(DUPLICATE_BODY_SQL)
+    .bind(pageKey, bodyHash, since)
+    .first<{ hit: number }>()
   return row !== null
 }

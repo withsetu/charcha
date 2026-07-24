@@ -4,14 +4,20 @@
 // covered by the ip_hash retention sweep (#19).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getOrCreateThread, insertComment } from '../../../src/db'
+import { computeBodyHash } from '../../../src/submit/hash'
 import { HONEYPOT_FIELD } from '../../../src/spam/fields'
+import { hashIp } from '../../../src/spam/ip'
 import { announceOnce } from '../../../src/spam/log'
+import { DEFAULT_MAX_PER_IP } from '../../../src/spam/rate-limit'
 import { createSpamCheck } from '../../../src/spam'
-import { contextFor, validBody } from './context'
+import { contextFor, db, t0, validBody } from './context'
 
 let lines: string[] = []
 
-beforeEach(() => {
+beforeEach(async () => {
+  await db.exec('DELETE FROM comments')
+  await db.exec('DELETE FROM threads')
   lines = []
   vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
     lines.push(args.map(String).join(' '))
@@ -62,8 +68,42 @@ describe('what a spam decision writes to the log', () => {
     expect(written).not.toContain(validBody)
     expect(written).not.toContain('Rahul Kanwar')
     expect(written).not.toContain('198.51.100.7')
-    // Not the hash either: an HMAC of an IP is still an identifier for one person,
-    // and #19 purges it from the database on a window that log retention ignores.
+  })
+
+  it('never writes the IP hash on the path that actually computes one', async () => {
+    // The assertion above short-circuits at layer 1, so no address is ever
+    // hashed on it and a hash in the rate-limit layer's record would go
+    // unnoticed. This one reaches layer 4 with a secret set and trips the per-IP
+    // limit, so the hash exists at the moment the line is written.
+    //
+    // Not the hash either: an HMAC of an IP is still an identifier for one
+    // person, and #19 purges it from the database on a window that log retention
+    // ignores — so a hash in a log outlives the one in the table.
+    const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
+    const ipHash = await hashIp('198.51.100.7', 'ip-secret')
+    for (let i = 0; i < DEFAULT_MAX_PER_IP; i++) {
+      const body = `an earlier comment number ${i} from the same address`
+      await insertComment(db, {
+        threadId: thread.id,
+        authorName: `Reader ${i}`,
+        body,
+        bodyHash: await computeBodyHash(body),
+        ipHash,
+        now: t0 - 60,
+      })
+    }
+
+    const check = createSpamCheck({ IP_HASH_SECRET: 'ip-secret' })
+    const verdict = await check.check(
+      contextFor({ form: { [HONEYPOT_FIELD]: '', t: 31_000 }, ip: '198.51.100.7' }),
+    )
+
+    // Without this the test could pass by never reaching layer 4 at all.
+    expect(verdict.action).toBe('reject')
+    const written = lines.join('\n')
+    expect(written).toContain('rate-limit')
+    expect(written).not.toContain(ipHash)
+    expect(written).not.toContain('198.51.100.7')
     expect(written).not.toMatch(/[0-9a-f]{32,}/)
   })
 

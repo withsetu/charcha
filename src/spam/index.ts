@@ -30,6 +30,22 @@ import { timingLayer } from './timing'
 import { turnstileLayer } from './turnstile'
 import type { TurnstileConfig } from './turnstile'
 
+/**
+ * The order, as data, so a test can assert it rather than infer it.
+ *
+ * Without this a rearrangement — Turnstile ahead of timing, content ahead of rate
+ * limiting — breaks no test, and "the ordering is the design" becomes a comment
+ * rather than a property.
+ * Enforced by test/worker/spam/order.test.ts.
+ */
+export const SPAM_LAYER_ORDER = [
+  'honeypot',
+  'timing',
+  'turnstile',
+  'rate-limit',
+  'content',
+] as const
+
 export interface SpamCheckOverrides {
   turnstile?: Omit<TurnstileConfig, 'secretKey'>
   rateLimit?: Omit<RateLimitConfig, 'ipSecret'>
@@ -44,7 +60,13 @@ export interface SpamCheckOverrides {
  * to the `settings` table. `overrides` exists so tests can inject a siteverify
  * stand-in and pin a threshold; nothing in production passes it.
  */
-export function createSpamCheck(env: SpamEnv, overrides: SpamCheckOverrides = {}): SpamCheck {
+export function createSpamCheck(
+  env: SpamEnv,
+  overrides: SpamCheckOverrides = {},
+): SpamCheck & {
+  /** The assembled order, for the test that pins it. Never branched on. */
+  readonly layers: readonly SpamLayer[]
+} {
   const layers: SpamLayer[] = [
     honeypotLayer(),
     timingLayer(),
@@ -54,11 +76,9 @@ export function createSpamCheck(env: SpamEnv, overrides: SpamCheckOverrides = {}
   ]
 
   return {
+    layers,
     check(context: SpamCheckContext): Promise<SpamVerdict> {
       return runLayers(layers, context)
     },
   }
 }
-
-export { runLayers } from './layer'
-export type { SpamLayer, LayerOutcome } from './layer'

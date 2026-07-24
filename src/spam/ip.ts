@@ -25,20 +25,33 @@ export function clientIp(request: Request): string | null {
 /**
  * What "the same commenter" means, before anything is hashed.
  *
- * IPv4 is the address itself. **IPv6 is truncated to its /64 prefix**, and that is
- * a correctness fix rather than a nicety: a residential IPv6 customer is handed a
+ * IPv4 is the address itself. **IPv6 is folded to its /64 prefix**, and that is a
+ * correctness fix rather than a nicety: a residential IPv6 customer is handed a
  * /64, so one machine can source 2^64 distinct addresses at no cost. Rate limiting
  * per full IPv6 address is therefore not rate limiting at all — it is a counter an
  * attacker resets by incrementing. The /64 is the smallest block that is reliably
  * one subscriber.
  *
- * It cuts the other way too, and in the direction this project prefers: the stored
- * identifier is now deliberately coarser than an address, so a hash that leaked
- * would locate a household rather than a machine.
+ * It cuts the other way too, and in the direction this project prefers: the folded
+ * identifier is deliberately coarser than an address, so a hash that leaked would
+ * locate a household rather than a machine.
  *
- * An address that does not parse is passed through unchanged. That fails towards
- * treating it as its own key, which is exactly today's behaviour and never merges
- * two commenters into one bucket.
+ * **An address carrying an IPv4 address in its low 32 bits is never folded.**
+ * `::ffff:0:0/96` (IPv4-mapped) and `64:ff9b::/96` (the well-known NAT64 prefix,
+ * which is live on real mobile carriers) both put the whole IPv4 internet inside
+ * one /64. Folding those would count every IPv4 commenter as one person, so one
+ * flooder would take a site's comments down for a whole carrier's subscribers.
+ * They keep their full address as the key.
+ *
+ * Every form is decided on the *numbers*, never the spelling: `::ffff:203.0.113.9`
+ * and `::ffff:cb00:7109` are one address written twice and must produce one key,
+ * or the counter resets whenever the writing changes.
+ *
+ * Output is namespaced (`v6:` / `v6-64:`) so a folded prefix can never collide
+ * with a literal address spelled the same way.
+ *
+ * An address that does not parse keeps itself as its key. That never merges two
+ * commenters into one bucket, which is the direction to fail in.
  * Enforced by test/worker/spam/ip.test.ts.
  */
 export function normaliseIp(ip: string): string {
@@ -46,34 +59,84 @@ export function normaliseIp(ip: string): string {
   if (!address.includes(':')) return address
 
   const groups = expandIpv6(address)
-  if (groups === null) return address
+  if (groups === null) return `v6:${address}`
+  if (embedsIpv4(groups)) return `v6:${groups.join(':')}`
 
-  // Leading zeros are stripped per group, because `2001:0db8:0000:0000::1` and
-  // `2001:db8::1` are the same address written twice. Without this they would
-  // hash differently and the limit would count one commenter as two.
-  const prefix = groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, ''))
-  return `${prefix.join(':')}::/64`
+  return `v6-64:${groups.slice(0, 4).join(':')}`
 }
 
-/** The eight 16-bit groups of an IPv6 address, or null if it is not one. */
+/**
+ * Whether this address's low 32 bits are an IPv4 address, so folding it to a /64
+ * would collapse the whole of IPv4 into one key. See normaliseIp.
+ *
+ * The all-zero prefix covers `::ffff:0:0/96`, the deprecated IPv4-compatible
+ * `::a.b.c.d`, and `::1` — none of which name one subscriber.
+ */
+function embedsIpv4(groups: readonly string[]): boolean {
+  const zeroPrefix = groups.slice(0, 4).every((group) => group === '0')
+  const nat64 = groups[0] === '64' && groups[1] === 'ff9b' && groups[2] === '0' && groups[3] === '0'
+  return zeroPrefix || nat64
+}
+
+/**
+ * The eight 16-bit groups of an IPv6 address, canonicalised, or null if it is not
+ * one.
+ *
+ * Leading zeros are stripped per group, because `2001:0db8:0000:0000::1` and
+ * `2001:db8::1` are the same address written twice — without this they would hash
+ * differently and one commenter would count as two. A trailing dotted quad becomes
+ * the two groups it stands for, for exactly the same reason.
+ */
 function expandIpv6(address: string): string[] | null {
   const halves = address.split('::')
   if (halves.length > 2) return null
 
-  const parse = (part: string) => (part === '' ? [] : part.split(':'))
-  const head = parse(halves[0] ?? '')
-  const tail = halves.length === 2 ? parse(halves[1] ?? '') : []
-
-  // A trailing dotted quad (::ffff:203.0.113.9) is one IPv4 address, not two
-  // groups, and truncating it to a /64 would put the whole of IPv4 in one bucket.
-  if ([...head, ...tail].some((group) => group.includes('.'))) return null
-  if (![...head, ...tail].every((group) => /^[0-9a-f]{1,4}$/.test(group))) return null
+  const split = (part: string) => (part === '' ? [] : part.split(':'))
+  const head = canonicalise(split(halves[0] ?? ''))
+  const tail = canonicalise(split(halves[1] ?? ''))
+  if (head === null || tail === null) return null
 
   if (halves.length === 1) return head.length === 8 ? head : null
 
   const missing = 8 - head.length - tail.length
   if (missing < 1) return null
   return [...head, ...Array.from({ length: missing }, () => '0'), ...tail]
+}
+
+/** One side of an address, as canonical groups, or null if any part is not one. */
+function canonicalise(parts: readonly string[]): string[] | null {
+  const groups: string[] = []
+  for (const [index, part] of parts.entries()) {
+    if (part.includes('.')) {
+      // A dotted quad is only ever the last part, and stands for two groups.
+      if (index !== parts.length - 1) return null
+      const quad = dottedQuadToGroups(part)
+      if (quad === null) return null
+      groups.push(...quad)
+      continue
+    }
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return null
+    groups.push(part.replace(/^0+(?=.)/, ''))
+  }
+  return groups
+}
+
+/** `203.0.113.9` becomes `['cb00', '7109']`, or null if it is not a dotted quad. */
+function dottedQuadToGroups(part: string): string[] | null {
+  const octets = part.split('.')
+  if (octets.length !== 4) return null
+
+  const values: number[] = []
+  for (const octet of octets) {
+    if (!/^\d{1,3}$/.test(octet)) return null
+    const value = Number(octet)
+    if (value > 255) return null
+    values.push(value)
+  }
+
+  const high = ((values[0] as number) << 8) | (values[1] as number)
+  const low = ((values[2] as number) << 8) | (values[3] as number)
+  return [high.toString(16), low.toString(16)]
 }
 
 const HEX = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, '0'))

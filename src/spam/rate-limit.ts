@@ -45,6 +45,14 @@ export const DEFAULT_MAX_PER_PAGE = 30
 /** The window both limits count over, in seconds. Ten minutes. */
 export const DEFAULT_WINDOW_SECONDS = 600
 
+/**
+ * Both halves read a count and then the pipeline writes, with no transaction
+ * between them. N submissions arriving at once from one key can all read
+ * `count = max - 1` and all be admitted, so the limit is a bound on sustained
+ * rate rather than an exact quota. D1 offers no way to close that without a
+ * Durable Object, and the layer's job — making a flood cost something — survives
+ * the slack.
+ */
 export interface RateLimitConfig {
   /** Absent means the per-IP half cannot run; the per-thread half still does. */
   ipSecret?: string
@@ -79,6 +87,17 @@ export function rateLimitLayer(config: RateLimitConfig): SpamLayer {
           reason: unkeyed ? 'no IP_HASH_SECRET' : 'no CF-Connecting-IP',
         })
       } else {
+        // Configured, and still not enforcing anything, until #65 makes the
+        // pipeline write `comments.ip_hash`. Announced separately from the
+        // unconfigured case because it is the more misleading of the two: an
+        // owner who set the secret has every reason to believe the guard is on.
+        announceOnce('rate-limit-ip-unwritten', {
+          event: 'spam_config',
+          layer: 'rate-limit',
+          half: 'per-ip',
+          enabled: false,
+          reason: 'IP_HASH_SECRET is set, but nothing writes comments.ip_hash yet (#65)',
+        })
         const ipHash = await hashIp(ip, secret)
         const recent = await countRecentCommentsByIpHash(context.db, ipHash, since)
         // Reject, not review: a review still writes a row, and the whole point of

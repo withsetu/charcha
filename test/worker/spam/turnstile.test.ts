@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TURNSTILE_FIELD } from '../../../src/spam/fields'
-import { SITEVERIFY_URL, turnstileLayer } from '../../../src/spam/turnstile'
+import { MAX_TOKEN_LENGTH, SITEVERIFY_URL, turnstileLayer } from '../../../src/spam/turnstile'
 import { contextFor } from './context'
 
 const SECRET = 'test-secret'
@@ -81,6 +81,28 @@ describe('layer 3 — Turnstile, when the site owner has configured a secret', (
     expect((await layer.run(withToken('   ')))?.action).toBe('reject')
     expect((await layer.run(withToken(42)))?.action).toBe('reject')
     expect(calls).toHaveLength(0)
+  })
+
+  it('rejects a token past the documented 2048-character cap without calling out', async () => {
+    // Two things at once. A 64 KB body cap means an uncapped token is 64 KB the
+    // Worker would POST outbound per submission. And an over-long token is a
+    // malformed request, whose documented answer is `bad-request` — which this
+    // layer answers with `review`. Sending it would hand an attacker a way to
+    // turn a hard reject into a stored comment.
+    const { calls, fetchImpl } = siteverify({ success: true })
+    const layer = turnstileLayer({ secretKey: SECRET, fetch: fetchImpl })
+
+    const outcome = await layer.run(withToken('x'.repeat(MAX_TOKEN_LENGTH + 1)))
+
+    expect(outcome?.action).toBe('reject')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('still accepts a token exactly at the cap', async () => {
+    const { fetchImpl } = siteverify({ success: true })
+    const layer = turnstileLayer({ secretKey: SECRET, fetch: fetchImpl })
+
+    expect(await layer.run(withToken('x'.repeat(MAX_TOKEN_LENGTH)))).toBeNull()
   })
 
   it('rejects a token siteverify says is invalid', async () => {

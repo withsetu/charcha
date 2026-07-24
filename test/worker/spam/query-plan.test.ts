@@ -22,28 +22,50 @@ async function planOf(sql: string, ...bindings: unknown[]): Promise<string> {
 }
 
 describe('the per-IP rate-limit read', () => {
-  it('seeks the partial ip index rather than scanning the comments table', async () => {
+  it('constrains both the hash and the window on the index, not only the hash', async () => {
+    // `not.toMatch(/SCAN/)` is not enough on its own: SQLite says SEARCH for a
+    // seek that then filters every entry it finds, so the assertion has to name
+    // the columns the index actually constrained. `comments_by_ip` is
+    // (ip_hash, created_at) and partial on `ip_hash is not null`.
     const plan = await planOf(RECENT_BY_IP_SQL, 'a-hash', 1000)
 
-    expect(plan).toMatch(/USING (?:COVERING )?INDEX comments_by_ip/)
+    expect(plan).toMatch(
+      /USING (?:COVERING )?INDEX comments_by_ip \(ip_hash=\? AND created_at>\?\)/,
+    )
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })
 
 describe('the per-thread rate-limit read', () => {
-  it('resolves the page and its comments on indexes, never a scan', async () => {
+  it('resolves the page on the unique key rather than scanning threads', async () => {
     const plan = await planOf(RECENT_ON_PAGE_SQL, '/hello', 1000)
 
-    expect(plan).toMatch(/SEARCH t/)
+    expect(plan).toMatch(
+      /SEARCH t USING (?:COVERING )?INDEX sqlite_autoindex_threads_1 \(page_key=\?\)/,
+    )
     expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('constrains the thread but NOT the window, which is the cost recorded on #69', async () => {
+    // Pinned as it really is rather than as it should be. `comments_by_thread` is
+    // (thread_id, status, created_at, id) and this query has no status predicate,
+    // so created_at cannot be an index constraint — SQLite seeks the thread and
+    // filters its entries. This assertion fails the moment #69 adds
+    // (thread_id, created_at), which is the point: the improvement should have to
+    // come back and update the claim rather than land silently.
+    const plan = await planOf(RECENT_ON_PAGE_SQL, '/hello', 1000)
+
+    expect(plan).toMatch(/SEARCH c USING (?:COVERING )?INDEX comments_by_thread \(thread_id=\?\)/)
   })
 })
 
 describe('the duplicate-body read', () => {
-  it('seeks (thread_id, body_hash) rather than scanning the thread', async () => {
-    const plan = await planOf(DUPLICATE_BODY_SQL, '/hello', 'a-body-hash')
+  it('constrains both the thread and the body hash on the index', async () => {
+    const plan = await planOf(DUPLICATE_BODY_SQL, '/hello', 'a-body-hash', 1000)
 
-    expect(plan).toMatch(/USING (?:COVERING )?INDEX comments_by_body/)
+    expect(plan).toMatch(
+      /USING (?:COVERING )?INDEX comments_by_body \(thread_id=\? AND body_hash=\?\)/,
+    )
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })

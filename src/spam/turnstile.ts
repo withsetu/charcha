@@ -25,6 +25,20 @@ export const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/si
  */
 export const SITEVERIFY_TIMEOUT_MS = 5_000
 
+/**
+ * "Maximum length: 2048 characters" — the documented cap on the `response`
+ * parameter, verified 2026-07-24 on the server-side validation page.
+ *
+ * Enforced here rather than left to siteverify, for two reasons that are both
+ * about what a longer token would cost us. `MAX_BODY_BYTES` is 64 KB, so without
+ * this a caller can make the Worker POST 64 KB outbound per submission. And an
+ * over-long token is a malformed request, whose documented answer is
+ * `bad-request` — which this layer deliberately treats as *our* fault and answers
+ * with `review`. That would hand an attacker a way to turn a hard reject into a
+ * stored comment, which is the one thing the fault split must not allow.
+ */
+export const MAX_TOKEN_LENGTH = 2048
+
 export interface TurnstileConfig {
   /** Absent or blank means the owner has not configured Turnstile: the layer abstains. */
   secretKey?: string
@@ -90,6 +104,11 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
       if (token === undefined || token === '') {
         return { action: 'reject', reason: 'no-token' }
       }
+      // Past the documented cap the token cannot be one Cloudflare issued, so
+      // this is a reject and not a subrequest. See MAX_TOKEN_LENGTH.
+      if (token.length > MAX_TOKEN_LENGTH) {
+        return { action: 'reject', reason: 'token-too-long' }
+      }
 
       let payload: SiteverifyResponse
       try {
@@ -105,7 +124,7 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
           body: JSON.stringify({ secret, response: token }),
           signal: AbortSignal.timeout(timeoutMs),
         })
-        if (!response.ok) return unreachable(`http-${response.status}`)
+        if (!response.ok) return held(`http-${response.status}`)
         payload = await response.json<SiteverifyResponse>()
       } catch {
         // The fail-open/fail-closed call, and the argument for `review`:
@@ -116,14 +135,18 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
         // - allow turns the same downtime into a complete bypass of the layer,
         //   which is a thing an attacker can wait for and, with enough traffic,
         //   arrange.
-        // - review loses nothing and bypasses nothing: the comment is held, the
-        //   human gate decides, and — because a review does not stop the run
-        //   (see runLayers) — rate limiting still bounds how many arrive.
+        // - review loses nothing and bypasses nothing: the comment is held for
+        //   the human gate, and — because a review does not stop the run (see
+        //   runLayers) — rate limiting still bounds how many arrive. Note that
+        //   the *reason* does not currently reach that human: the pipeline
+        //   stores every public comment as `pending` and discards the reason, so
+        //   a held comment is intended to be distinguishable from a clean one in
+        //   the queue but is not yet. That is #70.
         //
         // The deliberate error is caught rather than inspected: a DNS failure, a
         // TLS failure, an abort and a body that is not JSON all mean the same
         // thing here, which is that we did not get an answer.
-        return unreachable('unreachable')
+        return held('unreachable')
       }
 
       if (payload.success === true) return null
@@ -135,11 +158,18 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
 
       // missing-input-secret, invalid-input-secret, bad-request, internal-error,
       // and anything Cloudflare adds later. Ours to fix or theirs to fix, not the
-      // commenter's to pay for. Announced once so a broken secret is findable.
-      // A constant key, not one built from the response: `error-codes` comes from
-      // outside this Worker, and a key derived from it would let a changing
-      // response grow the announcement set without bound.
-      announceOnce('turnstile-fault', {
+      // commenter's to pay for. Announced so a broken secret is findable.
+      //
+      // Two keys, not one. A wrong secret is the announcement the site owner
+      // actually needs, and if it shared a key with the codes an attacker can
+      // provoke, the first hostile submission in an isolate would suppress it for
+      // the life of that isolate. Both keys are constants: a key built from
+      // `error-codes` would let a response from outside this Worker grow the
+      // announcement set without bound.
+      const secretRejected = codes.some(
+        (code) => code === 'invalid-input-secret' || code === 'missing-input-secret',
+      )
+      announceOnce(secretRejected ? 'turnstile-secret-rejected' : 'turnstile-unrecognised', {
         event: 'spam_config',
         layer: 'turnstile',
         enabled: true,
@@ -150,6 +180,11 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
   }
 }
 
-function unreachable(reason: string): LayerOutcome {
+/**
+ * Held for review because siteverify gave us no answer to act on — a network
+ * failure, a non-2xx, a body that is not JSON, or the timeout. Named for the
+ * outcome rather than the cause, because all four mean the same thing here.
+ */
+function held(reason: string): LayerOutcome {
   return { action: 'review', reason }
 }

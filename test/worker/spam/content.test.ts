@@ -3,23 +3,26 @@ import { getOrCreateThread, insertComment } from '../../../src/db'
 import { computeBodyHash } from '../../../src/submit/hash'
 import {
   DUPLICATE_MIN_LENGTH,
+  DUPLICATE_WINDOW_SECONDS,
   LINKS_REJECT_AT,
   LINKS_REVIEW_AT,
+  LINK_FLOOD_MAX_PROSE,
   contentLayer,
   countLinks,
+  proseLength,
 } from '../../../src/spam/content'
 import { contextFor, db, t0, validBody } from './context'
 
 const layer = contentLayer()
 
-async function seedBody(body: string, pageKey = '/notes/leaving') {
+async function seedBody(body: string, pageKey = '/notes/leaving', at = t0 - 600) {
   const thread = await getOrCreateThread(db, { pageKey, now: t0 })
   await insertComment(db, {
     threadId: thread.id,
     authorName: 'Someone',
     body,
     bodyHash: await computeBodyHash(body),
-    now: t0 - 600,
+    now: at,
   })
 }
 
@@ -44,8 +47,18 @@ describe('layer 5 — link counting', () => {
     expect((await layer.run(contextFor({ body: links(LINKS_REVIEW_AT) })))?.action).toBe('review')
   })
 
-  it('rejects an outright link flood', async () => {
+  it('rejects an outright link flood — many links wrapped around almost no writing', async () => {
     expect((await layer.run(contextFor({ body: links(LINKS_REJECT_AT) })))?.action).toBe('reject')
+  })
+
+  it('holds, rather than rejects, a long argument that happens to cite ten sources', async () => {
+    // "At ten the body is a link list" is a claim about the ratio, not the count.
+    // A researcher's answer with ten citations has the same link count as a link
+    // dump, and rejecting it loses the best comment of the week to a bare 403.
+    const essay = `${'The export format is the part everyone underestimates, and here is why. '.repeat(20)} ${links(LINKS_REJECT_AT)}`
+    expect(proseLength(essay)).toBeGreaterThan(LINK_FLOOD_MAX_PROSE)
+
+    expect((await layer.run(contextFor({ body: essay })))?.action).toBe('review')
   })
 
   it('counts a www-prefixed address as well as one carrying a scheme', () => {
@@ -66,12 +79,15 @@ describe('layer 5 — link counting', () => {
 })
 
 describe('layer 5 — known spam markup', () => {
-  it('rejects BBCode link markup, which is never Markdown and never a real comment', async () => {
+  it('holds BBCode link markup for review — it is forum spam, but a person can write it', async () => {
+    // Not a reject: src/render/markdown.ts renders fenced code blocks, so a
+    // reader quoting the spam they received, or a comment on a thread about
+    // migrating off phpBB, produces this markup honestly.
     const outcome = await layer.run(
       contextFor({ body: `Nice post [url=https://x.example]click[/url]` }),
     )
 
-    expect(outcome?.action).toBe('reject')
+    expect(outcome?.action).toBe('review')
   })
 
   it('leaves an ordinary Markdown link alone', async () => {
@@ -112,6 +128,15 @@ describe('layer 5 — duplicate bodies', () => {
     await seedBody(validBody)
 
     expect(await layer.run(contextFor({ body: `${validBody} Also this.` }))).toBeNull()
+  })
+
+  it('forgets a duplicate once it is outside the window', async () => {
+    // Comments are soft-deleted, so an unbounded rule would let one moderator
+    // takedown ban that text on that page forever, invisibly, for everyone
+    // including the person who wrote it.
+    await seedBody(validBody, '/notes/leaving', t0 - DUPLICATE_WINDOW_SECONDS - 1)
+
+    expect(await layer.run(contextFor({ body: validBody }))).toBeNull()
   })
 })
 

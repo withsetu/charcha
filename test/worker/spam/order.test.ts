@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { getOrCreateThread, insertComment } from '../../../src/db'
 import { computeBodyHash } from '../../../src/submit/hash'
 import { ELAPSED_FIELD, HONEYPOT_FIELD, TURNSTILE_FIELD } from '../../../src/spam/fields'
-import { createSpamCheck } from '../../../src/spam'
+import { SPAM_LAYER_ORDER, createSpamCheck } from '../../../src/spam'
 import type { SpamLayer } from '../../../src/spam/layer'
 import { runLayers } from '../../../src/spam/layer'
 import { contextFor, db, t0, validBody } from './context'
@@ -119,6 +119,16 @@ describe('the layered run', () => {
 })
 
 describe('createSpamCheck — the assembled ordering', () => {
+  it('assembles exactly the order #1 specifies', () => {
+    // Pinned as a list, because the two behavioural tests below are satisfied by
+    // any arrangement that keeps the honeypot first — moving Turnstile ahead of
+    // timing, or content ahead of rate limiting, would break neither. "The
+    // ordering is the design" has to be a property something checks.
+    const check = createSpamCheck({})
+
+    expect(check.layers.map((layer) => layer.name)).toEqual([...SPAM_LAYER_ORDER])
+  })
+
   it('runs the free local layers before it will spend a Turnstile call', async () => {
     // Turnstile is a subrequest; layers 1 and 2 are string comparisons. A comment
     // stopped by the honeypot must not cost a network round trip, and this is the
