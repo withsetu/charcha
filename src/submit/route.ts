@@ -100,6 +100,10 @@ export async function handleSubmit(
     request: c.req.raw,
     now,
     significantParams: config.significantParams,
+    // The same secret the per-IP rate limit hashes with, so the value written here
+    // and the value counted there are the same key. Unset on a deployment that has
+    // not run `wrangler secret put IP_HASH_SECRET`, and then nothing is stored.
+    ipSecret: c.env.IP_HASH_SECRET,
   })
 
   return renderResult(result)

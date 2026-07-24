@@ -168,3 +168,22 @@ export async function hashIp(ip: string, secret: string): Promise<string> {
   for (let index = 0; index < view.length; index++) hex += HEX[view[index] as number]
   return hex
 }
+
+/**
+ * The one reading of `IP_HASH_SECRET` that both sides of the guard use.
+ *
+ * The value is written by the submission pipeline and read by the rate limit, and
+ * they must derive the *same* key or the limit counts hashes nobody is writing —
+ * which is #65 all over again, silently. A secret pasted into a dashboard with a
+ * trailing newline is the likely way that happens, so it is trimmed here once
+ * rather than trimmed on one side and not the other.
+ *
+ * Blank is `null`, not a key: an unkeyed HMAC of an address is reversible by
+ * anyone willing to walk the address space, so storing nothing is strictly better
+ * than storing that.
+ * Enforced by test/worker/submit/ip-hash.test.ts.
+ */
+export function usableIpSecret(secret: string | undefined): string | null {
+  const trimmed = secret?.trim()
+  return trimmed === undefined || trimmed === '' ? null : trimmed
+}
