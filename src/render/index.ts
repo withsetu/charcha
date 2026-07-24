@@ -3,3 +3,4 @@
 
 export { escapeHtml } from './escape'
 export { renderMarkdown } from './markdown'
+export { COMMENT_CLASS_NAMES, renderComments } from './comments'
