@@ -39,7 +39,10 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "check:size": "node scripts/bundle-size.mjs",
-    "check": "npm run types:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run check:size"
+    "check:licences": "node scripts/licence-policy.mjs",
+    "check:actions": "node scripts/actions-pinned.mjs",
+    "check:audit": "npm audit --omit=dev --audit-level=low && npm audit --audit-level=high",
+    "check": "npm run types:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run check:size && npm run check:licences && npm run check:actions && npm run check:audit"
   },
   "dependencies": {
     "hono": "^4.12.31"

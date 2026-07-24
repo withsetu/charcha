@@ -262,6 +262,7 @@ budget — and is exactly what CI runs. Run it before you push.
 | Worker tests | `test/worker/**` — run in workerd, with real bindings |
 | Build-tooling tests | `test/node/**` — node, for things that touch the filesystem |
 | Embed budget check | `scripts/bundle-size.mjs`, `npm run check:size` |
+| Supply-chain gates | `npm run check:audit` (prod blocks at `low`, dev at `high`), `check:licences`, `check:actions` — policy on [#23](https://github.com/withsetu/charcha/issues/23) |
 | CI | `.github/workflows/ci.yml` |
 | Design & plans | The GitHub issue. Never committed spec files. |
 | v1 epic | [#1](https://github.com/withsetu/charcha/issues/1) |
