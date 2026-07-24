@@ -291,6 +291,13 @@ newer pnpm major would therefore break one-click deploy silently, for everyone
 but us. README has the troubleshooting entry, including the `PNPM_VERSION`
 dashboard variable that is the only lever a deployer has.
 
+Both halves are asserted rather than merely written down here:
+`pnpm check:lockfile` fails a `packageManager` off `SUPPORTED_PNPM_MAJORS` and a
+lockfile off `SUPPORTED_LOCKFILE_VERSIONS`, which live next to each other in
+`scripts/lockfile-guard.mjs` because they are one constraint at two layers. When
+Cloudflare moves the build image, that gate is what will stop us following it by
+reflex — confirm the image first, then move both constants together.
+
 `.nvmrc` is the exception: Workers Builds does read it, so Node is genuinely
 pinned everywhere.
 
