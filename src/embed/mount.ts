@@ -157,6 +157,15 @@ function addReplyButtons(widget: Widget): void {
  * page that exactly fills the cap from one that overflows it.
  */
 async function load(widget: Widget): Promise<void> {
+  // The composer is a live element that gets *moved* into the thread while the
+  // reader is replying, and both branches below replace the thread's contents. Send
+  // it home first, or a read that runs while a reply is open detaches the one form
+  // this widget has and every later reference to it points at nothing. No path
+  // reaches that today — the retry only exists after a read has already failed — but
+  // it is one added refresh button away from being a live bug, and the cost of not
+  // having it is the whole widget.
+  endReply(widget)
+
   widget.thread.setAttribute('aria-busy', 'true')
   showStatus(widget, LOADING, false)
 
