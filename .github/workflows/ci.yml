@@ -33,8 +33,9 @@ jobs:
       #
       # No `version:` input on purpose. It is "optional when there is a
       # packageManager field in the package.json", and package.json is where
-      # this project pins pnpm for contributors and for Cloudflare alike — a
-      # second copy of the version here is a second thing to keep in step.
+      # this project pins pnpm — a second copy of the version here is a second
+      # thing to keep in step, and drift between the two is the class of bug
+      # #52 exists to close.
       # Source: https://github.com/pnpm/action-setup#inputs
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 

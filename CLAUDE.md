@@ -46,8 +46,10 @@ Re-verify before relying on these; they were checked on the date shown.
 | StopForumSpam | free, 100k queries/day, **non-commercial terms** | 2026-07-23 |
 | Deploy button | repo must be **public and self-contained**; Cloudflare treats the deploy root as the new repo root | 2026-07-23 |
 | Bot score (`cf.botManagement.score`) | **Enterprise only** — cannot be built on | 2026-07-23 |
-| Workers Builds image (v3) | ships pnpm **10.11.1**, npm 10.9.2, yarn 4.9.1 | 2026-07-24 |
-| Workers Builds v3 package-manager version | **not** inferred from `pnpm-lock.yaml`, nor from `package.json` → `engines` | 2026-07-24 |
+| Workers Builds image (v3) | ships pnpm **10.11.1**, npm 10.9.2, yarn 4.9.1, Node **22.16.0** | 2026-07-24 |
+| Workers Builds pnpm version | image default, or a `PNPM_VERSION` **dashboard build variable**. Not inferred from `pnpm-lock.yaml`, not from `package.json` → `engines`, and **`packageManager` is not documented as honoured**. There is no pnpm equivalent of `.nvmrc` | 2026-07-24 |
+| Workers Builds Node version | image default, or `NODE_VERSION`, or a **`.nvmrc` / `.node-version` file** — the file method exists for Node only | 2026-07-24 |
+| Workers Builds and `wrangler.jsonc` | build configuration there is **not** honoured; `[vars]` are runtime variables for the Worker, not the build container | 2026-07-24 |
 | Dependabot and pnpm | supported under the **`npm`** ecosystem key, pnpm **v7–v10** | 2026-07-24 |
 
 ### The query-per-invocation limit, and why it is recorded as disputed
@@ -262,9 +264,20 @@ single test runs. It broke CI twice before [#52](https://github.com/withsetu/cha
 moved off it. pnpm's lockfile is a complete resolution graph with every platform
 variant recorded, so there is nothing to prune. Never run `npm install` here —
 `pnpm check:lockfile` fails if a `package-lock.json` appears, rather than letting
-it reach CI. `packageManager` in `package.json` and `.nvmrc` pin both halves of
-the toolchain; the pnpm pin is also what Cloudflare's build needs, because its v3
-build system does not infer a pnpm version from the lockfile.
+it reach CI.
+
+**The pin governs dev and CI only, and the Cloudflare build is the constraint on
+it.** `packageManager` in `package.json` and `.nvmrc` make a contributor's
+machine and the runner run byte-identical tooling — unpinned tooling was the
+second cause named on [#52](https://github.com/withsetu/charcha/issues/52). They
+do **not** reach a Deploy-button build: Workers Builds takes its pnpm version
+from the build image or a `PNPM_VERSION` dashboard variable, and a site owner
+clicking Deploy can set neither. So charcha must stay *compatible with* the image
+rather than dictate to it — **keep the pin on pnpm 10.x**, which is what the
+image ships (10.11.1), and keep the lockfile at `lockfileVersion: '9.0'`, which
+that version reads. Moving to a newer pnpm major would break the one-click
+deploy, silently, for everyone but us. `.nvmrc` is the exception: Workers Builds
+does read it, so Node is genuinely pinned everywhere.
 
 | Thing | Where |
 |---|---|

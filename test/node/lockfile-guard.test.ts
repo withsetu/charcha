@@ -70,9 +70,9 @@ describe('checkLockfiles', () => {
   })
 
   it('fails when nothing pins the pnpm version', async () => {
-    // Cloudflare's v3 build system does not infer a pnpm version from the
-    // lockfile, so an absent `packageManager` field is a Deploy-button problem
-    // and not only a local-consistency one.
+    // Unpinned tooling is one of the two causes named on #52: dev and CI
+    // resolving with different pnpm versions is its own source of lockfile
+    // churn, independent of npm's platform pruning.
     await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
     await write('package.json', JSON.stringify({ name: 'charcha' }))
 

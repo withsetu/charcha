@@ -62,10 +62,14 @@ export async function checkLockfiles({ cwd = process.cwd() } = {}) {
     })
   }
 
-  // A `packageManager` field is what pins the pnpm version for contributors,
-  // for `pnpm/action-setup` in CI, and for Cloudflare Workers Builds, whose v3
-  // build system does not infer a pnpm version from the lockfile.
-  // Source: https://developers.cloudflare.com/pages/configuration/build-image/
+  // A `packageManager` field is what pins the pnpm version for contributors
+  // (via corepack) and for `pnpm/action-setup` in CI, so that dev and CI run
+  // byte-identical tooling. It does *not* reach the Cloudflare build — Workers
+  // Builds takes its pnpm version from the build image or a dashboard
+  // `PNPM_VERSION` variable, neither of which a one-click deploy can set. That
+  // is why the pin must stay on the 10 line: the image ships pnpm 10.x, and the
+  // lockfile has to stay readable by it.
+  // Source: https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
   let declared = null
   try {
     declared = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')).packageManager ?? null
@@ -88,7 +92,7 @@ export async function checkLockfiles({ cwd = process.cwd() } = {}) {
       status: 'no-package-manager',
       message:
         'package.json has no `packageManager` field — nothing pins the pnpm version for ' +
-        'contributors, CI, or the Cloudflare Deploy button',
+        'contributors or CI, which is the drift #52 was caused by',
     })
   }
 
