@@ -15,8 +15,9 @@ readers in order to comment.
   indefinitely.
 - **No reader accounts** — a name and an optional email. No sign-up, no social
   login.
-- **No cookies** — nothing is stored in the reader's browser by default, so a site
-  using Charcha has nothing new to disclose.
+- **No cookies, ever** — nothing is stored in the reader's browser at all, so a site
+  using Charcha has nothing new to disclose. Not a default that can be switched:
+  anything that appears to need reader-side storage needs a different design.
 - **Invisible on the page** — the widget inherits the host site's typography and
   colours, including dark mode.
 - **Spam defence that runs locally** — layered heuristics and an on-device
