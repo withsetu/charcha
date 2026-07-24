@@ -1,6 +1,11 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import { MODERATION_QUEUE_SQL, PAGE_COMMENTS_SQL, PURGE_IP_HASH_SQL } from '../../../src/db'
+import {
+  MAX_PAGE_COMMENTS,
+  MODERATION_QUEUE_SQL,
+  PAGE_COMMENTS_SQL,
+  PURGE_IP_HASH_SQL,
+} from '../../../src/db'
 
 const db = env.DB
 
@@ -22,18 +27,31 @@ async function planOf(sql: string, ...bindings: unknown[]): Promise<string> {
   return results.map((row) => row.detail).join('\n')
 }
 
+const PAGE_BINDINGS = ['/hello', MAX_PAGE_COMMENTS + 1] as const
+
 describe('the page read', () => {
   it('seeks on an index rather than scanning the comments table', async () => {
-    const plan = await planOf(PAGE_COMMENTS_SQL, '/hello')
+    const plan = await planOf(PAGE_COMMENTS_SQL, ...PAGE_BINDINGS)
 
     expect(plan).not.toMatch(/\bSCAN\b/)
     expect(plan).toMatch(/comments_by_thread/)
   })
 
   it('resolves the page without scanning threads either', async () => {
-    const plan = await planOf(PAGE_COMMENTS_SQL, '/hello')
+    const plan = await planOf(PAGE_COMMENTS_SQL, ...PAGE_BINDINGS)
 
     expect(plan).toMatch(/SEARCH t/)
+  })
+
+  it('takes the cap off the index rather than sorting the whole page first', async () => {
+    // comments_by_thread is (thread_id, status, created_at, id), which is exactly
+    // this statement's `order by`, so the limit stops the read at the cap. A whole
+    // clause sort would mean every approved comment on the page is read *before*
+    // the limit applies — the cap in #27 would then bound what comes back and
+    // nothing about the memory or the row reads it cost, which is the whole point.
+    const plan = await planOf(PAGE_COMMENTS_SQL, ...PAGE_BINDINGS)
+
+    expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
   })
 })
 

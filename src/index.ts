@@ -1,5 +1,13 @@
 import { Hono } from 'hono'
 import { getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
+import {
+  isUnlistedBrowserOrigin,
+  preflightResponse,
+  resolveOrigin,
+  unlistedOriginResponse,
+  withCors,
+} from './cors'
+import { handleRead } from './read/route'
 import { handleSubmit } from './submit/route'
 import { allowAllSpamCheck } from './submit/spam'
 
@@ -7,11 +15,51 @@ import { allowAllSpamCheck } from './submit/spam'
 // serves — the default export's `fetch` is this app's. See test/worker/errors.test.ts.
 export const app = new Hono<{ Bindings: Env }>()
 
+/**
+ * Query parameters that are page identity on this site, for both halves of the
+ * embed's contract.
+ *
+ * One constant, passed to the read and to the write, because the two must derive
+ * the same key from the same URL — a mismatch would have a reader post to one
+ * thread and then be shown another, with every test on either side still passing.
+ * Empty by default so no tracking parameter can fork a thread; it becomes owner
+ * configuration when the settings surface exists (#6). See src/page-key.ts.
+ */
+const SIGNIFICANT_PARAMS: readonly string[] = []
+
 // The public, unauthenticated write endpoint — the primary surface, and the one
 // card rule 5 is about. Validation, size caps and the spam seam all live behind
 // handleSubmit; the spam layers themselves (#8) replace allowAllSpamCheck without
 // touching this line. Enforced by test/worker/submit/route.test.ts.
-app.post('/comments', (c) => handleSubmit(c, { spamCheck: allowAllSpamCheck }))
+app.post('/comments', async (c) => {
+  // Checked on the real request, not only at the preflight. `text/plain` makes this
+  // POST a CORS-simple request that no browser preflights, so a policy enforced only
+  // at OPTIONS is one an attacker opts out of with a header. See src/cors.ts.
+  const decision = await resolveOrigin(c.env.DB, c.req.raw)
+  if (isUnlistedBrowserOrigin(decision)) return unlistedOriginResponse()
+
+  const response = await handleSubmit(c, {
+    spamCheck: allowAllSpamCheck,
+    significantParams: SIGNIFICANT_PARAMS,
+  })
+  return withCors(response, decision.allowedOrigin)
+})
+
+// The public read endpoint: the embed's `fetch`, and the other end of #4's one
+// renderer. Returns HTML, never JSON (#1).
+// Enforced by test/worker/read/route.test.ts.
+app.get('/comments', (c) => handleRead(c, { significantParams: SIGNIFICANT_PARAMS }))
+
+// The preflight (#47). The embed sends application/json, which is not a
+// CORS-safelisted content type, so the embed's own submissions are preflighted and
+// this is what lets them through. It is **not** the gate — an attacker sends
+// text/plain and is never preflighted at all — which is why the POST handler above
+// checks the origin on the real request. See src/cors.ts.
+// Enforced by test/worker/read/route.test.ts.
+app.options('/comments', async (c) => {
+  const decision = await resolveOrigin(c.env.DB, c.req.raw)
+  return preflightResponse(decision.allowedOrigin)
+})
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a

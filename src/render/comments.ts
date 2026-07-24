@@ -35,6 +35,7 @@ export const COMMENT_CLASS_NAMES = [
   'charcha-replies',
   'charcha-reply',
   'charcha-empty',
+  'charcha-truncated',
 ] as const
 
 /**
@@ -50,6 +51,20 @@ export const COMMENT_CLASS_NAMES = [
  * two failures.
  */
 export const COMMENT_ELEMENTS = ['ol', 'li', 'div', 'span', 'time', 'p'] as const
+
+/**
+ * What the caller knows about the rows it is handing over that the rows themselves
+ * cannot say. An options object rather than a positional flag, so the next such
+ * fact is an added key rather than a fourth argument nobody can read at a call site.
+ */
+export interface RenderOptions {
+  /**
+   * The page has approved comments these rows do not include, because the read was
+   * capped (src/db/index.ts, MAX_PAGE_COMMENTS). Defaults to false: a caller that
+   * does not know has, by construction, not truncated anything.
+   */
+  truncated?: boolean
+}
 
 /**
  * Date's own range, converted to the unix seconds this project stores. Past it,
@@ -155,13 +170,20 @@ function renderComment(
  * a streaming rewriter, and a renderer reading hidden state renders differently
  * depending on who called it last.
  *
+ * `options.truncated` is told to this function rather than guessed inside it,
+ * because the row count alone cannot distinguish a page that exactly fills the cap
+ * from one that overflows it — only the read that asked for a row past the cap
+ * knows (src/db/index.ts). A cut-short conversation says so out loud: the reader
+ * would otherwise be shown a beginning presented as the whole thing.
+ *
  * One pass to group, one pass to render — no work that grows faster than the
- * number of comments, because the page read is not yet capped (#27).
+ * number of comments, which the page read caps at MAX_PAGE_COMMENTS (#27).
  * Enforced by test/worker/render/comments.test.ts.
  */
 export function renderComments(
   comments: readonly RenderableComment[],
   strings: CommentStrings = ENGLISH_STRINGS,
+  options: RenderOptions = {},
 ): string {
   const roots: RenderableComment[] = []
   const repliesByParent = new Map<number, RenderableComment[]>()
@@ -192,6 +214,16 @@ export function renderComments(
     out.push(renderComment(root, repliesByParent.get(root.id) ?? [], false))
   }
   out.push('</ol>')
+
+  // Below the list rather than above it: the notice is about what the reader has
+  // just reached the end of, and a banner over an otherwise ordinary page reads as
+  // an error. The count is the number of comments handed to this function, not the
+  // number of roots, so it matches what the caller's cap actually returned.
+  if (options.truncated === true) {
+    out.push(
+      `<p class="charcha-truncated">${escapeHtml(strings.truncatedNotice(comments.length))}</p>`,
+    )
+  }
 
   return out.join('')
 }
