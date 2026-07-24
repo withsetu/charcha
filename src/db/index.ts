@@ -536,3 +536,78 @@ export async function purgeExpiredIpHashes(
   const { meta } = await db.prepare(PURGE_IP_HASH_SQL).bind(cutoff).run()
   return { purged: meta.changes, cutoff, retentionDays }
 }
+
+/**
+ * The three reads the spam layers make (#8). They are here rather than in
+ * src/spam/ for the reason the file header gives: every query lives in one place,
+ * so the 50-per-invocation budget is countable without reading the whole Worker.
+ *
+ * All three are counts or an existence check against an index, never a scan, so
+ * the submission path costs the same three reads on a page with three comments
+ * and on a page with three thousand.
+ * Enforced by test/worker/spam/rate-limit.test.ts, test/worker/spam/content.test.ts
+ * and test/worker/db/query-plan.test.ts.
+ */
+
+/**
+ * Matches `comments_by_ip`, which is `(ip_hash, created_at) WHERE ip_hash IS NOT
+ * NULL` — so a row whose hash #19's sweep already nulled is not in the index and
+ * costs nothing to skip. That is also why an expired hash cannot rate-limit
+ * anybody: it is gone, by design.
+ */
+export const RECENT_BY_IP_SQL = `select count(*) as n
+     from comments
+    where ip_hash = ?1
+      and created_at >= ?2`
+
+export async function countRecentCommentsByIpHash(
+  db: D1Database,
+  ipHash: string,
+  since: number,
+): Promise<number> {
+  const row = await db.prepare(RECENT_BY_IP_SQL).bind(ipHash, since).first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+/**
+ * Takes the page key rather than a thread id, because the submission path runs
+ * the spam layers *before* getOrCreateThread — resolving the thread first would
+ * let a rejected spammer spend a row write. A page with no thread row counts zero.
+ */
+export const RECENT_ON_PAGE_SQL = `select count(*) as n
+     from comments c
+     join threads t on t.id = c.thread_id
+    where t.page_key = ?1
+      and c.created_at >= ?2`
+
+export async function countRecentCommentsOnPage(
+  db: D1Database,
+  pageKey: string,
+  since: number,
+): Promise<number> {
+  const row = await db.prepare(RECENT_ON_PAGE_SQL).bind(pageKey, since).first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+/**
+ * Whether this exact body has already been posted to this page.
+ *
+ * `limit 1` and no count: the question is existence, and a spam blast of the same
+ * body should not cost one row read per copy already stored. Matches
+ * `comments_by_body`, which is `(thread_id, body_hash)`.
+ */
+export const DUPLICATE_BODY_SQL = `select 1 as hit
+     from comments c
+     join threads t on t.id = c.thread_id
+    where t.page_key = ?1
+      and c.body_hash = ?2
+    limit 1`
+
+export async function hasDuplicateBodyOnPage(
+  db: D1Database,
+  pageKey: string,
+  bodyHash: string,
+): Promise<boolean> {
+  const row = await db.prepare(DUPLICATE_BODY_SQL).bind(pageKey, bodyHash).first<{ hit: number }>()
+  return row !== null
+}
