@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RenderableComment } from '../../../src/db'
-import { COMMENT_CLASS_NAMES, renderComments } from '../../../src/render'
+import { COMMENT_CLASS_NAMES, ENGLISH_STRINGS, renderComments } from '../../../src/render'
 import { attributeNames, parseElements, tagNames } from './parse'
 
 const t0 = 1_753_300_000
@@ -42,19 +42,13 @@ describe('renderComments', () => {
         '<li class="charcha-comment" id="charcha-comment-1">' +
         '<div class="charcha-comment-header">' +
         '<span class="charcha-comment-author">Maya</span>' +
-        '<time class="charcha-comment-time" datetime="2025-07-23T19:46:40.000Z">2025-07-23</time>' +
+        '<time class="charcha-comment-time" datetime="2025-07-23T19:46:40.000Z">' +
+        '2025-07-23 19:46 UTC</time>' +
         '</div>' +
         '<div class="charcha-comment-body"><p>Nice post.</p></div>' +
         '</li>' +
         '</ol>',
     )
-  })
-
-  it('renders a page with no comments as an empty container, not as copy', () => {
-    // Wording an empty state is a design decision that belongs to the embed and
-    // the theming contract (#5, #6). A renderer that invents English here would
-    // make that decision for every site, in one language.
-    expect(renderComments([])).toBe('<ol class="charcha-comments"></ol>')
   })
 
   it('keeps the order the data layer returned, which is oldest first', () => {
@@ -137,11 +131,34 @@ describe('renderComments', () => {
     expect(html).toContain('id="charcha-comment-8"')
   })
 
-  it('emits the timestamp as machine-readable UTC, read from the row and not from a clock', () => {
+  it('shows the date and the time, read from the row and not from a clock', () => {
     const html = renderComments([comment({ id: 1, createdAt: 1_753_300_000 })])
 
     expect(html).toContain('datetime="2025-07-23T19:46:40.000Z"')
-    expect(html).toContain('>2025-07-23</time>')
+    expect(html).toContain('>2025-07-23 19:46 UTC</time>')
+  })
+
+  it('names the timezone in the text, because a bare time reads as the reader’s own', () => {
+    // This function has no clock and no locale, so the time it shows is UTC and
+    // cannot be anything else. An unlabelled "19:46" that is nine hours off the
+    // reader's wall clock is worse than no time at all, because it looks right.
+    // The label is in the text rather than in a title attribute for the same
+    // reason: a tooltip is not read by someone who is not suspicious yet.
+    const html = renderComments([comment({ id: 1 })])
+
+    expect(html).toContain('UTC</time>')
+    expect(html).not.toContain('title=')
+  })
+
+  it('keeps the attribute at full precision, whatever the text says', async () => {
+    // The attribute is the hook a later client-side upgrade is intended to read
+    // — the reader's own timezone, or relative time — so it stays exact even
+    // though the visible text is rounded to the minute.
+    const html = renderComments([comment({ id: 1, createdAt: 1_753_300_007 })])
+    const [time] = (await parseElements(html)).filter((element) => element.tag === 'time')
+
+    expect(time?.attributes.datetime).toBe('2025-07-23T19:46:47.000Z')
+    expect(Object.keys(time?.attributes ?? {}).sort()).toEqual(['class', 'datetime'])
   })
 
   it('omits the timestamp rather than throwing when the row carries nonsense', () => {
@@ -155,17 +172,74 @@ describe('renderComments', () => {
   })
 })
 
+describe('a page nobody has commented on', () => {
+  it('invites the first comment', () => {
+    expect(renderComments([])).toBe('<p class="charcha-empty">Be the first to comment</p>')
+  })
+
+  it('says so in words rather than rendering an empty list', async () => {
+    // An empty <ol> is markup describing a list that is not there, and a reader
+    // sees nothing at all. The invitation is the point of the state.
+    expect(await tagNames(renderComments([]))).toEqual(new Set(['p']))
+  })
+
+  it('says it once, not per orphaned reply', () => {
+    // Replies whose parent is not on the page are dropped, which can empty the
+    // page even though rows arrived. That is still an empty page.
+    expect(renderComments([comment({ id: 9, parentId: 404, depth: 1 })])).toBe(renderComments([]))
+  })
+})
+
+describe('the words it shows a reader', () => {
+  it('takes them from a table, so a second language is a table and not a rewrite', () => {
+    const html = renderComments([], { emptyState: 'Soyez le premier à commenter' })
+
+    expect(html).toBe('<p class="charcha-empty">Soyez le premier à commenter</p>')
+  })
+
+  it('defaults to English rather than to nothing', () => {
+    expect(renderComments([])).toBe(renderComments([], ENGLISH_STRINGS))
+  })
+
+  it('escapes them, because a translation is untrusted input the day one is contributed', async () => {
+    const html = renderComments([], { emptyState: '<script>alert(1)</script>' })
+
+    expect((await tagNames(html)).has('script')).toBe(false)
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+  })
+
+  it('escapes a translation that tries to reopen the attribute it sits beside', async () => {
+    const html = renderComments([], { emptyState: '"><img src=x onerror=alert(1)>' })
+
+    expect((await tagNames(html)).has('img')).toBe(false)
+    expect([...(await attributeNames(html))].filter((name) => name.startsWith('on'))).toEqual([])
+  })
+
+  it('stays pure: the table is a parameter, never a global', () => {
+    const french = { emptyState: 'Aucun commentaire' }
+
+    expect(renderComments([], french)).toContain('Aucun commentaire')
+    expect(renderComments([])).toContain('Be the first to comment')
+  })
+})
+
 describe('the class names it emits, which are a public API', () => {
   // Bare mode ships in v1 (#6), so a site's own stylesheet targets these names
   // directly. Renaming one is a breaking change for every deployment, and this
   // test is what makes that a failing build rather than a silent one.
   it('is exactly the documented set, and nothing else', () => {
-    const html = renderComments([
+    // Both states, because the empty page emits a class the populated one never
+    // does — and a name that only one render can produce is still a name a
+    // stylesheet depends on.
+    const populated = renderComments([
       comment({ id: 1, byOwner: true, body: '**b** `c`\n\n- d\n\n> e\n\n```\nf\n```' }),
       comment({ id: 2, parentId: 1, depth: 1, body: '[g](https://ok.example/)' }),
     ])
+    const empty = renderComments([])
 
-    expect(classNamesIn(html)).toEqual(new Set(COMMENT_CLASS_NAMES))
+    expect(new Set([...classNamesIn(populated), ...classNamesIn(empty)])).toEqual(
+      new Set(COMMENT_CLASS_NAMES),
+    )
   })
 
   it('prefixes every one of them, so nothing collides with the host page', () => {

@@ -12,6 +12,8 @@
 import type { RenderableComment } from '../db'
 import { escapeHtml } from './escape'
 import { renderMarkdown } from './markdown'
+import type { CommentStrings } from './strings'
+import { ENGLISH_STRINGS } from './strings'
 
 /**
  * Every class name this renderer emits.
@@ -32,6 +34,7 @@ export const COMMENT_CLASS_NAMES = [
   'charcha-comment-body',
   'charcha-replies',
   'charcha-reply',
+  'charcha-empty',
 ] as const
 
 /**
@@ -51,18 +54,27 @@ export const COMMENT_ELEMENTS = ['ol', 'li', 'div', 'span', 'time'] as const
 const MAX_TIMESTAMP_SECONDS = 8_640_000_000_000
 
 /**
- * The timestamp, machine-readable, from the row rather than from a clock.
+ * The timestamp: the date and the time, from the row rather than from a clock.
  *
- * The text is the UTC date rather than "2 hours ago": relative time needs a
- * "now", and a renderer that read one would produce different HTML on every
- * call and could not be cached or server-rendered. The `datetime` attribute is
- * what lets the embed rewrite it in the reader's own locale later.
+ * The visible text says **UTC**, out loud, because this function cannot know the
+ * reader's timezone. It has no clock and no locale — that is what makes it
+ * reusable from the Worker, the HTMLRewriter path and a site's build — so an
+ * unlabelled "19:46" would be a number that is hours away from the reader's wall
+ * clock while looking exactly like it is not. The label is part of the rendered
+ * text rather than a `title` tooltip for the same reason: a reader who is not
+ * already suspicious never hovers.
+ *
+ * The `datetime` attribute keeps full precision on purpose. It is intended to be
+ * the hook a later client-side upgrade reads — the reader's own timezone, or the
+ * relative time the owner has approved as an opt-in — so it stays exact even
+ * though the text beside it is rounded to the minute.
  */
 function renderTime(createdAt: number): string {
   if (!Number.isFinite(createdAt) || Math.abs(createdAt) > MAX_TIMESTAMP_SECONDS) return ''
 
   const iso = new Date(createdAt * 1000).toISOString()
-  return `<time class="charcha-comment-time" datetime="${iso}">${iso.slice(0, 10)}</time>`
+  const shown = `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`
+  return `<time class="charcha-comment-time" datetime="${iso}">${shown}</time>`
 }
 
 function renderComment(
@@ -110,15 +122,25 @@ function renderComment(
  * would be an answer to a comment the moderator took down, published next to a
  * comment it was never replying to.
  *
- * A page with no comments renders as an empty container. Wording an empty state
- * is a design decision that belongs to the embed and the theming contract
- * (#5, #6); making it here would make it once, in one language, for every site.
+ * A page with nothing to show renders the invitation instead of an empty list —
+ * an empty `<ol>` is markup describing a list that is not there, and a reader
+ * sees nothing at all. Its words come from `strings`, which defaults to English;
+ * they are the only prose this renderer produces, and they do not live at this
+ * call site so that a second language is a table rather than a rewrite.
+ *
+ * `strings` is a parameter and not a module-level setting, because this function
+ * is pure and has to stay that way: the v1.1 paths call it from a build and from
+ * a streaming rewriter, and a renderer reading hidden state renders differently
+ * depending on who called it last.
  *
  * One pass to group, one pass to render — no work that grows faster than the
  * number of comments, because the page read is not yet capped (#27).
  * Enforced by test/worker/render/comments.test.ts.
  */
-export function renderComments(comments: readonly RenderableComment[]): string {
+export function renderComments(
+  comments: readonly RenderableComment[],
+  strings: CommentStrings = ENGLISH_STRINGS,
+): string {
   const roots: RenderableComment[] = []
   const repliesByParent = new Map<number, RenderableComment[]>()
 
@@ -135,6 +157,12 @@ export function renderComments(comments: readonly RenderableComment[]): string {
     const siblings = repliesByParent.get(comment.parentId)
     if (siblings === undefined) repliesByParent.set(comment.parentId, [comment])
     else siblings.push(comment)
+  }
+
+  // Empty when nothing survived grouping, not only when nothing arrived: a page
+  // of orphaned replies has no conversation to show either.
+  if (roots.length === 0) {
+    return `<p class="charcha-empty">${escapeHtml(strings.emptyState)}</p>`
   }
 
   const out = ['<ol class="charcha-comments">']
