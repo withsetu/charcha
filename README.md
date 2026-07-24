@@ -15,13 +15,29 @@ readers in order to comment.
   indefinitely.
 - **No reader accounts** — a name and an optional email. No sign-up, no social
   login.
-- **No cookies** — nothing is stored in the reader's browser by default, so a site
-  using Charcha has nothing new to disclose.
+- **No cookies, ever** — nothing is stored in the reader's browser at all, so a site
+  using Charcha has nothing new to disclose. Not a default that can be switched:
+  anything that appears to need reader-side storage needs a different design.
 - **Invisible on the page** — the widget inherits the host site's typography and
   colours, including dark mode.
 - **Spam defence that runs locally** — layered heuristics and an on-device
   classifier by default. Third-party spam services are optional and off by
   default, because they mean sending reader data elsewhere.
+
+## Documentation
+
+Written for the parts that exist; [docs/](docs/) says plainly what is not built yet.
+
+- [Will this stay free?](docs/free-tier.md) — the free-tier ceilings in plain
+  language, with a worked example
+- [Theming](docs/theming.md) — the HTML and class names Charcha emits, and how to
+  style them
+- [How a URL becomes a comment thread](docs/thread-identity.md) — which parts of a
+  page address decide where a comment lands
+
+Reporting a security problem: [SECURITY.md](SECURITY.md). Please do not open a public
+issue for one — this repository is public and every installation runs in someone
+else's Cloudflare account.
 
 ## Status
 
