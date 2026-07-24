@@ -2,7 +2,7 @@ dist/
 coverage/
 .wrangler/
 node_modules/
-package-lock.json
+pnpm-lock.yaml
 src/worker-configuration.d.ts
 
 # Prose is hand-wrapped at 80 columns and its tables are hand-aligned; Prettier

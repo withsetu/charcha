@@ -110,7 +110,9 @@ describe('checkWorkflows', () => {
   it('passes a workflow whose actions are all SHA-pinned and commented', async () => {
     await writeWorkflow(
       'ci.yml',
-      workflow(`      - uses: actions/checkout@${SHA} # v7.0.1\n      - run: npm ci`),
+      workflow(
+        `      - uses: actions/checkout@${SHA} # v7.0.1\n      - run: pnpm install --frozen-lockfile`,
+      ),
     )
 
     const result = await checkWorkflows({ cwd })
@@ -192,7 +194,7 @@ describe('checkWorkflows', () => {
   })
 
   it('fails when the workflows reference no actions, so the regex silently matching nothing is visible', async () => {
-    await writeWorkflow('ci.yml', workflow('      - run: npm ci'))
+    await writeWorkflow('ci.yml', workflow('      - run: pnpm install --frozen-lockfile'))
 
     const result = await checkWorkflows({ cwd })
 

@@ -23,46 +23,68 @@ jobs:
       # Pinned to full commit SHAs, not tags: a tag can be re-pointed by anyone
       # who gains write access to the action, and these steps run with this
       # repository's token. .github/dependabot.yml keeps the SHAs and the
-      # trailing version comments current. Enforced by `npm run check:actions`.
+      # trailing version comments current. Enforced by `pnpm check:actions`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Before setup-node, because `cache: pnpm` resolves the pnpm store path by
+      # running pnpm — with no pnpm on PATH that step fails outright. This is
+      # also the action that installs the package manager every later
+      # supply-chain control in this job depends on, so it runs first.
+      #
+      # No `version:` input on purpose. It is "optional when there is a
+      # packageManager field in the package.json", and package.json is where
+      # this project pins pnpm — a second copy of the version here is a second
+      # thing to keep in step, and drift between the two is the class of bug
+      # #52 exists to close.
+      # Source: https://github.com/pnpm/action-setup#inputs
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
-          cache: npm
+          node-version-file: .nvmrc
+          cache: pnpm
 
-      - run: npm ci
+      # `--frozen-lockfile` is `npm ci`'s guarantee: install exactly the
+      # lockfile, fail rather than resolve. It is already the default in CI, and
+      # stated anyway so the guarantee does not depend on pnpm's CI detection.
+      - run: pnpm install --frozen-lockfile
 
       - name: Worker types are current
-        run: npm run types:check
+        run: pnpm types:check
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Lint
-        run: npm run lint
+        run: pnpm lint
 
       - name: Format
-        run: npm run format:check
+        run: pnpm format:check
 
       - name: Test
-        run: npm test
+        run: pnpm test
 
       - name: Embed bundle budget
-        run: npm run check:size
+        run: pnpm check:size
+
+      # A stray `npm install` recreates the platform-tainted package-lock.json
+      # that #52 removed, and it fails on the Linux runner rather than on the
+      # macOS machine that produced it. Cheap to check, expensive to discover.
+      - name: One lockfile, and it is pnpm's
+        run: pnpm check:lockfile
 
       - name: Dependency licences
-        run: npm run check:licences
+        run: pnpm check:licences
 
       - name: Actions are SHA-pinned
-        run: npm run check:actions
+        run: pnpm check:actions
 
       # Two thresholds, not one: the production tree blocks at `low` because it
       # is what every self-deployer runs, and the dev tree blocks at `high`
       # because a gate that fires on a low-severity transitive dev advisory is a
       # gate people learn to route around. Reasoning in full on issue #23.
       #
-      # Last in the job, and the only step beyond `npm ci` that needs the
+      # Last in the job, and the only step beyond the install that needs the
       # network: a registry outage should not mask a real failure above it.
       - name: Dependency audit
-        run: npm run check:audit
+        run: pnpm check:audit
