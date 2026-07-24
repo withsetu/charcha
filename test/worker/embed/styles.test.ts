@@ -95,7 +95,7 @@ describe('the three styling modes', () => {
     expect(TOKENS.startsWith(INHERIT)).toBe(true)
   })
 
-  it('tokens adds an override hook for each of the twelve properties, and no more', () => {
+  it('tokens adds an override hook for each declared property, and no more', () => {
     const overrides = TOKENS.slice(INHERIT.length)
     for (const token of OVERRIDABLE_TOKENS) {
       expect(overrides, `missing hook for ${token}`).toContain(`var(${token}`)
@@ -104,8 +104,29 @@ describe('the three styling modes', () => {
     expect(new Set(hooks).size).toBe(OVERRIDABLE_TOKENS.length)
   })
 
-  it('names twelve tokens, all prefixed', () => {
-    expect(OVERRIDABLE_TOKENS.length).toBe(12)
+  it('names exactly these tokens, all prefixed', () => {
+    // Written out rather than counted. An owner's stylesheet sets these by name, so
+    // adding or renaming one is a change to a published contract and belongs in a
+    // diff somebody reads — the same rule the class names live under.
+    //
+    // Thirteen, where #6's design note said twelve: `--charcha-control-line` was
+    // added after measuring a real render, where one line token could not hold both
+    // a decorative separator and a WCAG 1.4.11 control boundary. See styles.ts.
+    expect([...OVERRIDABLE_TOKENS]).toEqual([
+      '--charcha-muted',
+      '--charcha-line',
+      '--charcha-control-line',
+      '--charcha-surface',
+      '--charcha-surface-strong',
+      '--charcha-radius',
+      '--charcha-gap',
+      '--charcha-pad',
+      '--charcha-indent',
+      '--charcha-font-size',
+      '--charcha-line-height',
+      '--charcha-focus',
+      '--charcha-focus-width',
+    ])
     for (const token of OVERRIDABLE_TOKENS) expect(token.startsWith('--charcha-')).toBe(true)
   })
 

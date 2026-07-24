@@ -122,6 +122,12 @@ function showStatus(widget: Widget, text: string, withRetry: boolean): void {
  * Roots only. The schema stops at two levels (migrations/0001_initial.sql) and the
  * renderer drops anything deeper, so a Reply on a reply would offer the reader
  * something the server will refuse.
+ *
+ * It goes directly beneath the comment's own body and *above* that comment's
+ * replies. Found by looking at a render: appended to the end of the element, it
+ * lands under the last reply and reads as belonging to the reply rather than to the
+ * comment it actually answers — which is the one thing a reader must not be wrong
+ * about before they start typing.
  */
 function addReplyButtons(widget: Widget): void {
   const list = widget.thread.querySelector('.charcha-comments')
@@ -129,7 +135,10 @@ function addReplyButtons(widget: Widget): void {
   for (const comment of Array.from(list.children)) {
     if (!comment.classList.contains('charcha-comment')) continue
     if (comment.querySelector(':scope > .charcha-comment-actions') !== null) continue
-    comment.appendChild(fragment(replyButtonMarkup()))
+    const replies = comment.querySelector(':scope > .charcha-replies')
+    const actions = fragment(replyButtonMarkup())
+    if (replies === null) comment.appendChild(actions)
+    else comment.insertBefore(actions, replies)
   }
 }
 
@@ -218,10 +227,12 @@ function insertOwnComment(widget: Widget, html: string, pending: boolean): void 
       if (replies === null) {
         replies = document.createElement('ol')
         replies.className = 'charcha-replies'
-        // Before the reply affordance, so the button stays at the bottom of the
-        // comment it belongs to rather than above its own replies.
+        // Directly after the Reply button, matching addReplyButtons — and never
+        // simply appended, because the composer is itself mounted inside this
+        // element right now and the first reply would land underneath it.
         const actions = parent.querySelector(':scope > .charcha-comment-actions')
-        parent.insertBefore(replies, actions)
+        if (actions === null) parent.appendChild(replies)
+        else actions.after(replies)
       }
       replies.appendChild(comment)
     }

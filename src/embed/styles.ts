@@ -24,17 +24,27 @@
 import type { StylesMode } from './config'
 
 /**
- * The twelve custom properties an owner may override in `tokens` mode (#6).
+ * The custom properties an owner may override in `tokens` mode (#6).
  *
  * A published contract, like the class names: an owner's stylesheet sets these by
  * name, so removing or renaming one breaks their site on their next deploy. The
  * internal `--cc-*` properties the sheet actually reads are deliberately *not* this
  * list — they are free to move.
+ *
+ * **Thirteen, where #6's design note said twelve.** The thirteenth is
+ * `--charcha-control-line`, and it exists because measuring the rendered widget
+ * found a real WCAG 2.1 AA failure: a single line token cannot serve both jobs. A
+ * rule between two comments is decoration and looks right at 20% of the host's
+ * colour, while the border of a text input is what identifies the control, which
+ * WCAG 1.4.11 requires at 3:1 — and 20% measured 1.52:1 against a light host.
+ * Collapsing the two either fails 1.4.11 or drags the separators up to a weight
+ * they should not have.
  * Enforced by test/worker/embed/styles.test.ts.
  */
 export const OVERRIDABLE_TOKENS = [
   '--charcha-muted',
   '--charcha-line',
+  '--charcha-control-line',
   '--charcha-surface',
   '--charcha-surface-strong',
   '--charcha-radius',
@@ -54,16 +64,33 @@ export const OVERRIDABLE_TOKENS = [
  * overlay declares them again behind `var(--charcha-*, …)`. Written once so the two
  * cannot drift into disagreeing about what the default is.
  *
- * The muting ratio is 70% rather than something more decorative because it has to
- * hold contrast: mixing currentColor toward transparent always *reduces* the host's
- * own text contrast, so the ratio is chosen to keep muted text readable on any host
- * that is comfortably above the AA floor, and muted is used only for supplementary
- * text — the timestamp and the email hint — which is never the sole carrier of
- * meaning.
+ * Every ratio below is a measurement rather than a taste, because mixing
+ * currentColor toward transparent always *reduces* the host's own text contrast and
+ * the widget cannot see the background it will land on. The two that carry a
+ * requirement were measured in a real browser against a light host
+ * (#1f1d1b on #fdfcfa) and a dark one (#e6e8ea on #0f1216):
+ *
+ *   - 70% muted — 6.17:1 light, 7.85:1 dark. WCAG 1.4.3 needs 4.5:1, and muted is
+ *     used only for supplementary text (timestamp, hint, status) that is never the
+ *     sole carrier of meaning.
+ *   - 55% control line — 3.81:1 light, 5.13:1 dark. WCAG 1.4.11 needs 3:1 for the
+ *     boundary that identifies a control.
+ *
+ * A host whose own text sits at the 4.5:1 floor cannot yield an AA muted colour by
+ * any ratio; that is arithmetic rather than a bug, and `tokens` mode is the answer
+ * for an owner in that position.
  */
 const TOKEN_DEFAULTS: readonly (readonly [string, string, string])[] = [
   ['--cc-muted', '--charcha-muted', 'color-mix(in oklab, currentColor 70%, transparent)'],
+  // Decoration: the rules between comments and beside a blockquote. Not governed by
+  // 1.4.11 — they identify no control and carry no state.
   ['--cc-line', '--charcha-line', 'color-mix(in oklab, currentColor 20%, transparent)'],
+  // The boundary of every input, textarea and button. This is the one 1.4.11 governs.
+  [
+    '--cc-control-line',
+    '--charcha-control-line',
+    'color-mix(in oklab, currentColor 55%, transparent)',
+  ],
   ['--cc-surface', '--charcha-surface', 'color-mix(in oklab, currentColor 5%, transparent)'],
   [
     '--cc-surface-strong',
@@ -134,7 +161,7 @@ function base(): string {
 .charcha-truncated{padding-top:var(--cc-gap);border-top:1px solid var(--cc-line)}
 
 .charcha-comment-actions{margin-top:.5em}
-.charcha-pending{display:inline-block;padding:.05em .5em;border:1px solid var(--cc-line);border-radius:99em;font-size:.75em;font-weight:600;letter-spacing:.02em;text-transform:uppercase}
+.charcha-pending{display:inline-block;padding:.05em .5em;border:1px solid var(--cc-control-line);border-radius:99em;font-size:.75em;font-weight:600;letter-spacing:.02em;text-transform:uppercase}
 
 .charcha-form{display:block;margin:0;padding:var(--cc-pad);border:1px solid var(--cc-line);border-radius:var(--cc-radius)}
 .charcha-reply-header{display:flex;align-items:baseline;justify-content:space-between;gap:.5em;margin-bottom:var(--cc-pad);padding-bottom:var(--cc-pad);border-bottom:1px solid var(--cc-line)}
@@ -145,11 +172,11 @@ function base(): string {
 .charcha-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:var(--cc-pad)}
 .charcha-fields .charcha-field{margin-bottom:0}
 .charcha-label{display:block;margin-bottom:.3em;font-size:.8125em;font-weight:600}
-.charcha-input,.charcha-textarea{display:block;width:100%;padding:.5em .6em;border:1px solid var(--cc-line);border-radius:var(--cc-radius);background:transparent;color:inherit;font:inherit}
+.charcha-input,.charcha-textarea{display:block;width:100%;padding:.5em .6em;border:1px solid var(--cc-control-line);border-radius:var(--cc-radius);background:transparent;color:inherit;font:inherit}
 .charcha-textarea{min-height:7em;resize:vertical}
 .charcha-hint{margin:.35em 0 0;font-size:.75em;color:var(--cc-muted)}
 
-.charcha-toolbar-button,.charcha-retry,.charcha-reply-button,.charcha-cancel-reply,.charcha-submit{padding:.35em .7em;border:1px solid var(--cc-line);border-radius:var(--cc-radius);background:var(--cc-surface);color:inherit;font:inherit;font-size:.8125em;line-height:1.4;cursor:pointer;transition:background-color .12s}
+.charcha-toolbar-button,.charcha-retry,.charcha-reply-button,.charcha-cancel-reply,.charcha-submit{padding:.35em .7em;border:1px solid var(--cc-control-line);border-radius:var(--cc-radius);background:var(--cc-surface);color:inherit;font:inherit;font-size:.8125em;line-height:1.4;cursor:pointer;transition:background-color .12s}
 .charcha-toolbar-button:hover,.charcha-retry:hover,.charcha-reply-button:hover,.charcha-cancel-reply:hover,.charcha-submit:hover{background:var(--cc-surface-strong)}
 .charcha-toolbar-button{min-width:2.25em;font-weight:600}
 .charcha-submit{padding:.55em 1.1em;border-color:currentColor;font-size:1em;font-weight:600}
