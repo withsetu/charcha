@@ -35,6 +35,15 @@ export const COMMENT_CLASS_NAMES = [
 ] as const
 
 /**
+ * Every element this file can emit, alongside the ones renderMarkdown produces.
+ *
+ * Same contract as MARKDOWN_ELEMENTS: adding an element to the markup without
+ * adding it here fails test/worker/render/vocabulary.test.ts, which asserts that
+ * nothing outside the two lists ever reaches the page — whatever the input.
+ */
+export const COMMENT_ELEMENTS = ['ol', 'li', 'div', 'span', 'time'] as const
+
+/**
  * Date's own range, converted to the unix seconds this project stores. Past it,
  * `toISOString` throws — and a renderer that throws on one bad row takes the
  * whole page down with it.

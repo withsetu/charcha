@@ -20,6 +20,29 @@
 import { escapeHtml } from './escape'
 
 /**
+ * Every element this file can emit — the vocabulary, declared rather than
+ * discovered.
+ *
+ * A rule added below that emits anything else fails
+ * test/worker/render/vocabulary.test.ts until this list is widened by hand, and
+ * that widening — sitting in the diff beside the new rule — is the review
+ * prompt. The payload tests can only catch attacks somebody thought of; this is
+ * the list that holds against the ones nobody has.
+ */
+export const MARKDOWN_ELEMENTS = [
+  'p',
+  'br',
+  'strong',
+  'em',
+  'code',
+  'pre',
+  'blockquote',
+  'ul',
+  'li',
+  'a',
+] as const
+
+/**
  * The scheme allowlist. `javascript:`, `data:` and `vbscript:` are the three
  * everyone remembers; the browser knows more URL schemes than this project does,
  * so the rule is what is permitted rather than what is refused.

@@ -2,5 +2,5 @@
 // the same function is what the v1.1 server-rendering paths call.
 
 export { escapeHtml } from './escape'
-export { renderMarkdown } from './markdown'
-export { COMMENT_CLASS_NAMES, renderComments } from './comments'
+export { MARKDOWN_ELEMENTS, renderMarkdown } from './markdown'
+export { COMMENT_CLASS_NAMES, COMMENT_ELEMENTS, renderComments } from './comments'
