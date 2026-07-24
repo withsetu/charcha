@@ -10,7 +10,12 @@ monetisation reasoning in it, or in any issue or PR.
 ## The card — non-negotiables
 
 1. **Issue first.** No dev work without an issue on `withsetu/charcha`. Branch,
-   commits and PR all cite it.
+   commits and PR all cite it. *One exemption, narrow on purpose:* **dependency PRs
+   opened automatically by Dependabot**, which are raised from a published advisory
+   or a version bump and have no issue to cite. This does not extend to bots in
+   general, and emphatically not to agents — every commit in this repository's
+   history was written by an agent under this rule, and reading the exemption that
+   way would delete it.
 2. **Never commit to `main`.** Branch off fresh `origin/main`, ship by push + PR.
    The owner does final UAT before merge — never merge on green tests yourself.
 3. **Green tests are never "done".** Done = driven for real + matches the agreed
