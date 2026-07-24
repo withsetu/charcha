@@ -22,3 +22,7 @@ coverage/
 # which CLAUDE.md forbids in this public repo.
 PRODUCT.md
 .impeccable/
+
+# Product context for the impeccable skill. Strategy and positioning —
+# CLAUDE.md forbids publishing it, and this repo is public.
+PRODUCT.md
