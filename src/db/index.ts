@@ -95,9 +95,35 @@ interface QueuedCommentRow extends CommentRow {
 const RENDERABLE_COLUMNS = 'id, parent_id, depth, author_name, body, by_owner, created_at'
 
 /**
+ * The most comments one page read will ever return, and the only cap on the only
+ * unauthenticated read in this project (#27).
+ *
+ * It is a memory bound first. `body` is `CHECK (length(body) BETWEEN 1 AND 10000)`,
+ * so an uncapped page of 10,000 approved comments is a ~100 MB result set assembled
+ * inside a 128 MB isolate, and the renderer then builds an HTML string from it. The
+ * failure is an OOM on the read path, which takes the page down for every reader
+ * rather than for the one who asked. At 500 the worst case is ~5 MB of rows and
+ * roughly twice that with the rendered string — a long way inside the isolate even
+ * if every body is at its own maximum.
+ *
+ * It is a row-read bound second: 501 rows is the most any single page load can spend
+ * of the 5M rows/day the free tier allows across the whole account.
+ *
+ * And it is a product number third. A page carrying more than 500 approved comments
+ * is past the size of essentially any blog conversation, so the cap is a safety net
+ * rather than something a reader meets — which is what makes an honest notice
+ * affordable where pagination would not be.
+ * Enforced by test/worker/db/page-limit.test.ts.
+ */
+export const MAX_PAGE_COMMENTS = 500
+
+/**
  * The page read, as a constant so that the query plan can be asserted against the
  * statement this project actually sends rather than against a copy of it in a test.
- * Enforced by test/worker/db/query-plan.test.ts.
+ *
+ * `?2` is bound by listPageComments and by nothing else — see the note there for
+ * why this cap, unlike the moderation queue's, takes nothing from its caller.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/page-limit.test.ts.
  */
 export const PAGE_COMMENTS_SQL = `select ${RENDERABLE_COLUMNS.split(', ')
   .map((column) => `c.${column}`)
@@ -110,7 +136,8 @@ export const PAGE_COMMENTS_SQL = `select ${RENDERABLE_COLUMNS.split(', ')
         c.parent_id is null
         or exists (select 1 from comments p where p.id = c.parent_id and p.status = 'approved')
       )
-    order by c.created_at, c.id`
+    order by c.created_at, c.id
+    limit ?2`
 
 function toThread(row: ThreadRow): Thread {
   return {
@@ -207,6 +234,23 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
 }
 
 /**
+ * A page's conversation, and whether it is the whole of it.
+ *
+ * `truncated` is part of the result rather than something the caller infers from
+ * `comments.length`, because a page holding exactly MAX_PAGE_COMMENTS comments and
+ * a page holding more are different pages, and only this read can tell them apart.
+ * A caller left to compare lengths would put "showing the first 500" on a complete
+ * conversation.
+ * Enforced by test/worker/db/page-limit.test.ts.
+ */
+export interface PageComments {
+  /** At most MAX_PAGE_COMMENTS, oldest first, roots and replies interleaved. */
+  comments: RenderableComment[]
+  /** True when the page has approved comments this read did not return. */
+  truncated: boolean
+}
+
+/**
  * The page read: one statement, no writes, for the whole conversation — roots and
  * replies together, ordered so the caller can assemble the tree without sorting.
  *
@@ -216,18 +260,30 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
  * read path means traffic exhausts the daily writes and nobody can comment for the
  * rest of the day. A page nobody has commented on has no thread row at all, and
  * reads as empty.
- * Enforced by test/worker/db/comments.test.ts.
+ *
+ * **It takes no page size, and that is the contrast with listModerationQueue.**
+ * That one accepts a limit and clamps it silently, because its caller is the
+ * signed-in owner paginating their own queue and an error there empties the screen
+ * of the one person doing the moderating. This is the public, unauthenticated read:
+ * there is no legitimate caller who needs a larger page, so the safest parameter is
+ * the one that does not exist. A cap that cannot be passed cannot be forgotten, and
+ * it holds for the v1.1 server-rendering paths without their having to know it is
+ * there.
+ *
+ * It asks for one row past the cap so that "exactly full" and "there is more" are
+ * different answers, and returns at most the cap either way.
+ * Enforced by test/worker/db/comments.test.ts and test/worker/db/page-limit.test.ts.
  */
-export async function listPageComments(
-  db: D1Database,
-  pageKey: string,
-): Promise<RenderableComment[]> {
+export async function listPageComments(db: D1Database, pageKey: string): Promise<PageComments> {
   const { results } = await db
     .prepare(PAGE_COMMENTS_SQL)
-    .bind(pageKey)
+    .bind(pageKey, MAX_PAGE_COMMENTS + 1)
     .all<Omit<CommentRow, 'thread_id' | 'status' | 'moderated_at'>>()
 
-  return results.map(toRenderable)
+  return {
+    comments: results.slice(0, MAX_PAGE_COMMENTS).map(toRenderable),
+    truncated: results.length > MAX_PAGE_COMMENTS,
+  }
 }
 
 /**

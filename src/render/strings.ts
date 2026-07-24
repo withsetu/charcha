@@ -26,6 +26,14 @@
 export interface CommentStrings {
   /** Shown in place of the comment list when a page has no comments yet. */
   emptyState: string
+  /**
+   * Shown below the list when the page read returned fewer comments than the page
+   * has (#27). Takes the number shown rather than interpolating it into a
+   * placeholder token, so a translation cannot put the count in a grammatically
+   * impossible position — and so a table missing it is a type error rather than
+   * the word `undefined` on somebody's page.
+   */
+  truncatedNotice: (shown: number) => string
 }
 
 /**
@@ -40,4 +48,7 @@ export interface CommentStrings {
  */
 export const ENGLISH_STRINGS: CommentStrings = {
   emptyState: 'Be the first to comment',
+  // Says what was shown and admits there is more, in one sentence. Silence here
+  // would be the page quietly claiming a cut-short conversation is the whole one.
+  truncatedNotice: (shown) => `Showing the first ${shown} comments of a longer conversation.`,
 }

@@ -237,7 +237,7 @@ describe('listPageComments', () => {
   it('returns approved comments oldest first, replies included', async () => {
     const { thread, root, reply } = await seedConversation()
 
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).toEqual([root.id, reply.id])
     expect(comments.map((comment) => comment.depth)).toEqual([0, 1])
@@ -246,7 +246,7 @@ describe('listPageComments', () => {
   it('does not return comments that are still held for review', async () => {
     const { thread, pending } = await seedConversation()
 
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).not.toContain(pending.id)
   })
@@ -255,7 +255,7 @@ describe('listPageComments', () => {
     const { thread, root } = await seedConversation()
     await setCommentStatus(db, root.id, 'spam', t0 + 40)
 
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).not.toContain(root.id)
   })
@@ -283,7 +283,7 @@ describe('listPageComments', () => {
   it('never hands the renderer an email address or an IP hash', async () => {
     const { thread } = await seedConversation()
 
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments).not.toHaveLength(0)
     for (const comment of comments) {
@@ -295,7 +295,7 @@ describe('listPageComments', () => {
   })
 
   it('renders a page nobody has commented on as empty, and creates nothing', async () => {
-    const comments = await listPageComments(db, '/a-page-with-no-conversation')
+    const { comments } = await listPageComments(db, '/a-page-with-no-conversation')
 
     expect(comments).toEqual([])
     const threads = await db.prepare('select count(*) as count from threads').first<{
@@ -361,7 +361,7 @@ describe('hiding a comment', () => {
     const { thread, root } = await seedRootAndReply()
 
     await setCommentStatus(db, root.id, 'spam', t0 + 30)
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments).toEqual([])
   })
@@ -388,7 +388,7 @@ describe('hiding a comment', () => {
 
     await setCommentStatus(db, root.id, 'deleted', t0 + 30)
 
-    expect(await listPageComments(db, thread.pageKey)).toEqual([])
+    expect((await listPageComments(db, thread.pageKey)).comments).toEqual([])
   })
 
   it('never shows a reply whose parent is still waiting for review', async () => {
@@ -410,7 +410,7 @@ describe('hiding a comment', () => {
     })
     await setCommentStatus(db, reply.id, 'approved', t0 + 20)
 
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments).toEqual([])
   })
@@ -434,7 +434,7 @@ describe('hiding a comment', () => {
     })
 
     await setCommentStatus(db, root.id, 'approved', t0 + 20)
-    const comments = await listPageComments(db, thread.pageKey)
+    const { comments } = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).toEqual([root.id])
     expect(comments.map((comment) => comment.id)).not.toContain(reply.id)

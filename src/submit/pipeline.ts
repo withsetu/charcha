@@ -12,8 +12,7 @@ import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
 import { getOrCreateThread, insertComment } from '../db'
 import type { StoredComment } from '../db'
-import { derivePageKey } from '../page-key'
-import type { PageKeyRejection } from '../page-key'
+import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { computeBodyHash } from './hash'
 import { parseComment } from './schema'
 import type { SpamCheck } from './spam'
@@ -46,24 +45,6 @@ export type SubmitResult =
  * bot never sees this because a real submission is not rejected here.
  */
 const SPAM_REJECTED_MESSAGE = 'This comment could not be posted.'
-
-// A page URL the embed reported that derivePageKey refused. The messages are about
-// what the reader can see and fix, and never name the internal reason token.
-function messageForPageKeyRejection(reason: PageKeyRejection): string {
-  switch (reason) {
-    case 'missing':
-      return 'This page cannot accept comments yet.'
-    case 'too-long':
-    case 'key-too-long':
-      return 'That page address is too long.'
-    case 'invalid-thread-id':
-      return 'That thread id is not valid.'
-    case 'control-characters':
-    case 'not-a-url':
-    case 'unsupported-scheme':
-      return 'That page address is not valid.'
-  }
-}
 
 export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<SubmitResult> {
   const parsed = parseComment(input)

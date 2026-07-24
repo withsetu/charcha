@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RenderableComment } from '../../../src/db'
+import type { CommentStrings } from '../../../src/render'
 import { COMMENT_CLASS_NAMES, ENGLISH_STRINGS, renderComments } from '../../../src/render'
 import { attributeNames, parseElements, tagNames } from './parse'
 
@@ -15,6 +16,15 @@ function comment(overrides: Partial<RenderableComment> & { id: number }): Render
     createdAt: t0,
     ...overrides,
   }
+}
+
+/**
+ * A complete strings table with one slot replaced. Every key is required, so a
+ * table missing one is a type error rather than the word `undefined` on a page —
+ * which means a test overriding a single string has to supply the rest.
+ */
+function strings(overrides: Partial<CommentStrings>): CommentStrings {
+  return { ...ENGLISH_STRINGS, ...overrides }
 }
 
 function classNamesIn(html: string): Set<string> {
@@ -216,7 +226,7 @@ describe('a page nobody has commented on', () => {
 
 describe('the words it shows a reader', () => {
   it('takes them from a table, so a second language is a table and not a rewrite', () => {
-    const html = renderComments([], { emptyState: 'Soyez le premier à commenter' })
+    const html = renderComments([], strings({ emptyState: 'Soyez le premier à commenter' }))
 
     expect(html).toBe('<p class="charcha-empty">Soyez le premier à commenter</p>')
   })
@@ -226,24 +236,72 @@ describe('the words it shows a reader', () => {
   })
 
   it('escapes them, because a translation is untrusted input the day one is contributed', async () => {
-    const html = renderComments([], { emptyState: '<script>alert(1)</script>' })
+    const html = renderComments([], strings({ emptyState: '<script>alert(1)</script>' }))
 
     expect((await tagNames(html)).has('script')).toBe(false)
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
   })
 
   it('escapes a translation that tries to reopen the attribute it sits beside', async () => {
-    const html = renderComments([], { emptyState: '"><img src=x onerror=alert(1)>' })
+    const html = renderComments([], strings({ emptyState: '"><img src=x onerror=alert(1)>' }))
 
     expect((await tagNames(html)).has('img')).toBe(false)
     expect([...(await attributeNames(html))].filter((name) => name.startsWith('on'))).toEqual([])
   })
 
   it('stays pure: the table is a parameter, never a global', () => {
-    const french = { emptyState: 'Aucun commentaire' }
+    const french = strings({ emptyState: 'Aucun commentaire' })
 
     expect(renderComments([], french)).toContain('Aucun commentaire')
     expect(renderComments([])).toContain('Be the first to comment')
+  })
+})
+
+describe('a conversation the page read had to cut short', () => {
+  // #27 caps the page read, and a cap the reader cannot see is a page that lies
+  // about the conversation. The renderer is told, rather than guessing from the
+  // row count, because only the caller knows whether there was another row.
+  it('says how much it is showing, below the comments it showed', () => {
+    const html = renderComments([comment({ id: 1 })], undefined, { truncated: true })
+
+    expect(html).toContain('charcha-truncated')
+    expect(html.indexOf('charcha-truncated')).toBeGreaterThan(html.indexOf('charcha-comments'))
+  })
+
+  it('names the number it showed, so the notice is checkable rather than vague', () => {
+    const html = renderComments([comment({ id: 1 }), comment({ id: 2 })], undefined, {
+      truncated: true,
+    })
+
+    expect(html).toContain('2')
+  })
+
+  it('says nothing at all when the whole conversation fits', () => {
+    expect(renderComments([comment({ id: 1 })], undefined, { truncated: false })).toBe(
+      renderComments([comment({ id: 1 })]),
+    )
+  })
+
+  it('takes its words from the strings table like every other sentence', () => {
+    const french: CommentStrings = {
+      emptyState: 'Aucun commentaire',
+      truncatedNotice: (shown) => `Affichage des ${shown} premiers commentaires.`,
+    }
+
+    const html = renderComments([comment({ id: 1 })], french, { truncated: true })
+
+    expect(html).toContain('Affichage des 1 premiers commentaires.')
+  })
+
+  it('escapes that translation, because a contributed table is untrusted input', async () => {
+    const html = renderComments(
+      [comment({ id: 1 })],
+      { emptyState: 'x', truncatedNotice: () => '<script>alert(1)</script>' },
+      { truncated: true },
+    )
+
+    expect((await tagNames(html)).has('script')).toBe(false)
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
   })
 })
 
@@ -252,18 +310,18 @@ describe('the class names it emits, which are a public API', () => {
   // directly. Renaming one is a breaking change for every deployment, and this
   // test is what makes that a failing build rather than a silent one.
   it('is exactly the documented set, and nothing else', () => {
-    // Both states, because the empty page emits a class the populated one never
-    // does — and a name that only one render can produce is still a name a
-    // stylesheet depends on.
+    // Every state, because each emits a class the others never do — and a name
+    // that only one render can produce is still a name a stylesheet depends on.
     const populated = renderComments([
       comment({ id: 1, byOwner: true, body: '**b** `c`\n\n- d\n\n> e\n\n```\nf\n```' }),
       comment({ id: 2, parentId: 1, depth: 1, body: '[g](https://ok.example/)' }),
     ])
     const empty = renderComments([])
+    const truncated = renderComments([comment({ id: 1 })], undefined, { truncated: true })
 
-    expect(new Set([...classNamesIn(populated), ...classNamesIn(empty)])).toEqual(
-      new Set(COMMENT_CLASS_NAMES),
-    )
+    expect(
+      new Set([...classNamesIn(populated), ...classNamesIn(empty), ...classNamesIn(truncated)]),
+    ).toEqual(new Set(COMMENT_CLASS_NAMES))
   })
 
   it('prefixes every one of them, so nothing collides with the host page', () => {

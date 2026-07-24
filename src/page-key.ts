@@ -72,6 +72,35 @@ export type PageKeyResult =
   | { ok: false; reason: PageKeyRejection }
 
 /**
+ * What a reader is told when the page address their embed reported was refused.
+ *
+ * It lives beside the rejection type rather than at a call site, so that adding a
+ * reason is a type error here rather than a silent fallback message on somebody's
+ * page — and so the read path (#46) and the submission path (#7) cannot drift into
+ * describing the same refusal two different ways.
+ *
+ * The messages name what the reader can see and fix, never the internal reason
+ * token: `unsupported-scheme` is a fact about this Worker's allowlist, not
+ * something a reader did.
+ * Enforced by test/worker/read/route.test.ts and test/worker/submit/pipeline.test.ts.
+ */
+export function messageForPageKeyRejection(reason: PageKeyRejection): string {
+  switch (reason) {
+    case 'missing':
+      return 'This page cannot accept comments yet.'
+    case 'too-long':
+    case 'key-too-long':
+      return 'That page address is too long.'
+    case 'invalid-thread-id':
+      return 'That thread id is not valid.'
+    case 'control-characters':
+    case 'not-a-url':
+    case 'unsupported-scheme':
+      return 'That page address is not valid.'
+  }
+}
+
+/**
  * Rejected outright rather than percent-encoded. The URL parser strips ASCII tab
  * and newline before it parses (WHATWG URL §4.4), so `https://exa\nmple.com/p`
  * would otherwise become a perfectly ordinary key — the value in the log and the
