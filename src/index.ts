@@ -8,8 +8,8 @@ import {
   withCors,
 } from './cors'
 import { handleRead } from './read/route'
+import { createSpamCheck } from './spam'
 import { handleSubmit } from './submit/route'
-import { allowAllSpamCheck } from './submit/spam'
 
 // Exported so tests can register throwaway routes on the same instance the Worker
 // serves — the default export's `fetch` is this app's. See test/worker/errors.test.ts.
@@ -29,8 +29,9 @@ const SIGNIFICANT_PARAMS: readonly string[] = []
 
 // The public, unauthenticated write endpoint — the primary surface, and the one
 // card rule 5 is about. Validation, size caps and the spam seam all live behind
-// handleSubmit; the spam layers themselves (#8) replace allowAllSpamCheck without
-// touching this line. Enforced by test/worker/submit/route.test.ts.
+// handleSubmit; the layers themselves are src/spam (#8), assembled per request
+// because their configuration is two optional secrets on `env`.
+// Enforced by test/worker/submit/route.test.ts and test/worker/spam/route.test.ts.
 app.post('/comments', async (c) => {
   // Checked on the real request, not only at the preflight. `text/plain` makes this
   // POST a CORS-simple request that no browser preflights, so a policy enforced only
@@ -39,7 +40,7 @@ app.post('/comments', async (c) => {
   if (isUnlistedBrowserOrigin(decision)) return unlistedOriginResponse()
 
   const response = await handleSubmit(c, {
-    spamCheck: allowAllSpamCheck,
+    spamCheck: createSpamCheck(c.env),
     significantParams: SIGNIFICANT_PARAMS,
   })
   return withCors(response, decision.allowedOrigin)

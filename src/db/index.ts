@@ -536,3 +536,96 @@ export async function purgeExpiredIpHashes(
   const { meta } = await db.prepare(PURGE_IP_HASH_SQL).bind(cutoff).run()
   return { purged: meta.changes, cutoff, retentionDays }
 }
+
+/**
+ * The three reads the spam layers make (#8). They are here rather than in
+ * src/spam/ for the reason the file header gives: every query lives in one place,
+ * so the 50-per-invocation budget is countable without reading the whole Worker.
+ *
+ * All three are counts or an existence check, and none of them scans a table:
+ * the submission path issues the same three statements on a page with three
+ * comments and on a page with three thousand.
+ *
+ * **The statement count is constant; the row-read cost of the middle one is
+ * not.** `RECENT_ON_PAGE_SQL` has no `status` predicate, and the only index that
+ * starts at `thread_id` is `comments_by_thread (thread_id, status, created_at,
+ * id)` — so SQLite seeks the thread and then filters its entries on
+ * `created_at`, reading one index entry per comment on the page. That is bounded
+ * by the page rather than by the database, but it is not the seek the other two
+ * get. Closing it needs a `(thread_id, created_at)` index and therefore a
+ * migration, which is #67.
+ * Enforced by test/worker/spam/query-plan.test.ts, which asserts the constrained
+ * columns of each plan rather than only the absence of the word SCAN.
+ */
+
+/**
+ * Matches `comments_by_ip`, which is `(ip_hash, created_at) WHERE ip_hash IS NOT
+ * NULL` — so a row whose hash #19's sweep already nulled is not in the index and
+ * costs nothing to skip. That is also why an expired hash cannot rate-limit
+ * anybody: it is gone, by design.
+ */
+export const RECENT_BY_IP_SQL = `select count(*) as n
+     from comments
+    where ip_hash = ?1
+      and created_at >= ?2`
+
+export async function countRecentCommentsByIpHash(
+  db: D1Database,
+  ipHash: string,
+  since: number,
+): Promise<number> {
+  const row = await db.prepare(RECENT_BY_IP_SQL).bind(ipHash, since).first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+/**
+ * Takes the page key rather than a thread id, because the submission path runs
+ * the spam layers *before* getOrCreateThread — resolving the thread first would
+ * let a rejected spammer spend a row write. A page with no thread row counts zero.
+ */
+export const RECENT_ON_PAGE_SQL = `select count(*) as n
+     from comments c
+     join threads t on t.id = c.thread_id
+    where t.page_key = ?1
+      and c.created_at >= ?2`
+
+export async function countRecentCommentsOnPage(
+  db: D1Database,
+  pageKey: string,
+  since: number,
+): Promise<number> {
+  const row = await db.prepare(RECENT_ON_PAGE_SQL).bind(pageKey, since).first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+/**
+ * Whether this exact body has been posted to this page since `since`.
+ *
+ * `limit 1` and no count: the question is existence, and a spam blast of the same
+ * body should not cost one row read per copy already stored. Matches
+ * `comments_by_body`, which is `(thread_id, body_hash)`.
+ *
+ * Status is deliberately not filtered — a body already marked spam is the one
+ * most worth refusing a second time. `since` is what keeps that from becoming a
+ * permanent, invisible ban on a piece of text: see DUPLICATE_WINDOW_SECONDS.
+ */
+export const DUPLICATE_BODY_SQL = `select 1 as hit
+     from comments c
+     join threads t on t.id = c.thread_id
+    where t.page_key = ?1
+      and c.body_hash = ?2
+      and c.created_at >= ?3
+    limit 1`
+
+export async function hasDuplicateBodyOnPage(
+  db: D1Database,
+  pageKey: string,
+  bodyHash: string,
+  since: number,
+): Promise<boolean> {
+  const row = await db
+    .prepare(DUPLICATE_BODY_SQL)
+    .bind(pageKey, bodyHash, since)
+    .first<{ hit: number }>()
+  return row !== null
+}
