@@ -11,7 +11,8 @@
 -- Enforced by test/worker/db/limits.test.ts.
 CREATE TABLE threads (
   id         INTEGER PRIMARY KEY,
-  page_key   TEXT    NOT NULL UNIQUE, -- canonical page identity, sent by the embed
+  page_key   TEXT    NOT NULL UNIQUE, -- canonical page identity, derived in the Worker
+                                      -- by src/page-key.ts, never sent by the embed
   page_url   TEXT,                    -- last seen absolute URL, for the dashboard
   title      TEXT,                    -- last seen page title, for the queue
   created_at INTEGER NOT NULL,
