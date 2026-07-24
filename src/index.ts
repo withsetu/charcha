@@ -1,6 +1,14 @@
 import { Hono } from 'hono'
+import { handleSubmit } from './submit/route'
+import { allowAllSpamCheck } from './submit/spam'
 
 const app = new Hono<{ Bindings: Env }>()
+
+// The public, unauthenticated write endpoint — the primary surface, and the one
+// card rule 5 is about. Validation, size caps and the spam seam all live behind
+// handleSubmit; the spam layers themselves (#8) replace allowAllSpamCheck without
+// touching this line. Enforced by test/worker/submit/route.test.ts.
+app.post('/comments', (c) => handleSubmit(c, { spamCheck: allowAllSpamCheck }))
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a
