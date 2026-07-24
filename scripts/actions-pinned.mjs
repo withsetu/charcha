@@ -19,6 +19,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const WORKFLOW_DIR = '.github/workflows'
+const ACTIONS_DIR = '.github/actions'
 
 // `uses:` as a YAML key, with an optional list dash and optional quoting, plus
 // whatever trails it on the line so the version comment can be inspected.
@@ -90,6 +91,35 @@ export function inspectUse(use, file) {
 }
 
 /**
+ * Every `action.yml` / `action.yaml` beneath `.github/actions`, at any depth,
+ * as paths relative to `cwd`. Absent directory means an empty list — composite
+ * actions are optional, unlike workflows.
+ *
+ * @param {string} cwd
+ * @param {string} dir
+ * @returns {Promise<string[]>}
+ */
+export async function findActionDefinitions(cwd, dir) {
+  let entries
+  try {
+    entries = await readdir(join(cwd, dir), { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const found = []
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = `${dir}/${entry.name}`
+    if (entry.isDirectory()) {
+      found.push(...(await findActionDefinitions(cwd, path)))
+    } else if (entry.name === 'action.yml' || entry.name === 'action.yaml') {
+      found.push(path)
+    }
+  }
+  return found
+}
+
+/**
  * @param {{ cwd?: string, dir?: string }} options
  * @returns {Promise<{ ok: boolean, checked: number, files: string[], violations: Array<{ status: string, message: string }> }>}
  */
@@ -114,9 +144,9 @@ export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR }
     }
   }
 
-  const files = names.filter((name) => name.endsWith('.yml') || name.endsWith('.yaml')).sort()
+  const workflows = names.filter((name) => name.endsWith('.yml') || name.endsWith('.yaml')).sort()
 
-  if (files.length === 0) {
+  if (workflows.length === 0) {
     return {
       ok: false,
       checked: 0,
@@ -130,14 +160,25 @@ export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR }
     }
   }
 
+  // Local composite actions are exempt as *references* — they are this
+  // repository's own reviewed code — but their definitions get scanned, because
+  // an `action.yml` can call a third-party action by tag and a workflow that
+  // only says `uses: ./.github/actions/setup` would otherwise hide it
+  // completely. Exempting the reference without reading the definition is a
+  // hole, not a shortcut.
+  const files = [
+    ...workflows.map((name) => `${dir}/${name}`),
+    ...(await findActionDefinitions(cwd, ACTIONS_DIR)),
+  ]
+
   const violations = []
   let checked = 0
 
   for (const file of files) {
-    const source = await readFile(join(cwd, dir, file), 'utf8')
+    const source = await readFile(join(cwd, file), 'utf8')
     for (const use of findUses(source)) {
       checked += 1
-      const violation = inspectUse(use, `${dir}/${file}`)
+      const violation = inspectUse(use, file)
       if (violation !== null) violations.push(violation)
     }
   }

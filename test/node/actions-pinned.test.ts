@@ -117,7 +117,7 @@ describe('checkWorkflows', () => {
 
     expect(result.ok).toBe(true)
     expect(result.checked).toBe(1)
-    expect(result.files).toEqual(['ci.yml'])
+    expect(result.files).toEqual(['.github/workflows/ci.yml'])
   })
 
   it('fails a workflow that reintroduces a tag', async () => {
@@ -139,7 +139,39 @@ describe('checkWorkflows', () => {
 
     expect(result.ok).toBe(false)
     expect(result.violations).toHaveLength(2)
-    expect(result.files).toEqual(['ci.yml', 'release.yml'])
+    expect(result.files).toEqual(['.github/workflows/ci.yml', '.github/workflows/release.yml'])
+  })
+
+  it('scans a local composite action, which a workflow reference alone would hide', async () => {
+    // The workflow only says `uses: ./.github/actions/setup`, which is exempt
+    // as a reference. The tag it smuggles lives in the action definition.
+    await writeWorkflow('ci.yml', workflow('      - uses: ./.github/actions/setup'))
+    await mkdir(join(cwd, '.github/actions/setup'), { recursive: true })
+    await writeFile(
+      join(cwd, '.github/actions/setup/action.yml'),
+      'name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-node@v7\n',
+    )
+
+    const result = await checkWorkflows({ cwd })
+
+    expect(result.ok).toBe(false)
+    expect(result.checked).toBe(2)
+    expect(result.violations).toHaveLength(1)
+    expect(result.violations[0]?.message).toContain('.github/actions/setup/action.yml:5')
+  })
+
+  it('accepts a composite action whose own steps are SHA-pinned', async () => {
+    await writeWorkflow('ci.yml', workflow('      - uses: ./.github/actions/setup'))
+    await mkdir(join(cwd, '.github/actions/setup'), { recursive: true })
+    await writeFile(
+      join(cwd, '.github/actions/setup/action.yml'),
+      `name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-node@${SHA} # v7.0.0\n`,
+    )
+
+    const result = await checkWorkflows({ cwd })
+
+    expect(result.ok).toBe(true)
+    expect(result.checked).toBe(2)
   })
 
   it('fails when the workflow directory is missing, rather than passing vacuously', async () => {
