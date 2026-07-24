@@ -1,0 +1,18 @@
+# Response headers for the static assets this Worker serves. Supported for Workers
+# static assets, not only for Pages:
+# https://developers.cloudflare.com/workers/static-assets/headers/ (checked 2026-07-24)
+#
+# Only embed.js is served from here. It is deliberately NOT given a long
+# `Cache-Control`: Cloudflare's default for a static asset is
+# `public, max-age=0, must-revalidate` with an ETag, so a browser revalidates and
+# gets a 304 rather than re-downloading. That revalidation is a request to a static
+# asset, which is free and unbilled — while a long max-age would leave readers
+# running a months-old embed. A stale embed.js is the failure mode #8 names by
+# name: the anti-spam transport fields are frozen by their names, and a cached
+# script that predates a change disarms a layer silently, only on the attack path.
+#
+# Rules here do not apply to responses the Worker generates, so the CORS headers on
+# /comments stay in src/cors.ts where they belong.
+
+/embed.js
+  X-Content-Type-Options: nosniff

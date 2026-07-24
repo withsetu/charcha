@@ -6,6 +6,9 @@ export default tseslint.config(
   {
     ignores: [
       'dist/**',
+      // The built embed, produced by `pnpm build` from src/embed. Linting a
+      // minified bundle lints esbuild's output rather than anybody's source.
+      'public/**',
       'coverage/**',
       '.wrangler/**',
       'node_modules/**',
