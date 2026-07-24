@@ -347,3 +347,87 @@ export async function listModerationQueue(
     pageTitle: row.page_title,
   }))
 }
+
+/**
+ * The retention window for `ip_hash`, in days, when the owner has set none.
+ *
+ * `ip_hash` is an HMAC of the commenter's IP kept only for rate limiting (#8
+ * layer 4) and short-term abuse detection; neither needs it beyond a short window,
+ * and keeping it forever makes a per-deployment secret the only thing between the
+ * table and a map of who commented from where. 30 days preserves that utility
+ * while bounding the retention — but it is a privacy policy, not a constant, so it
+ * is overridable via the `ip_hash_retention_days` setting without a redeploy.
+ * The #17 disclosure text and this value have to agree.
+ */
+export const DEFAULT_IP_HASH_RETENTION_DAYS = 30
+
+/** The `settings` key that overrides DEFAULT_IP_HASH_RETENTION_DAYS. */
+export const IP_HASH_RETENTION_SETTING = 'ip_hash_retention_days'
+
+const SECONDS_PER_DAY = 86_400
+
+/**
+ * The retention window the owner configured, or the default when unset or invalid.
+ *
+ * The value arrives from a free-text `settings` row, so it is validated the way a
+ * query string is: a window that is not a positive whole number of days is not a
+ * window, and becomes the default rather than a silent zero that would purge every
+ * ip_hash on the next run. Falling back is the fail-closed choice here — the guard
+ * is "PII does not live forever", and the default still enforces it.
+ * Enforced by test/worker/db/ip-hash-purge.test.ts.
+ */
+export async function getIpHashRetentionDays(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare('select value from settings where key = ?1')
+    .bind(IP_HASH_RETENTION_SETTING)
+    .first<{ value: string }>()
+
+  if (row === null) return DEFAULT_IP_HASH_RETENTION_DAYS
+
+  const parsed = Number(row.value)
+  if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_IP_HASH_RETENTION_DAYS
+  return parsed
+}
+
+/**
+ * The retention sweep, as a constant so the query plan can be asserted against the
+ * statement this project actually sends rather than a copy of it in a test.
+ *
+ * It nulls only `ip_hash`, only on rows past the cutoff, and only where one is still
+ * set — the `ip_hash is not null` predicate matches the partial index
+ * `comments_by_ip`, so the sweep seeks that index and never re-reads a row it has
+ * already purged. That is what keeps the cost bounded by the retention window rather
+ * than by the whole table.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/ip-hash-purge.test.ts.
+ */
+export const PURGE_IP_HASH_SQL = `update comments
+     set ip_hash = null
+   where ip_hash is not null
+     and created_at < ?1`
+
+export interface IpHashPurgeResult {
+  purged: number
+  cutoff: number
+  retentionDays: number
+}
+
+/**
+ * Nulls `ip_hash` on comments older than `retentionDays`, so the IP-derived
+ * identifier does not live in the database past its rate-limiting usefulness (#19).
+ *
+ * `now` is passed in, never read from the clock here, so the window boundary is the
+ * caller's to own and a test's to pin. Returns the number of rows purged so the
+ * scheduled caller can log evidence it ran — a purge that silently no-ops leaves
+ * PII in the table invisibly, which is the failure mode this whole feature exists
+ * to prevent.
+ * Enforced by test/worker/db/ip-hash-purge.test.ts.
+ */
+export async function purgeExpiredIpHashes(
+  db: D1Database,
+  now: number,
+  retentionDays: number,
+): Promise<IpHashPurgeResult> {
+  const cutoff = now - retentionDays * SECONDS_PER_DAY
+  const { meta } = await db.prepare(PURGE_IP_HASH_SQL).bind(cutoff).run()
+  return { purged: meta.changes, cutoff, retentionDays }
+}
