@@ -10,7 +10,7 @@
 
 import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
-import { getOrCreateThread, insertComment } from '../db'
+import { getOrCreateThread, insertComment, isReplyTarget } from '../db'
 import type { StoredComment } from '../db'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { computeBodyHash } from './hash'
@@ -45,6 +45,20 @@ export type SubmitResult =
  * bot never sees this because a real submission is not rejected here.
  */
 const SPAM_REJECTED_MESSAGE = 'This comment could not be posted.'
+
+/**
+ * One message for every ineligible parent — missing, still in the queue, marked
+ * spam, on another page, or itself a reply.
+ *
+ * Deliberately not four messages. Telling the difference apart answers "does
+ * comment 412 exist, and has the moderator approved it?" to anyone willing to send
+ * a submission, which turns the reply field into an oracle over the moderation
+ * queue. The reader who is not probing sees this only if the comment they clicked
+ * reply on was taken down between the page load and the submission, and "not
+ * available" is exactly what happened.
+ * Enforced by test/worker/submit/route.test.ts.
+ */
+const INELIGIBLE_PARENT_MESSAGE = 'That comment is not available to reply to.'
 
 export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<SubmitResult> {
   const parsed = parseComment(input)
@@ -81,6 +95,18 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     title: comment.title ?? null,
     now: deps.now,
   })
+
+  // A reply's parent has to be one this thread can be replied to, and that is asked
+  // here rather than discovered at the insert. The triggers refuse an ineligible
+  // parent either way — they just do it by aborting, which is a 500 for something
+  // the reader did. One statement, and only when there is a parent at all: a root
+  // comment, which is nearly all of them, costs nothing extra, so the query count on
+  // this path stays constant (#48).
+  if (comment.parentId !== undefined) {
+    if (!(await isReplyTarget(deps.db, thread.id, comment.parentId))) {
+      return { outcome: 'invalid', message: INELIGIBLE_PARENT_MESSAGE }
+    }
+  }
 
   // No status is passed: insertComment derives it from byOwner, which this public
   // path never sets, so the comment is stored `pending` and enters the moderation

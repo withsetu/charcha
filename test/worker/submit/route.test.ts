@@ -154,6 +154,64 @@ describe('POST /comments — malformed input', () => {
     expect(await response.text()).toMatch(/name is required/i)
   })
 
+  // #48. A parentId naming a comment that is not a valid reply target used to reach
+  // the insert, where comments_depth_guard or comments_parent_thread_guard aborted —
+  // surfacing as a 500 for what is a reader's mistake. It always failed closed
+  // (nothing stored); it was the wrong status code, and an unexplained one.
+  it('answers 400, not 500, to a reply whose parent does not exist', async () => {
+    const response = await post(
+      JSON.stringify({
+        authorName: 'Maya',
+        body: 'replying to nothing',
+        url: 'https://maya.build/notes/leaving',
+        parentId: 99_999,
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toMatch(/not available to reply to/i)
+  })
+
+  it('stores nothing when the parent is not a valid reply target', async () => {
+    await post(
+      JSON.stringify({
+        authorName: 'Maya',
+        body: 'replying to nothing',
+        url: 'https://maya.build/notes/leaving',
+        parentId: 99_999,
+      }),
+    )
+
+    const count = await db.prepare('select count(*) as n from comments').first<{ n: number }>()
+    expect(count?.n).toBe(0)
+  })
+
+  it('says the same thing whether the parent is missing, pending or on another page', async () => {
+    // One message for every ineligible parent. Distinguishing them would answer
+    // "does comment 412 exist, and is it approved?" to anyone willing to ask, which
+    // makes the reply field an oracle over the moderation queue.
+    const missing = await post(
+      JSON.stringify({
+        authorName: 'Maya',
+        body: 'x',
+        url: 'https://maya.build/a',
+        parentId: 99_999,
+      }),
+    )
+    const elsewhere = await post(
+      JSON.stringify({
+        authorName: 'Maya',
+        body: 'y',
+        url: 'https://maya.build/b',
+        parentId: 12_345,
+      }),
+    )
+
+    expect(missing.status).toBe(400)
+    expect(elsewhere.status).toBe(400)
+    expect(await missing.text()).toBe(await elsewhere.text())
+  })
+
   it('never leaks an internal message on a validation failure', async () => {
     const response = await post(JSON.stringify({ url: 'https://maya.build/x' }))
     const text = await response.text()
