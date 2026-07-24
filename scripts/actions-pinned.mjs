@@ -13,6 +13,15 @@
 // The trailing `# vX.Y.Z` comment is required, not decorative: it is what makes
 // the pin readable in review, and Dependabot keys its comment updates off it.
 //
+// This check reads the *shape* of a pin and nothing else. It runs offline, in
+// `pnpm check`, and so cannot tell whether a well-formed SHA was ever published
+// by the action's own repository — which is a real gap, because GitHub's
+// guidance is that "when selecting a SHA, you should verify it is from the
+// action's repository and not a repository fork"
+// (https://docs.github.com/en/actions/reference/security/secure-use). That half
+// needs the network, so it lives in scripts/actions-upstream.mjs and runs as its
+// own CI job rather than in `pnpm check`. Neither script is complete alone.
+//
 // Enforced by test/node/actions-pinned.test.ts.
 
 import { readdir, readFile } from 'node:fs/promises'
@@ -120,10 +129,20 @@ export async function findActionDefinitions(cwd, dir) {
 }
 
 /**
+ * Every `uses:` step this repository is answerable for, across its workflows and
+ * its own composite action definitions, in file order.
+ *
+ * Shared with scripts/actions-upstream.mjs, which resolves the same pins against
+ * the GitHub API. Two checkers disagreeing about *which* references exist would
+ * be a hole in whichever of them looked at less, so they read one list.
+ *
+ * `problems` is non-empty only when there was nothing legitimate to read at all;
+ * both callers treat that as a failure rather than as an empty pass.
+ *
  * @param {{ cwd?: string, dir?: string }} options
- * @returns {Promise<{ ok: boolean, checked: number, files: string[], violations: Array<{ status: string, message: string }> }>}
+ * @returns {Promise<{ files: string[], uses: Array<{ file: string, line: number, ref: string, trailing: string }>, problems: Array<{ status: string, message: string }> }>}
  */
-export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR } = {}) {
+export async function collectUses({ cwd = process.cwd(), dir = WORKFLOW_DIR } = {}) {
   let names
   try {
     names = await readdir(join(cwd, dir))
@@ -135,10 +154,9 @@ export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR }
   // has CI, so a checker that finds nothing to check is broken, not satisfied.
   if (names === null) {
     return {
-      ok: false,
-      checked: 0,
       files: [],
-      violations: [
+      uses: [],
+      problems: [
         { status: 'no-workflow-dir', message: `${dir} does not exist — nothing was checked` },
       ],
     }
@@ -148,10 +166,9 @@ export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR }
 
   if (workflows.length === 0) {
     return {
-      ok: false,
-      checked: 0,
       files: [],
-      violations: [
+      uses: [],
+      problems: [
         {
           status: 'no-workflows',
           message: `${dir} contains no workflow files — nothing was checked`,
@@ -171,16 +188,33 @@ export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR }
     ...(await findActionDefinitions(cwd, ACTIONS_DIR)),
   ]
 
+  const uses = []
+  for (const file of files) {
+    const source = await readFile(join(cwd, file), 'utf8')
+    for (const use of findUses(source)) uses.push({ file, ...use })
+  }
+
+  return { files, uses, problems: [] }
+}
+
+/**
+ * @param {{ cwd?: string, dir?: string }} options
+ * @returns {Promise<{ ok: boolean, checked: number, files: string[], violations: Array<{ status: string, message: string }> }>}
+ */
+export async function checkWorkflows({ cwd = process.cwd(), dir = WORKFLOW_DIR } = {}) {
+  const { files, uses, problems } = await collectUses({ cwd, dir })
+
+  if (problems.length > 0) {
+    return { ok: false, checked: 0, files: [], violations: problems }
+  }
+
   const violations = []
   let checked = 0
 
-  for (const file of files) {
-    const source = await readFile(join(cwd, file), 'utf8')
-    for (const use of findUses(source)) {
-      checked += 1
-      const violation = inspectUse(use, file)
-      if (violation !== null) violations.push(violation)
-    }
+  for (const use of uses) {
+    checked += 1
+    const violation = inspectUse(use, use.file)
+    if (violation !== null) violations.push(violation)
   }
 
   // Workflow files that reference no actions at all would also pass vacuously.

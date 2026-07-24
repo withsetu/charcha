@@ -25,22 +25,34 @@
 #     advisory or not. It is the only one of the two that moves a SHA-pinned
 #     action, because a pinned action has no version for an advisory to match.
 #
-# The JavaScript ecosystem is deliberately absent here. Security updates for it
-# are already covered by the repo setting above, and routine dependency bumps
-# need a changelog review per PR — a different piece of work from turning the
-# scanning on, and tracked separately.
-#
-# When that is turned on, the ecosystem key is `npm` even though this project
-# resolves with pnpm (#52): Dependabot files pnpm under the `npm` ecosystem and
-# updates `pnpm-lock.yaml` from it. It supports pnpm v7–v10, which is one of the
-# reasons `packageManager` pins the 10 line rather than 11.
+# The JavaScript ecosystem is configured below, as of #36. The ecosystem key is
+# `npm` even though this project resolves with pnpm (#52): Dependabot files pnpm
+# under the `npm` ecosystem and updates `pnpm-lock.yaml` from it. It supports
+# pnpm v7–v10, which is one of the reasons `packageManager` pins the 10 line
+# rather than 11 — re-verified 2026-07-24.
 # Source: https://docs.github.com/en/code-security/dependabot/ecosystems-supported-by-dependabot/supported-ecosystems-and-repositories
+#
+# Because Dependabot rewrites `pnpm-lock.yaml`, it can also rewrite the lockfile
+# *format* version — dependabot/dependabot-core#9684 is a 9.0 lockfile regressed
+# to 6.0. The Cloudflare build image reads 9.0 and, on a format it cannot read,
+# pnpm warns and resolves fresh instead of failing, so that regression would ship
+# a silently-green deploy. `pnpm check:lockfile` asserts the format version for
+# exactly this reason; see scripts/lockfile-guard.mjs.
+#
+# Every option used here is from the schema reference, checked 2026-07-24.
+# Source: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
 
 version: 2
 updates:
   - package-ecosystem: 'github-actions'
     # '/' means .github/workflows, not a directory literally named '/'.
     directory: '/'
+    # Weekly, where npm below is monthly, and the asymmetry is deliberate. A
+    # SHA-pinned action has no version for an advisory to match, so Dependabot
+    # *alerts* never fire on one (see the quote above) — this schedule is the
+    # only path by which a vulnerable action becomes visible here at all. npm
+    # has the repo-level security-updates setting for that job; actions do not.
+    # The volume is three actions, so weekly costs nothing.
     schedule:
       interval: 'weekly'
     open-pull-requests-limit: 5
@@ -53,5 +65,48 @@ updates:
       # One PR for the whole batch. These are all first-party `actions/*` steps
       # reviewed together, and a PR per action buries the signal.
       github-actions:
+        patterns:
+          - '*'
+
+  # Routine npm version updates — #36. Distinct from Dependabot *security*
+  # updates, which are a repo setting, are already enabled, fire immediately on a
+  # published advisory, and are not configured by anything in this file.
+  - package-ecosystem: 'npm'
+    directory: '/'
+    # Monthly, not weekly. This tree is two production packages and ~250
+    # transitive dev ones. A weekly batch across that is a PR nobody reads, and
+    # an unread dependency PR is worse than no PR because it looks like
+    # diligence. Monthly is small enough to actually review and frequent enough
+    # that no single bump is ever a year of drift. Advisories do not wait for
+    # this window — the security-updates setting handles those the day they land.
+    schedule:
+      interval: 'monthly'
+    open-pull-requests-limit: 5
+    labels:
+      - 'area:infra'
+    commit-message:
+      prefix: 'chore'
+      # `include: scope` appends `deps` / `deps-dev`, so which tree moved is
+      # legible from the commit subject alone.
+      include: 'scope'
+    groups:
+      # One group, and it is defined by `dependency-type` rather than by naming
+      # packages. That distinction is the whole design.
+      #
+      # Anything Dependabot cannot fit into a group gets its own pull request. So
+      # this single rule says: every dev dependency arrives batched, and every
+      # *production* dependency — the ones that are bundled into the Worker every
+      # self-hoster runs — arrives alone, with a changelog somebody reads.
+      #
+      # Naming `hono` explicitly would have produced the same two PRs today and
+      # the wrong ones tomorrow: `zod` is also a production dependency now, and a
+      # pattern-based rule would have quietly swept it into the dev batch. The
+      # predicate has to be "does this ship to users", not a list of packages
+      # that was true once.
+      #
+      # `dependency-type` is supported for the npm ecosystem and maps to
+      # `dependencies` vs `devDependencies` in package.json.
+      dev-dependencies:
+        dependency-type: 'development'
         patterns:
           - '*'
