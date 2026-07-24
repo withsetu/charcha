@@ -1,0 +1,40 @@
+# Actions in .github/workflows are pinned to full commit SHAs, which is the only
+# immutable way to reference one. Pinning alone rots: the SHA stops moving, so it
+# also stops picking up the action's own security fixes. Dependabot is the other
+# half of that trade — it bumps the SHA and rewrites the trailing `# vX.Y.Z`
+# comment with it.
+#
+# Sources:
+#   https://docs.github.com/en/code-security/dependabot/working-with-dependabot/keeping-your-actions-up-to-date-with-dependabot
+#   https://github.blog/changelog/2022-10-31-dependabot-now-updates-comments-in-github-actions-workflows-referencing-action-versions/
+#
+# Worth knowing, because it is easy to assume otherwise: Dependabot *alerts* do
+# not cover SHA-pinned actions — "Dependabot only creates alerts for vulnerable
+# actions that use semantic versioning and will not create alerts for actions
+# pinned to SHA values"
+# (https://docs.github.com/en/actions/reference/security/secure-use).
+# Dependabot *version updates*, configured below, are what keeps these current.
+#
+# npm is deliberately not configured here yet — see the tracking issue on the
+# repository. Dependency bumps need a changelog review per PR, which is a
+# different piece of work from turning the scanning on.
+
+version: 2
+updates:
+  - package-ecosystem: 'github-actions'
+    # '/' means .github/workflows, not a directory literally named '/'.
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
+    labels:
+      - 'area:infra'
+      - 'security'
+    commit-message:
+      prefix: 'chore'
+    groups:
+      # One PR for the whole batch. These are all first-party `actions/*` steps
+      # reviewed together, and a PR per action buries the signal.
+      github-actions:
+        patterns:
+          - '*'
