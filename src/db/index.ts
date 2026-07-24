@@ -120,7 +120,10 @@ function toStored(row: CommentRow): StoredComment {
 
 /**
  * Resolves a page to its thread, creating it on first sight. One statement: the
- * upsert is what keeps two readers arriving at once from racing into two rows.
+ * upsert is what keeps two submissions arriving at once from racing into two rows.
+ *
+ * This writes, so it belongs to the submission path only — never to rendering.
+ * See listPageComments.
  */
 export async function getOrCreateThread(
   db: D1Database,
@@ -178,21 +181,32 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
 }
 
 /**
- * The page read. One statement for the whole conversation, roots and replies
- * together, ordered so the caller can assemble the tree without sorting.
+ * The page read: one statement, no writes, for the whole conversation — roots and
+ * replies together, ordered so the caller can assemble the tree without sorting.
+ *
+ * It takes the page key rather than a thread id specifically so that rendering
+ * never has to call getOrCreateThread, which writes. Reading a page must not cost
+ * a row write: the write budget is 100k/day against 5M reads, so a write on the
+ * read path means traffic exhausts the daily writes and nobody can comment for the
+ * rest of the day. A page nobody has commented on has no thread row at all, and
+ * reads as empty.
+ * Enforced by test/worker/db/comments.test.ts.
  */
-export async function listThreadComments(
+export async function listPageComments(
   db: D1Database,
-  threadId: number,
+  pageKey: string,
 ): Promise<RenderableComment[]> {
   const { results } = await db
     .prepare(
-      `select ${RENDERABLE_COLUMNS}
-         from comments
-        where thread_id = ?1 and status = 'approved'
-        order by created_at, id`,
+      `select ${RENDERABLE_COLUMNS.split(', ')
+        .map((column) => `c.${column}`)
+        .join(', ')}
+         from comments c
+         join threads t on t.id = c.thread_id
+        where t.page_key = ?1 and c.status = 'approved'
+        order by c.created_at, c.id`,
     )
-    .bind(threadId)
+    .bind(pageKey)
     .all<Omit<CommentRow, 'thread_id' | 'status' | 'moderated_at'>>()
 
   return results.map(toRenderable)

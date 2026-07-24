@@ -4,7 +4,7 @@ import {
   getOrCreateThread,
   insertComment,
   listModerationQueue,
-  listThreadComments,
+  listPageComments,
   setCommentStatus,
 } from '../../../src/db'
 
@@ -143,7 +143,7 @@ describe('insertComment', () => {
   })
 })
 
-describe('listThreadComments', () => {
+describe('listPageComments', () => {
   async function seedConversation() {
     const thread = await seedThread()
     const root = await insertComment(db, {
@@ -178,7 +178,7 @@ describe('listThreadComments', () => {
   it('returns approved comments oldest first, replies included', async () => {
     const { thread, root, reply } = await seedConversation()
 
-    const comments = await listThreadComments(db, thread.id)
+    const comments = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).toEqual([root.id, reply.id])
     expect(comments.map((comment) => comment.depth)).toEqual([0, 1])
@@ -187,7 +187,7 @@ describe('listThreadComments', () => {
   it('does not return comments that are still held for review', async () => {
     const { thread, pending } = await seedConversation()
 
-    const comments = await listThreadComments(db, thread.id)
+    const comments = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).not.toContain(pending.id)
   })
@@ -196,7 +196,7 @@ describe('listThreadComments', () => {
     const { thread, root } = await seedConversation()
     await setCommentStatus(db, root.id, 'spam', t0 + 40)
 
-    const comments = await listThreadComments(db, thread.id)
+    const comments = await listPageComments(db, thread.pageKey)
 
     expect(comments.map((comment) => comment.id)).not.toContain(root.id)
   })
@@ -210,19 +210,21 @@ describe('listThreadComments', () => {
       return prepare(sql)
     })
 
-    await listThreadComments(db, thread.id)
+    await listPageComments(db, thread.pageKey)
     spy.mockRestore()
 
-    // One statement, because the 50-queries-per-invocation ceiling makes a
-    // per-comment read a hard failure rather than a slow page.
+    // One statement, because a per-comment read is a hard failure rather than a
+    // slow page — and no write, because reads outnumber writes 50 to 1 in the
+    // free tier and traffic must never be able to use up the comment budget.
     expect(statements).toHaveLength(1)
     expect(statements[0]).not.toMatch(/author_email|ip_hash/)
+    expect(statements[0]).not.toMatch(/\binsert\b|\bupdate\b/i)
   })
 
   it('never hands the renderer an email address or an IP hash', async () => {
     const { thread } = await seedConversation()
 
-    const comments = await listThreadComments(db, thread.id)
+    const comments = await listPageComments(db, thread.pageKey)
 
     expect(comments).not.toHaveLength(0)
     for (const comment of comments) {
@@ -231,6 +233,16 @@ describe('listThreadComments', () => {
       expect(JSON.stringify(comment)).not.toContain('example.com')
       expect(JSON.stringify(comment)).not.toContain('ip-hash')
     }
+  })
+
+  it('renders a page nobody has commented on as empty, and creates nothing', async () => {
+    const comments = await listPageComments(db, '/a-page-with-no-conversation')
+
+    expect(comments).toEqual([])
+    const threads = await db.prepare('select count(*) as count from threads').first<{
+      count: number
+    }>()
+    expect(threads?.count).toBe(0)
   })
 
   it('reads only its own thread, not the whole table', async () => {
