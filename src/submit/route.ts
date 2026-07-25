@@ -29,6 +29,13 @@ function unreadable(): Response {
  * The status code carries the taxonomy so the embed can branch without parsing a
  * body: 201 published, 202 accepted-and-pending, 400 the reader's input, 403 a
  * spam rejection. A failed submission never shares a status with a successful one.
+ *
+ * **It does not add the #98 headers, and a caller other than handleSubmit would
+ * therefore ship without them.** They are added once, around this function, for the
+ * reason #98 exists — a header spread at each of four returns is a header missing
+ * from the fifth. This is exported for the tests below it; the route is the only
+ * caller, and a second one should go through handleSubmit rather than around it.
+ * Enforced by test/worker/response-headers.test.ts.
  */
 export function renderResult(result: SubmitResult): Response {
   switch (result.outcome) {
