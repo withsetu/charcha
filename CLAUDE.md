@@ -49,7 +49,12 @@ Re-verify before relying on these; they were checked on the date shown.
 | Akismet paid tier | $9.95/mo for **500 checks/month** | 2026-07-23 |
 | CleanTalk | ~$12/year per site | 2026-07-23 |
 | StopForumSpam | free, 100k queries/day, **non-commercial terms** | 2026-07-23 |
-| Deploy button | repo must be **public and self-contained**; Cloudflare treats the deploy root as the new repo root | 2026-07-23 |
+| Deploy button | repo must be **public and self-contained**; Cloudflare treats the deploy root as the new repo root; only github.com and gitlab.com, no self-hosted | 2026-07-25 |
+| Deploy button secrets | collected from **`.dev.vars.example` / `.env.example`** in dotenv format; the help text beside each field is `cloudflare.bindings.<NAME>.description` in `package.json` | 2026-07-25 |
+| Deploy button and D1 migrations | Cloudflare creates the database and **does not migrate it**. Migrations are the repo's job, "as part of your `deploy` script", and must name the **binding** not the database — a deployer can rename the database | 2026-07-25 |
+| Workers Builds API token | the token it creates for itself carries Account Settings (read), Workers Scripts (edit), Workers KV (edit), Workers R2 (edit). **D1 is not on that list**, and `wrangler d1 migrations apply` exits non-zero with no useful output when the token lacks D1 (workers-sdk#5077) | 2026-07-25 |
+| `ratelimits` on Workers Free | **Unknown, and documented nowhere** — not the binding page, the bindings index, the pricing page's Free-vs-Paid table, or the GA changelog. Needs one real deploy: [#119](https://github.com/withsetu/charcha/issues/119) | 2026-07-25 |
+| Cache API availability | "functions on Cloudflare Workers deployed to custom domains", and **not available** for Workers fronted by Cloudflare Access. So it is **not** a usable primitive for a `workers.dev` one-click deploy | 2026-07-25 |
 | Bot score (`cf.botManagement.score`) | **Enterprise only** — cannot be built on | 2026-07-23 |
 | Workers Builds image (v3) | ships pnpm **10.11.1**, npm 10.9.2, yarn 4.9.1, Node **22.16.0** | 2026-07-24 |
 | Workers Builds pnpm version | image default, or a `PNPM_VERSION` **dashboard build variable**. Not inferred from `pnpm-lock.yaml`, not from `package.json` → `engines`, and **`packageManager` is not documented as honoured**. There is no pnpm equivalent of `.nvmrc` | 2026-07-24 |
@@ -315,6 +320,7 @@ pinned everywhere.
 | Build-tooling tests | `test/node/**` — node, for things that touch the filesystem |
 | Embed budget check | `scripts/bundle-size.mjs`, `pnpm check:size` |
 | Toolchain pin | `packageManager` in `package.json`, `.nvmrc`; guarded by `scripts/lockfile-guard.mjs`, `pnpm check:lockfile` |
+| One-click deploy | `.dev.vars.example` is the secret form, `cloudflare.bindings` in `package.json` is its help text, `deploy` migrates before it deploys; guarded by `scripts/deploy-config.mjs`, `pnpm check:deploy` |
 | Supply-chain gates | `pnpm check:audit` (prod blocks at `low`, dev at `high`), `check:licences`, `check:actions` — policy on [#23](https://github.com/withsetu/charcha/issues/23) |
 | CI | `.github/workflows/ci.yml` |
 | Design & plans | The GitHub issue. Never committed spec files. |

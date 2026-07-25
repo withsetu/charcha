@@ -26,7 +26,7 @@ describing software nobody can run.
 
 | Topic | Waiting on |
 |---|---|
-| Installing via the Deploy button, and the first-run flow | [#16](https://github.com/withsetu/charcha/issues/16) — the deploy flow |
+| Installing via the Deploy button, in more depth than the [README](../README.md#deploying-it) covers | [#16](https://github.com/withsetu/charcha/issues/16) — the deploy flow. The button, the secrets it collects and the migration step are built; nobody has run a real deploy yet, so a page written now could not describe what a deployer actually sees |
 | Adding the embed to Astro, Hugo, Eleventy, Jekyll and plain HTML | [#5](https://github.com/withsetu/charcha/issues/5) — the embed script |
 | Configuring spam defence, and what each optional provider transmits | [#8](https://github.com/withsetu/charcha/issues/8), [#11](https://github.com/withsetu/charcha/issues/11) |
 | Migrating from Disqus | [#15](https://github.com/withsetu/charcha/issues/15) — the importer |

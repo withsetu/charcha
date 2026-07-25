@@ -27,6 +27,70 @@ readers in order to comment.
   classifier by default. Third-party spam services are optional and off by
   default, because they mean sending reader data elsewhere.
 
+## Deploying it
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/withsetu/charcha)
+
+> **Nobody has run this yet.** The button, the secrets it collects and the migration
+> step are all built and asserted by `pnpm check`, but a Deploy-to-Cloudflare build
+> runs on Cloudflare's infrastructure against a real account, and no such build has
+> happened. [#16](https://github.com/withsetu/charcha/issues/16) tracks the first
+> one. Until then, treat this section as the intended path rather than a walked one.
+
+Cloudflare clones this repository into your own GitHub or GitLab account, creates
+the D1 database, asks you for the secrets below, builds, and deploys. You end up
+with a Worker on `your-worker.your-subdomain.workers.dev` and a repository you can
+keep developing from — later pushes to it redeploy.
+
+### The secrets it asks for
+
+One is required. The other two switch a defence layer off when they are absent
+rather than failing, because an owner who skips a step should get a site that takes
+comments, not a broken comment form.
+
+| Secret | Required? | What it is, and what happens without it |
+|---|---|---|
+| `CHARCHA_DASHBOARD_PASSWORD` | **Yes** | The only credential for the moderation dashboard at `/admin`. No account, no reset, and no second user. Generate it — `openssl rand -base64 24`. Unset, the dashboard **refuses every request including its own login**: comments still arrive and nobody can moderate them. |
+| `IP_HASH_SECRET` | Recommended | The key that turns a commenter's IP into the identifier the per-IP spam rate limit counts — `openssl rand -hex 32`. Unset, no IP is stored at all and the per-IP half of the rate limit stops running; the per-thread half still does. |
+| `TURNSTILE_SECRET_KEY` | No | The *secret* key of a [Turnstile](https://developers.cloudflare.com/turnstile/get-started/) widget, if you want the invisible bot check. The matching sitekey is public and goes on your own page as `data-turnstile-sitekey`. Unset, Turnstile is off and nothing third-party is loaded into your readers' browsers. |
+
+They are declared in [`.dev.vars.example`](.dev.vars.example), which is the file the
+deploy form is built from, with the help text beside each field coming from
+`cloudflare.bindings` in `package.json`. Both are Cloudflare's
+[documented mechanism](https://developers.cloudflare.com/workers/platform/deploy-buttons/),
+and `pnpm check:deploy` fails if a secret the code reads is missing from either — a
+required secret the form never asks for is exactly how a deploy produces a Worker
+that cannot be administered.
+
+### Setting or changing a secret afterwards
+
+Nothing about the deploy form is a one-time chance. From a checkout of your
+deployed repository:
+
+```sh
+pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD
+```
+
+Or in the Cloudflare dashboard, in your Worker under **Settings → Variables and
+Secrets**. Changing the dashboard password also signs out every open session, because
+sessions are signed with a key derived from it rather than stored.
+
+### Deploying from a terminal instead
+
+```sh
+pnpm install
+pnpm wrangler d1 create charcha    # then put the returned id in wrangler.jsonc
+pnpm run deploy                    # applies migrations, then deploys
+pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD
+```
+
+`pnpm run deploy` and not `pnpm deploy` — the latter is pnpm's own built-in
+workspace-deploy command, which shadows the script and does something else entirely.
+
+That script is deliberately not just `wrangler deploy`: Cloudflare creates the D1
+database but never migrates it, so the migration runs first and a failure there stops
+the deploy instead of publishing a Worker that queries an empty database.
+
 ## Adding it to a page
 
 ```html
@@ -83,6 +147,69 @@ Tests run inside the Workers runtime via `@cloudflare/vitest-pool-workers`, agai
 the same bindings the deployed Worker gets.
 
 ## Troubleshooting a deploy
+
+**The dashboard returns 401 on every page, including the login.** The deployment
+has no `CHARCHA_DASHBOARD_PASSWORD`. That is the designed behaviour rather than a
+bug — an unconfigured dashboard is a locked one, not an open one — but it is
+indistinguishable from a wrong password by design, because a login endpoint that
+tells you which of the two it was tells an attacker whether the door exists. The
+Worker's logs say which; look for a line with `guard: dashboard-password`. The fix
+is `pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD`, or the same field under
+**Settings → Variables and Secrets** in the dashboard. Comments arriving in the
+meantime are not lost; they are held in the queue.
+
+**Every request fails, and the log says `no such table: comments`.** The database
+exists and the migrations did not run. Read the build log for the
+`wrangler d1 migrations apply DB --remote` line that `pnpm run deploy` runs before
+deploying, and note that this failure is quieter than it should be: `wrangler d1
+migrations apply` is known to exit non-zero with no useful output when the token it
+is using lacks D1 permissions
+([workers-sdk#5077](https://github.com/cloudflare/workers-sdk/issues/5077),
+[wrangler-action#221](https://github.com/cloudflare/wrangler-action/issues/221)).
+That is a live possibility here, not a theoretical one: the API token Workers Builds
+creates for itself is documented as carrying Account Settings (read), Workers Scripts
+(edit), Workers KV Storage (edit) and Workers R2 Storage (edit) — **D1 is not on that
+list**
+([build configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
+checked 2026-07-25). If the migration step is what failed, add **D1 (edit)** to that
+token under **My Profile → API Tokens**, or apply the migrations once from a
+terminal with `pnpm db:migrate:remote` and redeploy. Migrations run before the
+deploy specifically so this shows up as a red build rather than as a live Worker
+that 500s.
+
+**The build fails on `pnpm deploy` with pnpm's own usage text.** Cloudflare
+pre-populates the deploy command from the `deploy` script in `package.json`, and
+`pnpm deploy` is a built-in pnpm command — deploying a package from a workspace —
+which shadows the script. Set the deploy command to `pnpm run deploy` (or
+`npm run deploy`) under **Settings → Build**.
+
+**The deploy fails mentioning the rate limiting binding.** Charcha uses the
+[Workers Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+to bound brute-force attempts against the dashboard login. It is GA, needs no
+provisioning, and **whether it is available on the Workers Free plan is documented
+nowhere** — not on the binding page, not on the
+[bindings index](https://developers.cloudflare.com/workers/runtime-apis/bindings/),
+and not in the Free-vs-Paid table on the
+[pricing page](https://developers.cloudflare.com/workers/platform/pricing/), which
+covers ten other products and does not mention rate limiting at all (all checked
+2026-07-25). We are recording that we do not know rather than guessing;
+[#119](https://github.com/withsetu/charcha/issues/119) is the issue, and the first
+real deploy settles it. **If your deploy is what settles it, please say so on that
+issue** — you will have found out something Cloudflare's documentation does not say.
+
+There is no good workaround to offer you yet, and pretending otherwise would be
+worse than saying so. Deleting the `ratelimits` block from `wrangler.jsonc` makes the
+deploy succeed, but the login throttle then refuses **every** login attempt rather
+than allowing them unguarded, so the dashboard stays shut. Comments are still
+accepted and still queued the whole time, so nothing is lost while
+[#124](https://github.com/withsetu/charcha/issues/124) picks a throttle that does not
+depend on the binding. The obvious candidate is closed off, and the reason is worth
+knowing before anyone suggests it: the Cache API "functions on Cloudflare Workers
+deployed to custom domains", which a one-click deploy on `workers.dev` is not, and is
+"not currently available" for Workers behind Cloudflare Access
+([Cache](https://developers.cloudflare.com/workers/runtime-apis/cache/), checked
+2026-07-25) — a counter that silently counts nothing is worse than no counter,
+because it looks like one.
 
 **pnpm version mismatch.** `pnpm-lock.yaml` is written by the pnpm that
 `package.json` pins with `packageManager`, but a Cloudflare deploy does not use
