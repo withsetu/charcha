@@ -133,20 +133,22 @@ function toBase64Url(bytes: ArrayBuffer): string {
  * The bytes a base64url string stands for, or null if it is not the *canonical*
  * spelling of them.
  *
- * Two checks, and the second exists because the first is not enough. The alphabet
- * test rejects what `atob` would tolerate — whitespace, base64's `+` and `/`,
- * padding — so a signature respelled in standard base64 is not a second spelling of
- * the same session. But base64 is still not injective at the tail: 43 characters
- * carry 258 bits where a signature is 256, so `atob` silently ignores two bits and
- * **four different final characters decode to identical bytes**. A fresh-context
- * review of this file found three other cookie values that verified against a valid
- * token.
+ * **The re-encode comparison on the last line is the load-bearing check.** base64 is
+ * not injective at the tail: 43 characters carry 258 bits where a signature is 256, so
+ * `atob` silently ignores two bits and four different final characters decode to
+ * identical bytes. A fresh-context review found three other cookie values that
+ * verified against a valid token. Accepting only the spelling this module would itself
+ * have produced closes that, and closes every other alternative spelling with it —
+ * whitespace, base64's `+` and `/`, padding. No forgery was possible either way, since
+ * the bytes still have to be the right HMAC; what it buys is a token that *can* be
+ * used as an identity, which a revocation list or a deduplicated log line would
+ * quietly assume it could be.
  *
- * Re-encoding and comparing closes that: only the spelling this module would itself
- * have produced is accepted. No forgery was possible either way — the bytes still
- * have to be the right HMAC — but a verifier that accepts more strings than it issues
- * has a token that cannot be used as an identity, which is what a revocation list or
- * a deduplicated log line would quietly assume it could be.
+ * The alphabet test above it is therefore **intended as a cheap early reject** rather
+ * than as an independent guard: it turns a hostile 4 KB cookie value away before
+ * `atob` touches it. It is deliberately worded as intent, because the canonicality
+ * check subsumes it — removing the alphabet test changes no answer, and a kill-shot
+ * confirmed exactly that.
  * Enforced by test/worker/admin/session.test.ts.
  */
 function fromBase64Url(value: string): Uint8Array | null {

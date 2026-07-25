@@ -124,6 +124,32 @@ describe('the password-session authenticator', () => {
     expect(identity).toBeNull()
   })
 
+  it('vouches for a real session even when a junk one is listed ahead of it', async () => {
+    // The lockout. `readSessionCookies` returning every candidate is only half the
+    // fix — the authenticator has to *try* them, and a kill-shot that reduced this
+    // loop back to `[0]` broke no test until this one existed. `__Secure-` says
+    // nothing about `Domain`, so on a custom domain anything able to write a cookie
+    // on a sibling host could otherwise sign the owner out indefinitely.
+    const { token } = await issueSession(TEST_PASSWORD, t0)
+    const planted = `1785000000.${'A'.repeat(43)}`
+
+    const identity = await sessionAuthenticator(env).authenticate(
+      request(`${SESSION_COOKIE_NAME}=${planted}; ${SESSION_COOKIE_NAME}=${token}`),
+      t0,
+    )
+
+    expect(identity).toEqual({ via: 'session' })
+  })
+
+  it('still refuses when every candidate is junk', async () => {
+    const junk = Array.from(
+      { length: 3 },
+      (_, index) => `${SESSION_COOKIE_NAME}=178500000${index}.${'A'.repeat(43)}`,
+    ).join('; ')
+
+    expect(await sessionAuthenticator(env).authenticate(request(junk), t0)).toBeNull()
+  })
+
   it('does not vouch for an expired session', async () => {
     const { token, expiresAt } = await issueSession(TEST_PASSWORD, t0)
 
