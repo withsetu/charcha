@@ -16,10 +16,11 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  // src/embed is excluded because it is the one part of this repository that runs in
-  // a browser: it needs the DOM lib and must not see the Worker's ambient types,
-  // which redeclare fetch and Response with Cloudflare's shapes. It has its own
-  // project in src/embed/tsconfig.json, and `pnpm typecheck` runs both.
+  // src/embed and src/dashboard are excluded because they are the parts of this
+  // repository that run in a browser: they need the DOM lib and must not see the
+  // Worker's ambient types, which redeclare fetch and Response with Cloudflare's
+  // shapes. Each has its own project — src/embed/tsconfig.json and
+  // src/dashboard/tsconfig.json — and `pnpm typecheck` runs all of them.
   "include": ["src"],
-  "exclude": ["src/embed"]
+  "exclude": ["src/embed", "src/dashboard"]
 }

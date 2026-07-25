@@ -1,0 +1,22 @@
+{
+  // The dashboard is the second part of this repository that runs in a browser, so
+  // it needs the same program shape src/embed has: the DOM lib, and *not* the
+  // Worker's ambient types, which redeclare `fetch` and `Response` with
+  // Cloudflare's shapes. Two libs in one program is how `document` ends up typed
+  // against a runtime that has none.
+  //
+  // The root tsconfig excludes this directory for that reason, and `pnpm typecheck`
+  // runs this project as a fifth.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "types": [],
+    "jsx": "react-jsx",
+    // esbuild is the bundler here, and it resolves `.tsx` the same way.
+    "allowImportingTsExtensions": false
+  },
+  // The root project excludes this directory; that exclusion is inherited by
+  // `extends` and has to be cleared here, or this project has no inputs at all.
+  "include": ["."],
+  "exclude": []
+}

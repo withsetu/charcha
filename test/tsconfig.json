@@ -6,8 +6,9 @@
     "types": ["@cloudflare/vitest-pool-workers/types", "node"]
   },
   "include": ["./**/*.ts", "../vitest.config.ts", "../src/worker-configuration.d.ts"],
-  // test/dom is the browser half: it imports src/embed and needs the DOM lib
-  // without the Worker's ambient types, which this project supplies. It has its
-  // own project in test/dom/tsconfig.json, and `pnpm typecheck` runs both.
-  "exclude": ["./dom"]
+  // test/dom and test/dashboard are the browser half: they import src/embed and
+  // src/dashboard, and need the DOM lib without the Worker's ambient types, which
+  // this project supplies. Each has its own project — test/dom/tsconfig.json and
+  // test/dashboard/tsconfig.json — and `pnpm typecheck` runs all of them.
+  "exclude": ["./dom", "./dashboard"]
 }

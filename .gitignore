@@ -7,6 +7,13 @@ dist/
 # committed bundle would drift from its source with nothing failing (#5).
 public/embed.js
 public/embed.js.map
+
+# The built moderation dashboard. Source is src/dashboard/; `pnpm build` produces
+# both files, and `wrangler dev` and `wrangler deploy` run that build first
+# (wrangler.jsonc). They are static assets so the browser fetches them free of
+# Worker billing, and a committed bundle would drift from its source with nothing
+# failing (#13).
+public/admin/
 .dev.vars
 .env
 .env.*

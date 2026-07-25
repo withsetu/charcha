@@ -64,6 +64,17 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # The embed and the dashboard, both built the way a deployment builds them.
+      #
+      # `pnpm check:size` below bundles the embed itself, in memory, so it would pass
+      # on a `pnpm build` that could not run at all. The dashboard has no such check —
+      # it is not budgeted (#13) — so without this step a broken JSX transform, a
+      # missing Tailwind source or a bad esbuild flag reaches the Deploy button rather
+      # than CI. It is also the step that proves the `build` script the Deploy button
+      # detects still works, which no test covers.
+      - name: Build the embed and the dashboard
+        run: pnpm build
+
       - name: Embed bundle budget
         run: pnpm check:size
 
