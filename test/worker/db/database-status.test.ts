@@ -1,11 +1,11 @@
 // The migration check written for the status readout on `/` (#140), and the reason it
-// is not `select 1`. That readout is gone — #145 took it off a public address — and the
-// check is kept for #141, which gives it to `/health`. These tests are what keep it
-// honest in the meantime, so that the endpoint adopting it inherits something proven
-// rather than something merely still compiling.
+// is not `select 1`. That readout is gone — #145 took it off a public address — and
+// #141 gave the check to `/health` instead. These tests cover the three answers at the
+// helper; test/worker/health.test.ts covers what the endpoint makes of them, and both
+// are needed: the words could be right here and mapped wrong there.
 
 import { env } from 'cloudflare:workers'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { databaseStatus } from '../../../src/db'
 
 const db = env.DB
@@ -41,4 +41,20 @@ describe('what a deployment can tell about its own database', () => {
   it('is unreachable when D1 refuses the query outright', async () => {
     expect(await databaseStatus(brokenDb)).toBe('unreachable')
   })
+
+  // `/health` is public and unauthenticated, so its cost is a stranger's to spend
+  // repeatedly, and the whole file header's argument for replacing `select 1` assumes
+  // the replacement costs the same. One statement, and the count does not move with how
+  // much is in the database. See the note at the route in src/index.ts.
+  it('costs one statement, the same as the `select 1` it replaced', async () => {
+    const prepare = vi.spyOn(env.DB, 'prepare')
+
+    await databaseStatus(env.DB)
+
+    expect(prepare).toHaveBeenCalledTimes(1)
+  })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
