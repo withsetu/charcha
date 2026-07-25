@@ -114,14 +114,44 @@ CREATE TABLE settings (
 
 -- Rendering a page: one seek, then only this thread's approved rows.
 CREATE INDEX comments_by_thread ON comments (thread_id, status, created_at, id);
+-- The per-thread rate limit (#69): this thread's comments inside a time window,
+-- at *any* status — a spammer's pending and already-rejected comments are exactly
+-- the ones that should count against them.
+--
+-- Not redundant with comments_by_thread, and neither can absorb the other.
+-- That one leads (thread_id, status, ...), so a query with no status predicate
+-- cannot reach its created_at column: SQLite seeks the thread and then filters one
+-- index entry per comment on the page, on every submission including the ones
+-- about to be rejected. Reordering it to put created_at first would move the same
+-- cost onto the page read, which is the hotter path and the one bounded by the
+-- account-wide 5M row reads a day rather than by one page.
+--
+-- The write it costs is the trade: D1 counts one extra row written per index whose
+-- columns a write touches, so this adds one to the handful an accepted comment
+-- already costs, against 100k a day. Moderation pays nothing — it sets status and
+-- moderated_at, neither of which is on this index. So the write is paid only on
+-- comments that are *stored*, while the read it saves was paid on every submission
+-- attempt, which is the number an attacker controls.
+-- Source: https://developers.cloudflare.com/d1/platform/pricing/ (checked 2026-07-25)
+-- Enforced by test/worker/spam/query-plan.test.ts.
+CREATE INDEX comments_by_thread_time ON comments (thread_id, created_at);
 -- The moderation queue: one status across every thread, newest first.
 CREATE INDEX comments_by_status ON comments (status, created_at DESC);
 -- Replies, and cascade deletes.
 CREATE INDEX comments_by_parent ON comments (parent_id) WHERE parent_id IS NOT NULL;
 -- Rate limiting. Partial, so rows whose ip_hash has been purged cost nothing.
 CREATE INDEX comments_by_ip ON comments (ip_hash, created_at) WHERE ip_hash IS NOT NULL;
--- Duplicate-body detection.
-CREATE INDEX comments_by_body ON comments (thread_id, body_hash);
+-- Duplicate-body detection, over a window: all three of DUPLICATE_BODY_SQL's
+-- predicates, so the answer comes from the index alone.
+--
+-- `created_at` is on this index because comments_by_thread_time exists, not merely
+-- because the query mentions it. That index answers two of the same three
+-- predicates, and SQLite chose it here the moment it was added — turning an exact
+-- two-column seek into a window scan filtered on body_hash. A third column makes
+-- this one strictly the more constrained candidate, so the planner's estimates no
+-- longer get a say.
+-- Enforced by test/worker/spam/query-plan.test.ts.
+CREATE INDEX comments_by_body ON comments (thread_id, body_hash, created_at);
 -- The dashboard's thread list, most recently active first.
 CREATE INDEX threads_by_updated ON threads (updated_at DESC);
 

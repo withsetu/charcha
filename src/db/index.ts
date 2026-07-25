@@ -546,14 +546,13 @@ export async function purgeExpiredIpHashes(
  * the submission path issues the same three statements on a page with three
  * comments and on a page with three thousand.
  *
- * **The statement count is constant; the row-read cost of the middle one is
- * not.** `RECENT_ON_PAGE_SQL` has no `status` predicate, and the only index that
- * starts at `thread_id` is `comments_by_thread (thread_id, status, created_at,
- * id)` — so SQLite seeks the thread and then filters its entries on
- * `created_at`, reading one index entry per comment on the page. That is bounded
- * by the page rather than by the database, but it is not the seek the other two
- * get. Closing it needs a `(thread_id, created_at)` index and therefore a
- * migration, which is #67.
+ * The row-read cost is bounded the same way, and by the rate-limit window rather
+ * than by the page: all three constrain every one of their predicates on an
+ * index. `RECENT_ON_PAGE_SQL` did not until #69 added `comments_by_thread_time
+ * (thread_id, created_at)` — having no `status` predicate, it could not reach the
+ * `created_at` column of `comments_by_thread (thread_id, status, created_at,
+ * id)`, and filtered one index entry per comment on the page instead. That cost
+ * was paid on every submission, including the ones about to be rejected.
  * Enforced by test/worker/spam/query-plan.test.ts, which asserts the constrained
  * columns of each plan rather than only the absence of the word SCAN.
  */
@@ -603,7 +602,9 @@ export async function countRecentCommentsOnPage(
  *
  * `limit 1` and no count: the question is existence, and a spam blast of the same
  * body should not cost one row read per copy already stored. Matches
- * `comments_by_body`, which is `(thread_id, body_hash)`.
+ * `comments_by_body`, which is `(thread_id, body_hash, created_at)` — all three
+ * predicates, so the index answers this without reading a row.
+ * Enforced by test/worker/spam/query-plan.test.ts.
  *
  * Status is deliberately not filtered — a body already marked spam is the one
  * most worth refusing a second time. `since` is what keeps that from becoming a

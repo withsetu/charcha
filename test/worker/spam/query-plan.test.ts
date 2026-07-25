@@ -46,25 +46,41 @@ describe('the per-thread rate-limit read', () => {
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 
-  it('constrains the thread but NOT the window, which is the cost recorded on #69', async () => {
-    // Pinned as it really is rather than as it should be. `comments_by_thread` is
-    // (thread_id, status, created_at, id) and this query has no status predicate,
-    // so created_at cannot be an index constraint — SQLite seeks the thread and
-    // filters its entries. This assertion fails the moment #69 adds
-    // (thread_id, created_at), which is the point: the improvement should have to
-    // come back and update the claim rather than land silently.
+  it('constrains both the thread and the window on the index, not only the thread', async () => {
+    // The same trap as the per-IP read, and #69 is where this one was closed.
+    // `comments_by_thread` is (thread_id, status, created_at, id) and this query
+    // has no status predicate, so against *that* index created_at cannot be a
+    // constraint — SQLite would seek the thread and then filter one index entry
+    // per comment on the page, on every submission including the ones about to be
+    // rejected. `comments_by_thread_time` is (thread_id, created_at), so the read
+    // is bounded by the rate-limit window instead of by the page.
+    //
+    // Naming the index and its constrained columns is the whole assertion:
+    // `not.toMatch(/SCAN/)` passed on the filtered plan too, because SQLite calls
+    // that a SEARCH.
     const plan = await planOf(RECENT_ON_PAGE_SQL, '/hello', 1000)
 
-    expect(plan).toMatch(/SEARCH c USING (?:COVERING )?INDEX comments_by_thread \(thread_id=\?\)/)
+    expect(plan).toMatch(
+      /SEARCH c USING (?:COVERING )?INDEX comments_by_thread_time \(thread_id=\? AND created_at>\?\)/,
+    )
+    expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })
 
 describe('the duplicate-body read', () => {
-  it('constrains both the thread and the body hash on the index', async () => {
+  it('constrains the thread, the body hash and the window on one index', async () => {
+    // The window is asserted, not just the two equalities, and that is #69's
+    // doing rather than tidiness. Adding `comments_by_thread_time` gave SQLite a
+    // second candidate for this statement — (thread_id, created_at) also answers
+    // two of its three predicates — and the planner took it, downgrading an exact
+    // two-column seek into a window scan filtered on body_hash. Carrying
+    // created_at on `comments_by_body` makes that index strictly the more
+    // constrained of the two, so the choice is decided by the schema rather than
+    // by which index the planner's estimates happen to favour.
     const plan = await planOf(DUPLICATE_BODY_SQL, '/hello', 'a-body-hash', 1000)
 
     expect(plan).toMatch(
-      /USING (?:COVERING )?INDEX comments_by_body \(thread_id=\? AND body_hash=\?\)/,
+      /USING (?:COVERING )?INDEX comments_by_body \(thread_id=\? AND body_hash=\? AND created_at>\?\)/,
     )
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
