@@ -87,13 +87,18 @@
   // https://developers.cloudflare.com/workers/runtime-apis/bindings/
   //
   // So the honest state is *unknown*, and it stays unknown until someone deploys to
-  // a real Workers Free account — the owner check on #119. What #119's own
-  // preferred fallback cannot be is the Cache API: it "functions on Cloudflare
-  // Workers deployed to custom domains", and a one-click deploy lands on
-  // workers.dev, where the zone-level cache is not the deployment's to use. It is
-  // also "not currently available" for Workers fronted by Cloudflare Access, which
-  // is #108. A fallback that silently counts nothing is the #107 failure again, so
-  // that option is closed and the remaining one is Durable Objects.
+  // a real Workers Free account — the owner check on #119.
+  //
+  // What #119's own preferred fallback cannot be is the Cache API. One half of that
+  // is documented outright: "For Workers fronted by Cloudflare Access, the Cache API
+  // is not currently available", and Access is #108. The other half is an
+  // *inference* from an enumeration, and is flagged as one rather than quoted as
+  // fact — "Workers deployed to custom domains have access to functional `cache`
+  // operations. So do Pages functions, whether attached to custom domains or
+  // `*.pages.dev` domains." `*.workers.dev` is conspicuously not in that list, and a
+  // one-click deploy lands there. A counter that stores nothing reads as zero
+  // attempts forever, which is the #107 failure again, so the option is treated as
+  // closed pending someone measuring it.
   // https://developers.cloudflare.com/workers/runtime-apis/cache/ (2026-07-25)
   //
   // Nothing here is changed on a guess. A plan gate would fail `wrangler deploy`
@@ -117,24 +122,27 @@
   // The Deploy to Cloudflare button reads this file to decide what to provision,
   // and rewrites `database_id` with the ID of the database it creates. The value
   // below is a placeholder that exists only so the binding is well-formed before
-  // any deployment has happened — Cloudflare asks for "default values for resource
-  // names, resource IDs and any other properties for each binding" and will not
-  // deploy a binding that is missing one.
+  // any deployment has happened. Cloudflare's instruction is to "make sure your
+  // source repository includes default values for resource names, resource IDs and
+  // any other properties for each binding"; what it does with a binding that has
+  // none is not documented, and the placeholder means nobody has to find out.
   //
   // **Cloudflare creates the database and does not migrate it.** Applying migrations
   // is the repository's job, "as part of your `deploy` script", which is why
   // package.json's `deploy` runs `wrangler d1 migrations apply DB --remote` before
-  // `wrangler deploy` — in that order, so a migration that fails leaves a red build
-  // rather than a live Worker querying an empty database.
+  // `wrangler deploy`, joined by `&&` — the order and the `&&` together are what
+  // make a failed migration a red build rather than a live Worker querying an empty
+  // database. Both are asserted, ordering and separator, by
+  // test/node/deploy-config.test.ts.
   //
   // The migration target is the *binding* `DB` and not the database name, on
   // Cloudflare's explicit instruction: "The migration command should reference the
   // binding name rather than the database name to ensure migrations are successful
   // when users specify a database name that is different from that of your source
   // repository" — the deploy form lets a deployer rename the database, and
-  // `database_name` below is only this repository's default.
+  // `database_name` below is only this repository's default. Also asserted by
+  // test/node/deploy-config.test.ts, against the binding declared here.
   // https://developers.cloudflare.com/workers/platform/deploy-buttons/ (2026-07-25)
-  // Enforced by test/node/deploy-config.test.ts.
   "d1_databases": [
     {
       "binding": "DB",

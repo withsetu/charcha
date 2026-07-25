@@ -57,10 +57,10 @@ comments, not a broken comment form.
 They are declared in [`.dev.vars.example`](.dev.vars.example), which is the file the
 deploy form is built from, with the help text beside each field coming from
 `cloudflare.bindings` in `package.json`. Both are Cloudflare's
-[documented mechanism](https://developers.cloudflare.com/workers/platform/deploy-buttons/),
-and `pnpm check:deploy` fails if a secret the code reads is missing from either — a
-required secret the form never asks for is exactly how a deploy produces a Worker
-that cannot be administered.
+[documented mechanism](https://developers.cloudflare.com/workers/platform/deploy-buttons/).
+`pnpm check:deploy` fails if a secret the code reads is absent from that file, and if
+a field the form would show has no description — a required secret the form never
+asks for is exactly how a deploy produces a Worker that cannot be administered.
 
 ### Setting or changing a secret afterwards
 
@@ -153,8 +153,11 @@ has no `CHARCHA_DASHBOARD_PASSWORD`. That is the designed behaviour rather than 
 bug — an unconfigured dashboard is a locked one, not an open one — but it is
 indistinguishable from a wrong password by design, because a login endpoint that
 tells you which of the two it was tells an attacker whether the door exists. The
-Worker's logs say which; look for a line with `guard: dashboard-password`. The fix
-is `pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD`, or the same field under
+Worker's logs say which: look for a line with `guard: dashboard-password`. It is
+emitted **once per isolate**, not once per request, so if you started tailing logs
+after the first failed request you may have to wait for a cold start or redeploy to
+see it. The fix is `pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD`, or the
+same field under
 **Settings → Variables and Secrets** in the dashboard. Comments arriving in the
 meantime are not lost; they are held in the queue.
 
@@ -179,9 +182,10 @@ that 500s.
 
 **The build fails on `pnpm deploy` with pnpm's own usage text.** Cloudflare
 pre-populates the deploy command from the `deploy` script in `package.json`, and
-`pnpm deploy` is a built-in pnpm command — deploying a package from a workspace —
-which shadows the script. Set the deploy command to `pnpm run deploy` (or
-`npm run deploy`) under **Settings → Build**.
+`pnpm deploy` is a built-in pnpm command — `pnpm deploy --help` prints
+`Usage: pnpm --filter=<deployed project name> deploy <target directory>`, checked
+against pnpm 10.34.5 — which shadows the script rather than running it. Set the
+deploy command to `pnpm run deploy` (or `npm run deploy`) under **Settings → Build**.
 
 **The deploy fails mentioning the rate limiting binding.** Charcha uses the
 [Workers Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
@@ -204,12 +208,13 @@ than allowing them unguarded, so the dashboard stays shut. Comments are still
 accepted and still queued the whole time, so nothing is lost while
 [#124](https://github.com/withsetu/charcha/issues/124) picks a throttle that does not
 depend on the binding. The obvious candidate is closed off, and the reason is worth
-knowing before anyone suggests it: the Cache API "functions on Cloudflare Workers
-deployed to custom domains", which a one-click deploy on `workers.dev` is not, and is
-"not currently available" for Workers behind Cloudflare Access
+knowing before anyone suggests it: the Cache API is documented as "not currently
+available" for Workers behind Cloudflare Access, and its availability sentence lists
+custom domains and `*.pages.dev` while omitting `*.workers.dev`
 ([Cache](https://developers.cloudflare.com/workers/runtime-apis/cache/), checked
-2026-07-25) — a counter that silently counts nothing is worse than no counter,
-because it looks like one.
+2026-07-25). The second half is an inference rather than a statement, and it is the
+wrong thing to bet a security guard on either way — a counter that silently counts
+nothing is worse than no counter, because it looks like one.
 
 **pnpm version mismatch.** `pnpm-lock.yaml` is written by the pnpm that
 `package.json` pins with `packageManager`, but a Cloudflare deploy does not use
