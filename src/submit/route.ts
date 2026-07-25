@@ -6,6 +6,7 @@
 
 import type { Context } from 'hono'
 import { readCappedText } from '../request-body'
+import { withFragmentHeaders } from '../response-headers'
 import { runSubmission } from './pipeline'
 import type { SubmitResult } from './pipeline'
 import type { SpamCheck } from './spam'
@@ -57,6 +58,19 @@ export interface SubmitRouteConfig {
  * parsed as JSON — malformed JSON is a 400, never a 500.
  */
 export async function handleSubmit(
+  c: Context<{ Bindings: Env }>,
+  config: SubmitRouteConfig,
+): Promise<Response> {
+  // One wrap point rather than a spread at each return (#98). The 201 and 202
+  // bodies are the reader's own comment rendered back to them, so this response
+  // carries attacker-influenced HTML on this Worker's origin exactly as the read
+  // does. src/index.ts re-wraps the result with withCors, which copies headers
+  // rather than replacing them, so these survive it.
+  // Enforced by test/worker/response-headers.test.ts.
+  return withFragmentHeaders(await submitAnswer(c, config))
+}
+
+async function submitAnswer(
   c: Context<{ Bindings: Env }>,
   config: SubmitRouteConfig,
 ): Promise<Response> {

@@ -18,6 +18,7 @@ import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { renderComments } from '../render'
 import type { CommentStrings } from '../render'
 import { corsHeaders, resolveOrigin } from '../cors'
+import { withFragmentHeaders } from '../response-headers'
 
 const TEXT = 'text/plain; charset=utf-8'
 const HTML = 'text/html; charset=utf-8'
@@ -108,6 +109,18 @@ function rejected(message: string, allowedOrigin: string | null): Response {
 export async function handleRead(
   c: Context<{ Bindings: Env }>,
   config: ReadRouteConfig = {},
+): Promise<Response> {
+  // One wrap point rather than a spread at each return (#98). This response is
+  // navigable by URL — it is a GET with query parameters — so the headers that keep
+  // it from becoming a document on this Worker's origin have to cover every exit,
+  // including the ones added after this line was written.
+  // Enforced by test/worker/response-headers.test.ts.
+  return withFragmentHeaders(await readAnswer(c, config))
+}
+
+async function readAnswer(
+  c: Context<{ Bindings: Env }>,
+  config: ReadRouteConfig,
 ): Promise<Response> {
   // The read withholds the header from an unlisted origin but still answers, unlike
   // the write, which refuses outright. The asymmetry is the point: this has no side

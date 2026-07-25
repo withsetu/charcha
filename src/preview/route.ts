@@ -27,6 +27,7 @@ import {
   withCors,
 } from '../cors'
 import { renderMarkdown } from '../render'
+import { withFragmentHeaders } from '../response-headers'
 import { readCappedText } from '../request-body'
 import { parseCommentBody } from '../submit/schema'
 
@@ -97,6 +98,16 @@ function rejected(message: string, allowedOrigin: string | null): Response {
  * their own deployment with curl.
  */
 export async function handlePreview(c: Context<{ Bindings: Env }>): Promise<Response> {
+  // One wrap point rather than a spread at each return (#98). POST-only is not the
+  // same as unnavigable — a cross-site `<form enctype="text/plain">` navigates a
+  // victim's browser here with a body of the attacker's choosing — so the headers
+  // that keep this from becoming a document cover every exit, including the 413 the
+  // shared size cap builds in src/request-body.ts.
+  // Enforced by test/worker/response-headers.test.ts.
+  return withFragmentHeaders(await previewAnswer(c))
+}
+
+async function previewAnswer(c: Context<{ Bindings: Env }>): Promise<Response> {
   const decision = await resolveOrigin(c.env.DB, c.req.raw)
   if (isUnlistedBrowserOrigin(decision)) return unlistedOriginResponse()
 
