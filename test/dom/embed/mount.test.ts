@@ -19,7 +19,10 @@ import { REPLYING_CLASS, fieldIds } from '../../../src/embed/markup'
 import { mountWidget } from '../../../src/embed/mount'
 
 const API = 'https://comments.example.com'
-const CONFIG: EmbedConfig = { api: API, thread: null, styles: 'inherit' }
+// No sitekey: the deployment has not configured Turnstile (#79), which is the
+// default and the case every test here is about. The widget renders and posts
+// without a token, and the server layer abstains rather than rejecting.
+const CONFIG: EmbedConfig = { api: API, thread: null, styles: 'inherit', turnstileSitekey: null }
 
 const LOADING = 'Loading comments…'
 const READ_FAILED = 'Comments could not be loaded.'
