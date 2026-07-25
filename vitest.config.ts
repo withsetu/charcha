@@ -56,6 +56,23 @@ export default defineConfig({
           environmentOptions: { happyDOM: { url: 'https://example.com/posts/hello/' } },
         },
       },
+      {
+        // The moderation dashboard (#13). A separate project from `dom` rather than
+        // a widened glob on it, for two reasons that are both about the address:
+        // these tests need to be *on* `/admin` for a same-origin fetch assertion to
+        // mean anything, and the embed's project is pinned to a reader's page URL.
+        // The two cannot share one `environmentOptions`.
+        //
+        // React components are `.tsx`, so the glob takes both extensions.
+        test: {
+          name: 'dashboard',
+          environment: 'happy-dom',
+          include: ['test/dashboard/**/*.test.ts', 'test/dashboard/**/*.test.tsx'],
+          environmentOptions: {
+            happyDOM: { url: 'https://comments.example.com/admin' },
+          },
+        },
+      },
     ],
   },
 })

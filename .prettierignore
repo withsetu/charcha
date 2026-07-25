@@ -1,5 +1,10 @@
 dist/
 coverage/
+# Build output: the embed bundle and the dashboard's bundle and stylesheet. All
+# three are minified, and Prettier reformatting a bundle checks esbuild's output
+# rather than anybody's source. `pnpm build` writes them into the working tree, so
+# without this a local `pnpm check` after a build fails on generated files.
+public/
 .wrangler/
 node_modules/
 .claude/

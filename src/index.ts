@@ -12,6 +12,7 @@ import {
   handleQueue,
   handleSession,
 } from './admin/route'
+import { DASHBOARD_HEADERS, DASHBOARD_HTML } from './dashboard/document'
 import { getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
 import {
   isUnlistedBrowserOrigin,
@@ -108,6 +109,32 @@ app.delete(SESSION_PATH, (c) => handleLogout(c))
 app.get(SESSION_PATH, (c) => handleSession(c))
 app.get(QUEUE_PATH, (c) => handleQueue(c))
 app.post(COMMENT_STATUS_PATH, (c) => handleCommentStatus(c))
+
+// The dashboard itself (#13): the HTML shell the React app boots from.
+//
+// Two exact paths, and never `/admin/*`. Two separate things protect the API from
+// this handler and only one of them is the order:
+//
+//   - Registration order. Hono matches in it, so the API routes above win even against
+//     a wildcard here. A kill-shot confirmed that: swapping these for `/admin/*` leaves
+//     `GET /admin/api/queue` answering JSON.
+//   - The exact paths. What the wildcard *does* break is every other `/admin/...`
+//     address: `/admin/nope` would answer the shell with a 200, so a typo'd URL —
+//     including a mistyped API path from a future client — would look like a working
+//     page rather than a 404. That is the failure the kill-shot found, and the reason
+//     the two paths are written out.
+//
+// The bundle and the stylesheet are **not** here. They are static assets in
+// public/admin, matched by the assets binding before the Worker is ever invoked, so
+// loading the dashboard costs one Worker request rather than three. The document is
+// served from the Worker because it is the only place its Content-Security-Policy can
+// be set — see src/dashboard/document.ts, which owns both the markup and the headers.
+// Enforced by test/worker/dashboard/document.test.ts.
+const dashboardDocument = (c: Context<{ Bindings: Env }>) =>
+  c.body(DASHBOARD_HTML, 200, DASHBOARD_HEADERS)
+
+app.get('/admin', dashboardDocument)
+app.get('/admin/', dashboardDocument)
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a

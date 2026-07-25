@@ -1,0 +1,18 @@
+{
+  // These tests import src/dashboard, which runs in a browser. Same program shape
+  // it has: the DOM lib, JSX, and *not* the Worker's ambient types, which redeclare
+  // `fetch` and `Response` with Cloudflare's shapes.
+  //
+  // test/tsconfig.json excludes this directory for that reason, and `pnpm typecheck`
+  // runs this project as a fifth.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "types": [],
+    "jsx": "react-jsx"
+  },
+  // The root project's `include` is inherited through `extends` and points at src,
+  // so it has to be replaced here or this project has no inputs at all.
+  "include": ["./**/*.ts", "./**/*.tsx"],
+  "exclude": []
+}

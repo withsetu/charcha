@@ -1,0 +1,194 @@
+/* The dashboard's stylesheet: Tailwind v4 plus shadcn/ui's token layer.
+ *
+ * Built by `pnpm build:dashboard` into public/admin/app.css, which is a static
+ * asset — so the browser fetches it without invoking or billing the Worker, the
+ * same trade wrangler.jsonc records for embed.js.
+ *
+ * **Dark mode follows the operating system and nothing else, and that is card
+ * rule 8 rather than a shortcut.** shadcn's registry theme toggles on a `.dark`
+ * class, which needs somewhere to remember the choice — and the only places are a
+ * cookie, which this project does not set, or localStorage, which is one more
+ * piece of state on a surface that has none. Tailwind v4's own `dark:` variant is
+ * already `prefers-color-scheme: dark`, so *not* adding shadcn's
+ * `@custom-variant dark` is what keeps the component classes and the tokens below
+ * agreeing with each other. The owner's OS setting is the setting.
+ */
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Tailwind v4 infers its content sources from where the stylesheet lives; this
+ * states them, because the build runs from the repository root and the inference
+ * would otherwise depend on the working directory. */
+@source './**/*.{ts,tsx}';
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.446 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  /* Approval is the one outcome with a colour of its own. It is never the only
+   * signal — every status carries a word and an icon too, per WCAG 1.4.1. */
+  --success: oklch(0.52 0.11 155);
+  --success-foreground: oklch(0.985 0 0);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.269 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.371 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --success: oklch(0.72 0.13 155);
+    --success-foreground: oklch(0.205 0 0);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground;
+  }
+
+  /* The whole surface is keyboard-driven, so a focus ring is load-bearing rather
+   * than decoration. `:focus-visible` is deliberately not narrowed further: the
+   * queue moves focus programmatically, and a browser shows the ring for a
+   * programmatic focus only when it believes the user is on the keyboard —
+   * which, here, they always are. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* The current row's marker. A 3px bar down the left edge plus a background tint:
+ * two signals, neither of them colour alone, so it survives a monochrome display
+ * and forced-colours mode. The `Highlight` fallback is what keeps it visible in
+ * Windows high-contrast, where background tints are discarded. */
+.charcha-current {
+  box-shadow: inset 3px 0 0 0 var(--foreground);
+}
+
+@media (forced-colors: active) {
+  .charcha-current {
+    box-shadow: inset 3px 0 0 0 Highlight;
+    forced-color-adjust: none;
+  }
+}
+
+/* The undo window, drawn rather than counted down in text. A number ticking once
+ * a second inside a live region would be read aloud nine times; a bar that
+ * shrinks is silent to assistive technology and legible to everyone else. */
+.charcha-undo-window {
+  animation: charcha-undo-drain linear 1 forwards;
+  animation-duration: var(--charcha-undo-duration);
+}
+
+@keyframes charcha-undo-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .charcha-undo-window {
+    animation: none;
+    transform: scaleX(1);
+  }
+}
+
+/* The rendered comment body. src/render/renderMarkdown emits exactly ten
+ * elements (MARKDOWN_ELEMENTS), and these are their styles — no more, because a
+ * rule for an element the renderer cannot emit is a rule describing markup that
+ * will never arrive. */
+.charcha-body {
+  @apply text-sm leading-relaxed break-words;
+}
+.charcha-body > * + * {
+  @apply mt-3;
+}
+.charcha-body a {
+  @apply font-medium underline underline-offset-2;
+}
+.charcha-body code {
+  @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+}
+.charcha-body pre {
+  @apply overflow-x-auto rounded-md bg-muted p-3;
+}
+.charcha-body pre code {
+  @apply bg-transparent p-0;
+}
+.charcha-body blockquote {
+  @apply border-l-2 border-border pl-3 text-muted-foreground italic;
+}
+.charcha-body ul {
+  @apply list-disc space-y-1 pl-5;
+}
+.charcha-body strong {
+  @apply font-semibold;
+}

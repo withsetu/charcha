@@ -1,0 +1,175 @@
+// One row of the queue.
+//
+// The row is the focus target, not a link inside it, because the keyboard is the
+// primary interface: `J` and `K` move focus from row to row and a screen reader reads
+// the row it lands on, which is what makes navigation self-announcing. The buttons
+// inside it are the mouse-and-assistive-technology fallback for the same three
+// decisions the keys make, reachable with Tab from the focused row.
+//
+// Enforced by test/dashboard/triage.test.tsx.
+
+import * as React from 'react'
+import { CheckIcon, ShieldAlertIcon, Trash2Icon } from 'lucide-react'
+
+import type { DecisionStatus, QueuedComment } from '../api'
+import { formatAge, formatExact, isoInstant, pageLabel } from '../format'
+import { Badge } from '../ui/badge'
+import { Button } from '../ui/button'
+import { cn } from '../ui/utils'
+import { CommentBody } from './comment-body'
+
+export interface CommentCardProps {
+  comment: QueuedComment
+  current: boolean
+  /** The row's 1-based position and the list length, for the accessible name. */
+  position: number
+  total: number
+  /** Seconds since the epoch, passed in so the row does not read a clock per render. */
+  now: number
+  busy: boolean
+  onFocus: (id: number) => void
+  onDecide: (id: number, status: DecisionStatus) => void
+}
+
+/** The three decisions, as buttons — the same order as the keys A, S, D. */
+const DECISIONS: readonly {
+  status: DecisionStatus
+  label: string
+  key: string
+  icon: typeof CheckIcon
+  variant: 'default' | 'outline' | 'destructive'
+}[] = [
+  { status: 'approved', label: 'Approve', key: 'A', icon: CheckIcon, variant: 'default' },
+  { status: 'spam', label: 'Spam', key: 'S', icon: ShieldAlertIcon, variant: 'outline' },
+  { status: 'deleted', label: 'Delete', key: 'D', icon: Trash2Icon, variant: 'outline' },
+]
+
+export function CommentCard({
+  comment,
+  current,
+  position,
+  total,
+  now,
+  busy,
+  onFocus,
+  onDecide,
+}: CommentCardProps) {
+  const row = React.useRef<HTMLDivElement>(null)
+  const page = pageLabel(comment.pageTitle, comment.pageKey)
+
+  // Focus follows `current`, which is what makes `J`/`K` move the caret rather than
+  // only a highlight — and the reason a screen reader announces the new row without
+  // any live region. `preventScroll: false` is the default and is wanted: the row has
+  // to be on screen for the sighted keyboard user too.
+  React.useEffect(() => {
+    if (current && row.current !== null && document.activeElement !== row.current) {
+      row.current.focus()
+    }
+  }, [current])
+
+  return (
+    <li>
+      <div
+        ref={row}
+        // A group rather than an `option`: an ARIA option may not contain interactive
+        // descendants, and every row here has three buttons in it. `role="group"` with
+        // an accessible name is what lets a screen reader announce the row as a unit
+        // and then let the user move into its controls.
+        role="group"
+        aria-label={`Comment ${String(position)} of ${String(total)}, by ${comment.authorName}, on ${page}`}
+        // Roving tabindex: exactly one row is in the tab order at a time, so Tab from
+        // the list goes to the current row's buttons rather than through 200 rows.
+        tabIndex={current ? 0 : -1}
+        aria-current={current ? 'true' : undefined}
+        aria-busy={busy || undefined}
+        onFocus={() => {
+          onFocus(comment.id)
+        }}
+        className={cn(
+          'rounded-xl border bg-card p-4 text-card-foreground transition-colors sm:p-5',
+          current ? 'charcha-current bg-accent/40' : 'hover:bg-accent/20',
+          busy && 'opacity-60',
+        )}
+      >
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-medium">{comment.authorName}</span>
+          {comment.byOwner && (
+            <Badge variant="secondary" className="translate-y-[-1px]">
+              You
+            </Badge>
+          )}
+          <span aria-hidden="true" className="text-muted-foreground">
+            ·
+          </span>
+          <time
+            dateTime={isoInstant(comment.createdAt)}
+            title={formatExact(comment.createdAt)}
+            className="text-sm text-muted-foreground"
+          >
+            {formatAge(comment.createdAt, now)}
+          </time>
+          {comment.depth > 0 && (
+            <>
+              <span aria-hidden="true" className="text-muted-foreground">
+                ·
+              </span>
+              <span className="text-sm text-muted-foreground">reply</span>
+            </>
+          )}
+        </div>
+
+        {/* The page, not a link to it: `pageKey` is a derived key rather than a URL
+            (src/page-key.ts), so there is nothing honest to navigate to. */}
+        <p className="mt-0.5 truncate text-sm text-muted-foreground">
+          <span className="sr-only">On page: </span>
+          {page}
+        </p>
+
+        {comment.spamReason !== null && (
+          // #70's reason, and the whole point of it: it turns triage from reading
+          // every comment into confirming a judgement. It is a layer's internal token
+          // rather than prose, so it is presented as one — a label, monospaced,
+          // introduced by a word that says what it is.
+          <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+            <Badge variant="outline" className="gap-1 text-muted-foreground">
+              <ShieldAlertIcon aria-hidden="true" />
+              Held
+            </Badge>
+            <span className="sr-only">Reason: </span>
+            <code className="font-mono text-xs text-muted-foreground">{comment.spamReason}</code>
+          </p>
+        )}
+
+        <div className="mt-3">
+          <CommentBody body={comment.body} />
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {DECISIONS.map((decision) => (
+            <Button
+              key={decision.status}
+              size="sm"
+              variant={decision.variant}
+              disabled={busy}
+              // Tab order within the row only. A row that is not current keeps its
+              // buttons out of the tab sequence, so Tab never walks the whole queue.
+              tabIndex={current ? 0 : -1}
+              onClick={() => {
+                onDecide(comment.id, decision.status)
+              }}
+            >
+              <decision.icon aria-hidden="true" />
+              {decision.label}
+              <kbd
+                aria-hidden="true"
+                className="ml-1 rounded border border-current/25 px-1 text-[0.65rem] opacity-70"
+              >
+                {decision.key}
+              </kbd>
+            </Button>
+          ))}
+        </div>
+      </div>
+    </li>
+  )
+}
