@@ -65,6 +65,29 @@ async function writeHealthyRepo(overrides: Partial<Manifest> = {}) {
   await write('src/admin/env.ts', HEALTHY_ENV_MODULE)
 }
 
+/**
+ * A second secret the fixture repository reads and the deploy form must *not* collect —
+ * the #139 shape, where the only value a deployer could invent would break something.
+ */
+async function writeOptionalSecret() {
+  await write(
+    'src/spam/env.ts',
+    'declare global {\n  interface Env {\n    readonly OPTIONAL_PROVIDER_KEY?: string\n  }\n}\n',
+  )
+}
+
+/**
+ * What the synthetic repositories below collect at deploy time.
+ *
+ * They declare their own secrets, so charcha's real `DEPLOY_FORM_SECRETS` is the wrong
+ * list to hold them to — `IP_HASH_SECRET` is on it and no fixture declares one. The
+ * repository's actual list is asserted separately, by `passes this repository`.
+ */
+const FIXTURE_FORM_SECRETS = ['CHARCHA_DASHBOARD_PASSWORD']
+
+const check = (options: { cwd?: string; formSecrets?: string[] } = {}) =>
+  checkDeployConfig({ cwd, formSecrets: FIXTURE_FORM_SECRETS, ...options })
+
 const statuses = (result: { violations: Array<{ status: string }> }) =>
   result.violations.map((violation) => violation.status)
 
@@ -88,7 +111,7 @@ describe('checkDeployConfig', () => {
   it('passes a repository whose deploy flow collects and migrates everything', async () => {
     await writeHealthyRepo()
 
-    const result = await checkDeployConfig({ cwd: cwd })
+    const result = await check()
 
     expect(result.violations).toEqual([])
     expect(result.ok).toBe(true)
@@ -96,75 +119,145 @@ describe('checkDeployConfig', () => {
 
   // The #12 failure, generalised: a required secret the Deploy form never asks for
   // means a dashboard that 401s every route while comments keep arriving. #139 made
-  // "not in the form" a legitimate choice, so the guard now asks the deployer's
-  // question instead — is this secret reachable *anywhere* — and both answers have to
-  // be missing before it fires.
+  // "not in the form" a legitimate choice for *optional* secrets, so the guard now asks
+  // the deployer's question — is this secret reachable anywhere — and both answers have
+  // to be missing before it fires.
   it('fails when a secret src/ declares is in neither the example file nor the README', async () => {
     await writeHealthyRepo()
-    await write('.dev.vars.example', '')
-    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
+    await writeOptionalSecret()
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unlisted-secret'])
-    expect(result.violations[0]?.message).toContain('CHARCHA_DASHBOARD_PASSWORD')
-    expect(result.violations[0]?.message).toContain('src/admin/env.ts')
+    expect(result.violations[0]?.message).toContain('OPTIONAL_PROVIDER_KEY')
+    expect(result.violations[0]?.message).toContain(join('src', 'spam', 'env.ts'))
   })
 
   // The #139 shape: the deploy form requires every field it shows and offers no way to
   // mark one optional (workers-sdk#14075), so a secret whose only safe value is nothing
   // must not be a field. It still has to be findable.
-  it('accepts a secret documented as a post-deploy step instead of collected', async () => {
+  it('accepts an optional secret documented as a post-deploy step instead of collected', async () => {
     await writeHealthyRepo()
-    await write('.dev.vars.example', '')
-    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
-    await write(
-      'README.md',
-      `Set it afterwards: \`${postDeployInstruction('CHARCHA_DASHBOARD_PASSWORD')}\`\n`,
-    )
+    await writeOptionalSecret()
+    await write('README.md', `Afterwards: \`${postDeployInstruction('OPTIONAL_PROVIDER_KEY')}\`\n`)
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(result.violations).toEqual([])
   })
 
   // Naming the secret is not documenting it. A deployer reading "you may also want to
-  // set CHARCHA_DASHBOARD_PASSWORD" has been told a fact, not given an instruction, and
-  // the whole reason the secret left the form is that setting it is now their job.
+  // set OPTIONAL_PROVIDER_KEY" has been told a fact, not given an instruction, and the
+  // whole reason the secret left the form is that setting it is now their job.
   it('does not accept prose that merely mentions the secret’s name', async () => {
     await writeHealthyRepo()
-    await write('.dev.vars.example', '')
-    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
-    await write('README.md', 'Charcha also reads CHARCHA_DASHBOARD_PASSWORD.\n')
+    await writeOptionalSecret()
+    await write('README.md', 'Charcha also reads OPTIONAL_PROVIDER_KEY.\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unlisted-secret'])
   })
 
   it('fails a post-deploy secret whose README instruction names a different secret', async () => {
     await writeHealthyRepo()
-    await write('.dev.vars.example', '')
-    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
+    await writeOptionalSecret()
     await write('README.md', `\`${postDeployInstruction('SOME_OTHER_SECRET')}\`\n`)
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unlisted-secret'])
+  })
+
+  // The failure a substring search hides, and the one a "documented somewhere" check is
+  // most likely to have: `OPTIONAL_PROVIDER` is a prefix of the documented
+  // `OPTIONAL_PROVIDER_KEY`, so a plain `includes` would count a line that never
+  // mentions it as instructions for it.
+  it('does not let a secret ride along on a documented secret it is a prefix of', async () => {
+    await writeHealthyRepo()
+    await write(
+      'src/spam/env.ts',
+      'declare global {\n  interface Env {\n    readonly OPTIONAL_PROVIDER?: string\n  }\n}\n',
+    )
+    await write('README.md', `\`${postDeployInstruction('OPTIONAL_PROVIDER_KEY')}\`\n`)
+
+    const result = await check()
+
+    expect(statuses(result)).toEqual(['unlisted-secret'])
+    expect(result.violations[0]?.message).toContain('OPTIONAL_PROVIDER')
   })
 
   // What gets left behind when a secret moves out of the form. The description reads
   // like guidance that was given and is attached to a field that no longer exists, so
   // it is seen by nobody and looks like coverage to the next maintainer.
   it('fails when a description outlives the deploy-form field it explained', async () => {
-    await writeHealthyRepo()
+    await writeHealthyRepo({
+      cloudflare: {
+        bindings: {
+          CHARCHA_DASHBOARD_PASSWORD: { description: 'The dashboard password.' },
+          OPTIONAL_PROVIDER_KEY: { description: 'Left behind by the move.' },
+        },
+      },
+    })
+    await writeOptionalSecret()
+    await write('README.md', `\`${postDeployInstruction('OPTIONAL_PROVIDER_KEY')}\`\n`)
+
+    const result = await check()
+
+    expect(statuses(result)).toEqual(['undisplayed-description'])
+    expect(result.violations[0]?.message).toContain('OPTIONAL_PROVIDER_KEY')
+  })
+
+  // `cloudflare.bindings` describes every binding type, not only secrets, and the D1
+  // database *is* a deploy-form field. An earlier version of the check above rejected
+  // this, which would have made legitimate help text fail `pnpm check`.
+  it('allows a description for a binding that is not a secret', async () => {
+    await writeHealthyRepo({
+      cloudflare: {
+        bindings: {
+          CHARCHA_DASHBOARD_PASSWORD: { description: 'The dashboard password.' },
+          DB: { description: 'Where your comments are stored. The default name is fine.' },
+        },
+      },
+    })
+
+    const result = await check()
+
+    expect(result.violations).toEqual([])
+  })
+
+  // The half a README line must never be able to buy. Without this, the two checks
+  // above are one unconditional OR and the secret the dashboard cannot start without
+  // could leave the form entirely — found in review of #139.
+  it('fails when a secret the form is supposed to collect has left the example file', async () => {
+    await writeHealthyRepo({ cloudflare: {} })
     await write('.dev.vars.example', '')
     await write('README.md', `\`${postDeployInstruction('CHARCHA_DASHBOARD_PASSWORD')}\`\n`)
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
-    expect(statuses(result)).toEqual(['undisplayed-description'])
+    expect(statuses(result)).toEqual(['missing-form-field'])
     expect(result.violations[0]?.message).toContain('CHARCHA_DASHBOARD_PASSWORD')
+  })
+
+  // And the other direction, which is the #104 path: a secret nobody decided belongs on
+  // the form becomes a field the deployer must invent a value for.
+  it('fails when the example file collects a secret that is not on the form list', async () => {
+    await writeHealthyRepo({
+      cloudflare: {
+        bindings: {
+          CHARCHA_DASHBOARD_PASSWORD: { description: 'The dashboard password.' },
+          OPTIONAL_PROVIDER_KEY: { description: 'Should not be a field.' },
+        },
+      },
+    })
+    await writeOptionalSecret()
+    await write('.dev.vars.example', 'CHARCHA_DASHBOARD_PASSWORD=\nOPTIONAL_PROVIDER_KEY=\n')
+
+    const result = await check()
+
+    expect(statuses(result)).toEqual(['unexpected-form-field'])
+    expect(result.violations[0]?.message).toContain('OPTIONAL_PROVIDER_KEY')
   })
 
   it('finds a secret declared without `readonly`, which TypeScript does not require', async () => {
@@ -174,7 +267,7 @@ describe('checkDeployConfig', () => {
       'declare global {\n  interface Env {\n    NEW_SECRET?: string\n  }\n}\n',
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unlisted-secret'])
     expect(result.violations[0]?.message).toContain('NEW_SECRET')
@@ -187,7 +280,7 @@ describe('checkDeployConfig', () => {
       'declare global {\n  interface Env {\n    readonly DASHBOARD_SECRET?: string\n  }\n}\n',
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unlisted-secret'])
     expect(result.violations[0]?.message).toContain('DASHBOARD_SECRET')
@@ -197,18 +290,23 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('.dev.vars.example', 'CHARCHA_DASHBOARD_PASSWORD=\nOLD_PROVIDER_KEY=\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
-    // `unread-secret` and `undescribed-secret`: the form would show a field that
-    // nothing reads *and* that nothing explains.
-    expect(statuses(result)).toEqual(['unread-secret', 'undescribed-secret'])
+    // Three separate things are wrong with the same line, and each is a different
+    // reason a deployer meets a field they cannot answer: nobody put it on the form
+    // list, nothing reads it, and nothing explains it.
+    expect(statuses(result)).toEqual([
+      'unexpected-form-field',
+      'unread-secret',
+      'undescribed-secret',
+    ])
   })
 
   it('fails when the example file ships a value, which the deploy form pre-fills', async () => {
     await writeHealthyRepo()
     await write('.dev.vars.example', 'CHARCHA_DASHBOARD_PASSWORD=hunter2\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['example-secret-has-value'])
   })
@@ -217,7 +315,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('.dev.vars.example', 'CHARCHA_DASHBOARD_PASSWORD=hunter2\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(result.violations[0]?.message).not.toContain('hunter2')
   })
@@ -226,7 +324,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('.dev.vars.example', 'CHARCHA_DASHBOARD_PASSWORD="a # b"\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['example-secret-has-value'])
   })
@@ -237,7 +335,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('.env.example', 'CHARCHA_DASHBOARD_PASSWORD=hunter2\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['example-secret-has-value'])
     expect(result.violations[0]?.message).toContain('.env.example')
@@ -248,7 +346,7 @@ describe('checkDeployConfig', () => {
     await rm(join(cwd, '.dev.vars.example'))
     await write('.env.example', 'CHARCHA_DASHBOARD_PASSWORD=\n')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(result.violations).toEqual([])
   })
@@ -256,7 +354,7 @@ describe('checkDeployConfig', () => {
   it('fails when a collected secret has no description for the deploy form', async () => {
     await writeHealthyRepo({ cloudflare: { bindings: {} } })
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['undescribed-secret'])
   })
@@ -266,7 +364,7 @@ describe('checkDeployConfig', () => {
       cloudflare: { bindings: { CHARCHA_DASHBOARD_PASSWORD: { description: '   ' } } },
     })
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['undescribed-secret'])
   })
@@ -274,7 +372,7 @@ describe('checkDeployConfig', () => {
   it('fails when there is no deploy script, because the default one skips migrations', async () => {
     await writeHealthyRepo({ scripts: {} })
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['no-deploy-script'])
     expect(result.violations[0]?.message).toContain('npx wrangler deploy')
@@ -284,7 +382,7 @@ describe('checkDeployConfig', () => {
   it('fails when the deploy script only deploys', async () => {
     await writeHealthyRepo(withDeployScript('wrangler deploy'))
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['deploy-skips-migrations'])
   })
@@ -292,7 +390,7 @@ describe('checkDeployConfig', () => {
   it('fails when the deploy script migrates but never deploys', async () => {
     await writeHealthyRepo(withDeployScript('wrangler d1 migrations apply DB --remote'))
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['deploy-does-not-deploy'])
   })
@@ -302,7 +400,7 @@ describe('checkDeployConfig', () => {
       withDeployScript('wrangler d1 migrations apply DB --remote && wrangler versions upload'),
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(result.violations).toEqual([])
   })
@@ -312,7 +410,7 @@ describe('checkDeployConfig', () => {
       withDeployScript('wrangler d1 migrations apply charcha --remote && wrangler deploy'),
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['migrates-wrong-target'])
     expect(result.violations[0]?.message).toContain('binding name')
@@ -323,7 +421,7 @@ describe('checkDeployConfig', () => {
       withDeployScript('wrangler d1 migrations apply DB --local && wrangler deploy'),
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['migrates-locally'])
   })
@@ -336,7 +434,7 @@ describe('checkDeployConfig', () => {
       withDeployScript('wrangler d1 migrations apply DB --local && wrangler deploy --remote'),
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['migrates-locally'])
   })
@@ -346,7 +444,7 @@ describe('checkDeployConfig', () => {
       withDeployScript('wrangler deploy && wrangler d1 migrations apply DB --remote'),
     )
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['migrates-after-deploy'])
   })
@@ -360,7 +458,7 @@ describe('checkDeployConfig', () => {
   ])('fails when the migration is joined to the deploy by %s', async (_name, script) => {
     await writeHealthyRepo(withDeployScript(script))
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['migration-failure-still-deploys'])
   })
@@ -374,7 +472,7 @@ describe('checkDeployConfig', () => {
       },
     })
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(result.violations).toEqual([])
   })
@@ -387,7 +485,7 @@ describe('checkDeployConfig', () => {
       },
     })
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['migrates-locally'])
   })
@@ -395,7 +493,7 @@ describe('checkDeployConfig', () => {
   it('does not loop forever on a script that references itself', async () => {
     await writeHealthyRepo({ scripts: { deploy: 'pnpm run deploy' } })
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['deploy-does-not-deploy', 'deploy-skips-migrations'])
   })
@@ -404,7 +502,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await rm(join(cwd, '.dev.vars.example'))
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['no-example-secrets-file'])
   })
@@ -413,7 +511,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('wrangler.jsonc', '{ "d1_databases": [')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unreadable-wrangler-config'])
   })
@@ -422,7 +520,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('package.json', '{ not json')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['unreadable-package-json'])
   })
@@ -431,7 +529,7 @@ describe('checkDeployConfig', () => {
     await writeHealthyRepo()
     await write('wrangler.jsonc', '{ "name": "charcha" }')
 
-    const result = await checkDeployConfig({ cwd })
+    const result = await check()
 
     expect(statuses(result)).toEqual(['no-d1-binding'])
   })

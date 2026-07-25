@@ -185,7 +185,7 @@ answers JSON, and it distinguishes the three states that matter:
 
 | | |
 |---|---|
-| `200 {"status":"ok","database":"ok"}` | Running, and the migrations have been applied. |
+| `200 {"status":"ok","database":"ok"}` | Running, and the `comments` table exists — so the first migration ran. |
 | `503 {"status":"degraded","database":"unmigrated"}` | The database exists and Charcha's tables do not. This is what a deploy whose migration step failed looks like — see [the troubleshooting entry](#troubleshooting-a-deploy) for `no such table: comments`. |
 | `503 {"status":"degraded","database":"unreachable"}` | The D1 binding itself refused the query. |
 
@@ -194,6 +194,12 @@ unmigrated database answers perfectly, so it reported `ok` on the one failure a
 one-click deploy actually produces
 ([#141](https://github.com/withsetu/charcha/issues/141)). `database: "error"` no longer
 appears; `unreachable` replaced it.
+
+**A 200 is not proof that every migration ran**, and the wording of that first row is
+careful for a reason: the check looks for one table, so a migration set that failed
+partway through a later step still answers `ok`. The build log is what settles that
+([#149](https://github.com/withsetu/charcha/issues/149) is the issue for closing the
+gap).
 
 ### Allowed origins, and why a comment can be refused
 

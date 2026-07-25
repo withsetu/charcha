@@ -163,7 +163,13 @@ app.get('/', (c) => c.body(ROOT_PAGE, 200, ROOT_PAGE_HEADERS))
 // an empty database answers `select 1` perfectly, and the next real query fails. So
 // `/health` said `{"status":"ok","database":"ok"}` about a deployment that could not
 // take a comment. It now asks `databaseStatus`, which reads one row of SQLite's own
-// schema table for the same one-query cost — see src/db/index.ts.
+// schema table — see src/db/index.ts. It is intended to stay one statement, as the old
+// check was, so that the answer costs the same whatever the deployment's state; nothing
+// asserts that here, and test/worker/db/database-status.test.ts is where it is counted.
+//
+// **What it proves is that migration 0001 ran, not that every migration did.** The
+// table it looks for is `comments`, so a later migration that failed on its own is not
+// caught — see #149. The doc claims in README and docs/ are worded to that.
 //
 // **The contract, decided on #141 rather than inherited from the helper:**
 //
@@ -180,9 +186,11 @@ app.get('/', (c) => c.body(ROOT_PAGE, 200, ROOT_PAGE_HEADERS))
 // **Saying `unmigrated` on a public, unauthenticated address is the deliberate part.**
 // #145 took exactly this fact off `/`, and the two calls differ because the pages do:
 // `/` is where a stranger following the deploy-success link lands, `/health` is what a
-// deploy check and a monitor read on purpose. The fact is also not a secret — every
-// other endpoint on an unmigrated deployment fails, so a scanner learns it anyway —
-// and it is the one word that turns "something is wrong" into "run the migrations".
+// deploy check and a monitor read on purpose. The fact is also cheap to infer without
+// this — `GET /comments` fails on an unmigrated deployment, and that endpoint is public
+// too — and it is the one word that turns "something is wrong" into "run the
+// migrations". What this does add is a cheaper oracle than that, which is the cost of
+// the endpoint being useful at all.
 // Two fields, no configuration, no counts, nothing about the request.
 // Enforced by test/worker/health.test.ts.
 app.get('/health', async (c) => {

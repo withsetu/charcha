@@ -58,10 +58,27 @@ describe('GET /health', () => {
     expect(await response.json()).toEqual({ status: 'degraded', database: 'unreachable' })
   })
 
-  it('never answers 200 on a database that is not ready', async () => {
-    // The whole of the bug, stated once: whatever the words are, a deployment that
-    // cannot serve a comment must not be green to a script that only reads the code.
-    vi.spyOn(env.DB, 'prepare').mockImplementation((sql: string) => env.TEST_EMPTY_DB.prepare(sql))
+  // The whole of the bug, stated once and over both failures: whatever the words turn
+  // out to be, a deployment that cannot serve a comment must not read as green to a
+  // script that only looks at the status code. The two cases are listed rather than
+  // one of them re-run, so that a mapping error in either branch fails here.
+  it.each([
+    [
+      'was never migrated',
+      () =>
+        vi
+          .spyOn(env.DB, 'prepare')
+          .mockImplementation((sql: string) => env.TEST_EMPTY_DB.prepare(sql)),
+    ],
+    [
+      'cannot be reached',
+      () =>
+        vi.spyOn(env.DB, 'prepare').mockImplementation(() => {
+          throw new Error('D1_ERROR: no such database')
+        }),
+    ],
+  ])('never answers 200 on a database that %s', async (_case, breakIt) => {
+    breakIt()
 
     expect((await exports.default.fetch(`${origin}/health`)).status).not.toBe(200)
   })

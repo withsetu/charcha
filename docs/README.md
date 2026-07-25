@@ -42,13 +42,15 @@ Two things are built and reachable, which is why the pages above can be written 
   message to tell success from failure: `201` published, `202` accepted and awaiting
   review, `400` rejected by validation, `403` rejected as spam, `413` body too large.
 - **`GET /health`** answers `200 {"status":"ok","database":"ok"}` only if the Worker is
-  running *and* its database has Charcha's schema in it. The two failures are separated
-  because their fixes are: `503 {"status":"degraded","database":"unmigrated"}` means the
-  database is there and the migrations are not, and
+  running *and* its database has the `comments` table in it. The two failures are
+  separated because their fixes are: `503 {"status":"degraded","database":"unmigrated"}`
+  means the database is there and the migrations are not, and
   `503 {"status":"degraded","database":"unreachable"}` means the binding itself refused.
-  Asking whether the schema exists rather than whether a query runs is the whole point —
-  a one-click deploy can leave a database that answers `select 1` and nothing else
-  ([#141](https://github.com/withsetu/charcha/issues/141)).
+  Asking whether a table exists rather than whether a query runs is the whole point — a
+  one-click deploy can leave a database that answers `select 1` and nothing else
+  ([#141](https://github.com/withsetu/charcha/issues/141)). It looks for the table the
+  first migration creates, so it does not prove that a later one ran
+  ([#149](https://github.com/withsetu/charcha/issues/149)).
 
 New comments are held for review by default. The queue they land in is real; the
 interface for working through it is [#13](https://github.com/withsetu/charcha/issues/13).

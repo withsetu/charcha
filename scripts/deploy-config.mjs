@@ -28,6 +28,12 @@
 //      guard enforces is therefore the deployer's view rather than the file's: every
 //      secret is either **collected at deploy time** or **documented in README.md as a
 //      post-deploy `wrangler secret put`**. Neither, and it is invisible.
+//
+//      That alone is an unconditional OR, and would let *any* secret leave the form for
+//      the cost of one README line — including the one #12 is about. So which side each
+//      secret is on is pinned separately, by `DEPLOY_FORM_SECRETS` below, and asserted
+//      in both directions. Moving a secret across that line is an edit to a list rather
+//      than a side effect of editing a dotenv file.
 //   2. **A secret with no description.** Same Cloudflare page: a `cloudflare.bindings`
 //      entry in package.json is what puts an explanation next to the field. Without
 //      one the deployer sees a bare box labelled with a constant name. The converse is
@@ -85,7 +91,9 @@ export const POST_DEPLOY_DOCS_FILE = 'README.md'
  * Prose mentioning the name would satisfy a looser check while telling a deployer
  * nothing they can run, and the whole reason a secret is out of the form is that
  * setting it afterwards is now their job. So the check is for the instruction, not for
- * the word.
+ * the word — though it is a search for a string rather than an understanding of it,
+ * and a README saying *not* to run the command would pass. That is the weakness a
+ * reviewer should know about; it is not one a deployer can be hurt by.
  *
  * @param {string} name
  * @returns {string}
@@ -93,6 +101,44 @@ export const POST_DEPLOY_DOCS_FILE = 'README.md'
 export function postDeployInstruction(name) {
   return `wrangler secret put ${name}`
 }
+
+/**
+ * Whether `docs` gives a runnable instruction for setting `name` after the deploy.
+ *
+ * The trailing boundary is the point. A plain substring search would let
+ * `wrangler secret put IP_HASH_SECRET` document a secret called `IP_HASH` for free —
+ * any name that is a prefix of a documented one passes without a word written about
+ * it, which is the failure a "documented somewhere" check is most likely to hide.
+ *
+ * @param {string} docs
+ * @param {string} name
+ * @returns {boolean}
+ */
+function documentsPostDeploy(docs, name) {
+  // The name is a JS identifier by construction — `declaredSecrets` only collects
+  // /[A-Z][A-Z0-9_]*/ — so there is nothing here to escape for the regex.
+  return new RegExp(`${postDeployInstruction(name)}(?![A-Za-z0-9_])`).test(docs)
+}
+
+/**
+ * The secrets the Deploy to Cloudflare form collects, and the whole of the decision
+ * #139 took.
+ *
+ * It is a list rather than something derived because it is a judgement no file records:
+ * a secret belongs on that form only when a value is genuinely **required** *and* any
+ * value a hurried deployer invents is **safe**. Both halves are needed. The form
+ * requires every field it shows (workers-sdk#14075), so a name here that a deployer has
+ * no value for leaves them inventing one — which for `TURNSTILE_SECRET_KEY` refuses
+ * every comment on their site for good (#104) — and a name missing from here that the
+ * deployment cannot work without is #12, a dashboard that 401s its own login forever.
+ *
+ * Asserted in both directions below, so moving a secret across this line is an edit to
+ * this list and therefore a decision someone makes, rather than a consequence of
+ * editing a dotenv file. Without it the two checks are one unconditional OR, and
+ * `CHARCHA_DASHBOARD_PASSWORD` could leave the form entirely for the cost of one README
+ * line — found in review.
+ */
+export const DEPLOY_FORM_SECRETS = ['CHARCHA_DASHBOARD_PASSWORD', 'IP_HASH_SECRET']
 
 /** Extensions a secret could be declared in. `.tsx` because the dashboard is React. */
 const SOURCE_EXTENSIONS = ['.ts', '.tsx']
@@ -385,10 +431,15 @@ function stopsOnFailure(between) {
 }
 
 /**
- * @param {{ cwd?: string }} options
- * @returns {Promise<{ ok: boolean, violations: Array<{ status: string, message: string }> }>}
+ * @param {{ cwd?: string, formSecrets?: string[] }} options `formSecrets` overrides
+ *   `DEPLOY_FORM_SECRETS`, which is charcha's own list — the synthetic repositories in
+ *   test/node/deploy-config.test.ts declare different secrets and pass their own.
+ * @returns {Promise<{ ok: boolean, collected: string[], violations: Array<{ status: string, message: string }> }>}
  */
-export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
+export async function checkDeployConfig({
+  cwd = process.cwd(),
+  formSecrets = DEPLOY_FORM_SECRETS,
+} = {}) {
   /** @type {Array<{ status: string, message: string }>} */
   const violations = []
 
@@ -403,7 +454,7 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
         error instanceof Error ? error.message : String(error)
       }`,
     })
-    return { ok: false, violations }
+    return { ok: false, collected: [], violations }
   }
 
   /** @type {unknown} */
@@ -417,7 +468,7 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
         error instanceof Error ? error.message : String(error)
       }`,
     })
-    return { ok: false, violations }
+    return { ok: false, collected: [], violations }
   }
 
   /** @type {Array<{ file: string, name: string, value: string }>} */
@@ -457,9 +508,38 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
   }
 
   if (anyExampleFile) {
+    // The #139 decision itself, both ways round. Without these two, the checks below
+    // are one unconditional OR: any secret at all may leave the form for the cost of a
+    // README line, including the one the dashboard cannot start without.
+    for (const name of formSecrets) {
+      if (listed.includes(name)) continue
+      violations.push({
+        status: 'missing-form-field',
+        message:
+          `${name} is one of the secrets the deploy form is supposed to collect, and no example ` +
+          `file lists it — so the form does not show it. A README instruction is not a ` +
+          `substitute here: this is a secret a deployment does not work without, and the ` +
+          `deployer would have to already know it exists. Either put it back in ` +
+          `${EXAMPLE_SECRETS_FILES[0]} or take it off DEPLOY_FORM_SECRETS deliberately.`,
+      })
+    }
+
+    for (const name of listed) {
+      if (formSecrets.includes(name)) continue
+      violations.push({
+        status: 'unexpected-form-field',
+        message:
+          `${name} is listed in an example file and is not on DEPLOY_FORM_SECRETS, so it becomes ` +
+          `a deploy-form field that the deployer **must** fill in (workers-sdk#14075). A secret ` +
+          `only belongs there when a value is required and any value they invent is safe — ` +
+          `TURNSTILE_SECRET_KEY is neither, and an invented one refuses every comment on their ` +
+          `site (#104). Add it to DEPLOY_FORM_SECRETS if that judgement really was made.`,
+      })
+    }
+
     for (const secret of secrets) {
       if (listed.includes(secret.name)) continue
-      if (postDeployDocs.includes(postDeployInstruction(secret.name))) continue
+      if (documentsPostDeploy(postDeployDocs, secret.name)) continue
       violations.push({
         status: 'unlisted-secret',
         message:
@@ -525,16 +605,24 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
     })
   }
 
-  // And the converse. `description` is help text beside a form field; a name that is
-  // not a field has none, so the text is unreachable. It matters because it is what
-  // gets left behind when a secret moves out of the form — the description survives,
-  // reads like guidance that was given, and is seen by nobody.
+  // And the converse, for secrets only. `description` is help text beside a form field,
+  // so a *secret* that is not a field has none and its text is unreachable — which is
+  // exactly what gets left behind when a secret moves out of the form, reading like
+  // guidance that was given and seen by nobody.
+  //
+  // **Secrets only, and that is not a shortcut.** `cloudflare.bindings` describes every
+  // binding type — "If you wish to provide additional information about bindings" —
+  // and the D1 database *is* on the deploy form, so a `DB` description is legitimate
+  // help text that this check must not reject. Found in review, where an earlier
+  // version failed `pnpm check` on exactly that.
+  //
   // Skipped when there is no example file at all: `no-example-secrets-file` above has
   // already said the one thing that matters, and repeating it once per description
   // buries it — the same reason that violation is reported once rather than per secret.
   if (anyExampleFile && typeof descriptions === 'object' && descriptions !== null) {
     for (const name of Object.keys(descriptions)) {
       if (listed.includes(name)) continue
+      if (!secrets.some((secret) => secret.name === name)) continue
       violations.push({
         status: 'undisplayed-description',
         message:
@@ -636,13 +724,13 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
     }
   }
 
-  return { ok: violations.length === 0, violations }
+  return { ok: violations.length === 0, collected: listed, violations }
 }
 
 const isCli = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 
 if (isCli) {
-  const { ok, violations } = await checkDeployConfig()
+  const { ok, collected, violations } = await checkDeployConfig()
 
   for (const violation of violations) {
     console.log(`[${violation.status}] ${violation.message}`)
@@ -655,19 +743,12 @@ if (isCli) {
     process.exit(1)
   }
 
-  const secrets = await declaredSecrets(process.cwd())
-  const collected = new Set()
-  for (const file of EXAMPLE_SECRETS_FILES) {
-    try {
-      for (const entry of parseDotenv(await readFile(join(process.cwd(), file), 'utf8')))
-        collected.add(entry.name)
-    } catch {
-      continue
-    }
-  }
-  const names = secrets.map((secret) => secret.name)
-  const asked = names.filter((name) => collected.has(name))
-  const afterwards = names.filter((name) => !collected.has(name))
+  // `collected` comes back from the check rather than being re-derived here. This file's
+  // whole job is that "what the form asks for" has one definition, and a second parse of
+  // the same files to print it would be the exact drift it exists to prevent.
+  const names = (await declaredSecrets(process.cwd())).map((secret) => secret.name)
+  const asked = names.filter((name) => collected.includes(name))
+  const afterwards = names.filter((name) => !collected.includes(name))
 
   // Printed as two lists rather than one count, because which side a secret is on is
   // the decision #139 was about and the thing worth seeing change in a diff of CI logs.

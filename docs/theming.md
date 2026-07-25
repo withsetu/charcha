@@ -47,7 +47,7 @@ The Worker's half is **not** collected by the deploy form, deliberately: that fo
 requires a value in every field it shows, and an invented Turnstile secret matches no
 widget and refuses every comment. Set it afterwards, with
 `pnpm wrangler secret put TURNSTILE_SECRET_KEY` —
-[the README has the whole step](https://github.com/withsetu/charcha#turning-on-the-optional-features).
+[the README has the whole step](../README.md#turning-on-the-optional-features).
 
 When it is on, Charcha renders the widget inside its own composer, in
 `interaction-only` mode: most readers never see it, and one who is challenged sees it

@@ -35,7 +35,9 @@
 #
 # A `#` line is a comment in every dotenv parser, Cloudflare's included, and if
 # that inference is ever wrong the failure is today's behaviour rather than a
-# worse one: the four reappear as form fields.
+# worse one: the four reappear as form fields. It is an inference and not a
+# documented fact, so it is on the checklist the first real deploy settles —
+# https://github.com/withsetu/charcha/issues/150.
 #
 # Never commit `.dev.vars`.
 

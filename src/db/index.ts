@@ -896,17 +896,17 @@ export type DatabaseStatus = 'ready' | 'unmigrated' | 'unreachable'
  * Whether this deployment's D1 binding points at a database with Charcha's schema in
  * it, as one statement (#140).
  *
- * **`GET /health` is the caller, and the only one.** It was written for the status
- * readout on `/`, #145 removed that readout — a public, unauthenticated address must
- * not tell a stranger that a deployment is half-broken — and #141 then gave it to
- * `/health`, which was answering `ok` on precisely the database this function exists to
- * distinguish.
+ * **`GET /health` calls it, and it is intended to stay the only caller.** It was written
+ * for the status readout on `/`, #145 removed that readout — a public, unauthenticated
+ * address must not tell a stranger that a deployment is half-broken — and #141 then gave
+ * it to `/health`, which was answering `ok` on precisely the database this function
+ * exists to distinguish.
  *
  * `/health` is public and unauthenticated too, so that was a decision rather than a
  * consequence of reusing the helper, and it was taken on #141: the argument for making
  * it and the shape of the response it produces are written out at the route in
- * src/index.ts, which is where a reader deciding whether to add a second caller should
- * start. Nothing here licenses one.
+ * src/index.ts, which is where a reader weighing a second caller should start. Nothing
+ * here licenses one, and no test enforces the count — this paragraph is intent.
  *
  * **It asks `sqlite_master` for a table rather than running `select 1`, and that is
  * the whole point of it.** `select 1` proves the binding resolves and nothing else: a
