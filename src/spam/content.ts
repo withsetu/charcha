@@ -2,14 +2,17 @@
 // judgements are the least certain, which is why most of them are `review`.
 //
 // The order inside the layer is the order of the whole pipeline in miniature: the
-// two checks that are string work run before the one that costs a database read,
-// and a body too short for the duplicate rule to mean anything costs no read at all.
+// checks that are string work — link counting, BBCode markup, and the
+// lookalike-domain signal in ./lookalike.ts — run before the one that costs a
+// database read, and a body too short for the duplicate rule to mean anything
+// costs no read at all.
 // Enforced by test/worker/spam/content.test.ts.
 
 import { hasDuplicateBodyOnPage } from '../db'
 import { computeBodyHash } from '../submit/hash'
 import type { SpamCheckContext } from '../submit/spam'
 import type { LayerOutcome, SpamLayer } from './layer'
+import { lookalikeOutcome } from './lookalike'
 
 /**
  * Links at which a comment is held for the human gate.
@@ -86,9 +89,20 @@ const LINK = /(?:https?:\/\/|www\.)[^\s<>()[\]]+/gi
  */
 const BBCODE_LINK = /\[(?:url|link)\s*=|\[\/(?:url|link)\]/i
 
+/**
+ * Every link in a body, as text.
+ *
+ * The one definition of "a link" in this layer, so the counting rule and the
+ * lookalike-domain check in ./lookalike.ts cannot drift apart about what they are
+ * looking at — and so a body is scanned once rather than once per heuristic.
+ */
+export function extractLinks(body: string): string[] {
+  return body.match(LINK) ?? []
+}
+
 /** Exported so the counting rule is testable on its own, not only through a verdict. */
 export function countLinks(body: string): number {
-  return body.match(LINK)?.length ?? 0
+  return extractLinks(body).length
 }
 
 /**
@@ -99,8 +113,12 @@ export function proseLength(body: string): number {
   return body.replace(LINK, ' ').trim().length
 }
 
-function linkOutcome(body: string, reviewAt: number, rejectAt: number): LayerOutcome {
-  const links = countLinks(body)
+function linkOutcome(
+  body: string,
+  links: number,
+  reviewAt: number,
+  rejectAt: number,
+): LayerOutcome {
   if (links < reviewAt) return null
   if (links >= rejectAt && proseLength(body) <= LINK_FLOOD_MAX_PROSE) {
     return { action: 'reject', reason: 'link-flood' }
@@ -126,14 +144,26 @@ export function contentLayer(config: ContentConfig = {}): SpamLayer {
     async run(context: SpamCheckContext): Promise<LayerOutcome> {
       const body = context.comment.body
 
-      // Held, not rejected. `src/render/markdown.ts` renders fenced code blocks,
-      // so a reader quoting the spam they received, or a comment on a thread
-      // about migrating off phpBB, produces this markup honestly. It is still a
-      // strong enough signal to be worth a human's glance.
-      const held: LayerOutcome = BBCODE_LINK.test(body)
+      // Scanned once, and shared by both of the link heuristics below.
+      const links = extractLinks(body)
+
+      // BBCode is held, not rejected. `src/render/markdown.ts` renders fenced code
+      // blocks, so a reader quoting the spam they received, or a comment on a
+      // thread about migrating off phpBB, produces this markup honestly. It is
+      // still a strong enough signal to be worth a human's glance.
+      const counted: LayerOutcome = BBCODE_LINK.test(body)
         ? { action: 'review', reason: 'bbcode-link' }
-        : linkOutcome(body, reviewAt, rejectAt)
-      if (held?.action === 'reject') return held
+        : linkOutcome(body, links.length, reviewAt, rejectAt)
+      if (counted?.action === 'reject') return counted
+
+      // A lookalike domain outranks the other reviews in this layer, because it is
+      // the only one that names something specific for the moderator to look at:
+      // "many-links" reports a count they can see for themselves, while this says
+      // *which* link reads as a domain it is not. It cannot outrank a reject —
+      // that branch has already returned — so a comment cannot soften a verdict it
+      // has already earned by adding a lookalike link to it.
+      // Enforced by test/worker/spam/lookalike.test.ts.
+      const held: LayerOutcome = lookalikeOutcome(links) ?? counted
 
       // The duplicate read still happens when a review is already held, because a
       // duplicate is a reject and a reject outranks it — short-circuiting on the
