@@ -33,6 +33,8 @@
 // Fail closed: an unconfigured deployment allows no origin. Card rule 5.
 // Enforced by test/worker/cors.test.ts and test/worker/read/route.test.ts.
 
+import { fragmentHeaders } from './response-headers'
+
 /** The `settings` key holding the owner's allowlist. */
 export const ALLOWED_ORIGINS_SETTING = 'allowed_origins'
 
@@ -241,12 +243,18 @@ export function isUnlistedBrowserOrigin(decision: OriginDecision): boolean {
  * It carries no allow-origin header, so the page that sent it cannot read this
  * message either — it is for the site owner reading logs or driving curl, which is
  * the only audience that can act on it.
+ *
+ * It carries the #98 headers too, which is that issue's open question answered:
+ * uniformity is the cheaper rule, and `nosniff` is not decorative on a plain-text
+ * body — it is what stops a browser inferring HTML out of one.
+ * Enforced by test/worker/response-headers.test.ts.
  */
 export function unlistedOriginResponse(): Response {
   return new Response('That origin is not allowed to comment on this site.', {
     status: 403,
     headers: {
       ...corsHeaders(null),
+      ...fragmentHeaders(),
       'content-type': 'text/plain; charset=utf-8',
       'cache-control': 'no-store',
     },
@@ -271,6 +279,7 @@ export function preflightResponse(allowedOrigin: string | null): Response {
       status: 403,
       headers: {
         ...corsHeaders(null),
+        ...fragmentHeaders(),
         'content-type': 'text/plain; charset=utf-8',
         'cache-control': 'no-store',
       },
@@ -281,6 +290,7 @@ export function preflightResponse(allowedOrigin: string | null): Response {
     status: 204,
     headers: {
       ...corsHeaders(allowedOrigin),
+      ...fragmentHeaders(),
       'access-control-allow-methods': ALLOWED_METHODS,
       'access-control-allow-headers': ALLOWED_HEADERS,
       'access-control-max-age': String(PREFLIGHT_MAX_AGE_SECONDS),

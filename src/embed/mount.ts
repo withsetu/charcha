@@ -37,6 +37,26 @@ const LOADING = 'Loading comments…'
 const READ_FAILED = 'Comments could not be loaded.'
 const POSTED_PENDING = 'Thanks — your comment is awaiting review. Only you can see it here.'
 const POSTED_PUBLISHED = 'Thanks — your comment is published.'
+/**
+ * The third outcome of an accepted comment: the server took it, and sent back
+ * nothing this widget can put on the page (#93).
+ *
+ * It claims exactly what the status code proves and no more. Not a failure — a 2xx
+ * means the comment was accepted, and telling the reader it did not post would be
+ * the same lie pointed the other way. Not a success either, because the sentence
+ * "only you can see it here" is checkable, and on a thread still reading "Be the
+ * first" the reader can see that it is false.
+ *
+ * It offers no reload, deliberately. A 201 would survive one and a 202 would not —
+ * it is in the moderation queue and invisible to an ordinary read — so an
+ * instruction to go and look would send half the readers who follow it to a page
+ * that appears to confirm their comment was lost.
+ *
+ * Enforced by test/dom/embed/post-outcomes.test.ts.
+ */
+const POSTED_UNSHOWN =
+  'Your comment was received, but it could not be shown here. ' +
+  'Your text is still in the box below — posting it again would send it twice.'
 const POSTING = 'Posting…'
 const POST = 'Post comment'
 
@@ -228,15 +248,21 @@ function clearWriteError(widget: Widget): void {
  *
  * The markup inserted here is the Worker's answer to the POST: the same renderer,
  * the same escaping, the same output the page will show once it is approved.
+ *
+ * Returns whether anything was placed. The answer is false whenever the body holds
+ * no rendered comment — an empty body, whitespace, a proxy's own page, an endpoint
+ * that is not a Charcha deployment at all (src/embed/api.ts) — and the caller owes
+ * the reader a different sentence when it is. Bailing quietly was #93: the composer
+ * emptied, the status said the comment was on the page, and the page disagreed.
  */
 function insertOwnComment(
   widget: Widget,
   html: string,
   pending: boolean,
   parentId: number | null,
-): void {
+): boolean {
   const comment = fragment(html).querySelector<HTMLElement>('.charcha-comment')
-  if (comment === null) return
+  if (comment === null) return false
 
   if (pending) {
     const header = comment.querySelector('.charcha-comment-header') ?? comment
@@ -247,20 +273,24 @@ function insertOwnComment(
   // the reader may have opened a different reply while the post was in flight.
   if (parentId !== null) {
     const parent = widget.thread.querySelector(`#charcha-comment-${parentId}`)
-    if (parent !== null) {
-      let replies = parent.querySelector(':scope > .charcha-replies')
-      if (replies === null) {
-        replies = document.createElement('ol')
-        replies.className = 'charcha-replies'
-        // Directly after the Reply button, matching addReplyButtons — and never
-        // simply appended, because the composer is itself mounted inside this
-        // element right now and the first reply would land underneath it.
-        const actions = parent.querySelector(':scope > .charcha-comment-actions')
-        if (actions === null) parent.appendChild(replies)
-        else actions.after(replies)
-      }
-      replies.appendChild(comment)
+    // The parent can be gone: every read replaces the thread wholesale, and the
+    // snapshot this was called with is from before the POST. Placing the reply
+    // anyway would append it to a fragment attached to nothing, which is invisible
+    // in exactly the way an empty body is — #93 through a second door.
+    if (parent === null) return false
+
+    let replies = parent.querySelector(':scope > .charcha-replies')
+    if (replies === null) {
+      replies = document.createElement('ol')
+      replies.className = 'charcha-replies'
+      // Directly after the Reply button, matching addReplyButtons — and never
+      // simply appended, because the composer is itself mounted inside this
+      // element right now and the first reply would land underneath it.
+      const actions = parent.querySelector(':scope > .charcha-comment-actions')
+      if (actions === null) parent.appendChild(replies)
+      else actions.after(replies)
     }
+    replies.appendChild(comment)
   } else {
     let list = widget.thread.querySelector('.charcha-comments')
     if (list === null) {
@@ -277,6 +307,7 @@ function insertOwnComment(
   // taken to what just happened rather than left at a button that emptied itself.
   comment.tabIndex = -1
   comment.focus()
+  return true
 }
 
 /**
@@ -460,7 +491,30 @@ async function submit(widget: Widget): Promise<void> {
     // failure — so the embed never has to guess what happened from prose.
     if (response.status === 201 || response.status === 202) {
       const pending = response.status === 202
-      insertOwnComment(widget, await response.text(), pending, submission.parentId)
+      const shown = insertOwnComment(widget, await response.text(), pending, submission.parentId)
+
+      if (!shown) {
+        // Accepted, and nothing to show for it. The console gets the detail because
+        // this is a deployment fault the reader cannot do anything about and the
+        // site owner can.
+        // One message for both causes — a body with no comment in it, and a parent
+        // that left the page — because the status code is the half the owner needs
+        // to tell a broken endpoint from a lost race, and it is right there.
+        console.error('charcha: comment accepted but could not be shown', response.status)
+        // Nothing else moves. The composer keeps the reader's text, because the two
+        // ways of being wrong here are not symmetrical: a comment the server really
+        // stored survives a reload, while text discarded on the word of an endpoint
+        // that only *said* 201 is gone. It also stays mounted where it is, so a
+        // reply that is posted again is still addressed to the same comment.
+        showStatus(widget, POSTED_UNSHOWN, false)
+        // The status line sits above the thread and the composer may be far below
+        // it, mounted under the comment being replied to. `nearest` moves the page
+        // only when the message is off screen, and this is the one path where the
+        // reader has nothing else to look at that would explain itself.
+        widget.status.scrollIntoView({ block: 'nearest' })
+        return
+      }
+
       // The body clears; the name and the email do not, so a reader posting twice
       // does not type them twice. Nothing is written anywhere — close the tab and
       // it is gone (card rule 8).

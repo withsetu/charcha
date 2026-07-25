@@ -7,13 +7,16 @@
 // budget produces (CLAUDE.md).
 // Enforced by test/worker/spam/rate-limit.test.ts.
 //
-// **The per-IP half is dormant on every deployment today, and that is #65, not a
-// claim this file gets to make quietly.** It counts rows by `comments.ip_hash`,
-// and `src/submit/pipeline.ts` does not yet write that column — so the query is
-// correct, indexed and tested against seeded history, and returns 0 in
-// production. It also needs an `IP_HASH_SECRET`, which a one-click deploy does
-// not set. Both are #65. The per-thread half below depends on neither and runs
-// everywhere.
+// **The per-IP half runs wherever it can, and announces itself when it cannot.**
+// It counts rows by `comments.ip_hash`, which `src/submit/pipeline.ts` writes
+// (#65, shipped in #77), so it needs two things from the deployment: an
+// `IP_HASH_SECRET`, which a one-click deploy does not set until the owner runs
+// `wrangler secret put`, and a `CF-Connecting-IP` from the edge. Missing either,
+// it abstains rather than guessing — an unkeyed hash of an address is reversible
+// — and says so once per isolate, because a guard that is off is only useful
+// knowledge if the owner can find out. The per-thread half below depends on
+// neither and runs everywhere.
+// Enforced by test/worker/spam/rate-limit-announcements.test.ts.
 
 import { countRecentCommentsByIpHash, countRecentCommentsOnPage } from '../db'
 import type { SpamCheckContext } from '../submit/spam'
@@ -87,17 +90,11 @@ export function rateLimitLayer(config: RateLimitConfig): SpamLayer {
           reason: unkeyed ? 'no IP_HASH_SECRET' : 'no CF-Connecting-IP',
         })
       } else {
-        // Configured, and still not enforcing anything, until #65 makes the
-        // pipeline write `comments.ip_hash`. Announced separately from the
-        // unconfigured case because it is the more misleading of the two: an
-        // owner who set the secret has every reason to believe the guard is on.
-        announceOnce('rate-limit-ip-unwritten', {
-          event: 'spam_config',
-          layer: 'rate-limit',
-          half: 'per-ip',
-          enabled: false,
-          reason: 'IP_HASH_SECRET is set, but nothing writes comments.ip_hash yet (#65)',
-        })
+        // Configured and enforcing, so nothing is announced here. An announcement
+        // on this branch would be the #99 bug: it runs immediately before the code
+        // that hashes the address and counts the rows, so a line here tells the one
+        // audience that can act on it that a working guard is off.
+        // Enforced by test/worker/spam/rate-limit-announcements.test.ts.
         const ipHash = await hashIp(ip, secret)
         const recent = await countRecentCommentsByIpHash(context.db, ipHash, since)
         // Reject, not review: a review still writes a row, and the whole point of
