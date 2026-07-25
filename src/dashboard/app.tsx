@@ -33,6 +33,26 @@ type Session = { kind: 'unknown' } | { kind: 'absent' } | { kind: 'expired' } | 
 export function App() {
   const [session, setSession] = React.useState<Session>({ kind: 'unknown' })
 
+  // Stable identities, because Triage's first-page effect depends on them through its
+  // own callbacks. An inline arrow would be a new function on every App render, so any
+  // future state added here would silently re-read the queue and throw away the owner's
+  // position in it. Nothing does that today; this is what keeps it that way.
+  const onExpired = React.useCallback(() => {
+    setSession({ kind: 'expired' })
+  }, [])
+
+  const onSignOut = React.useCallback(() => {
+    // Optimistic, and safe to be: `DELETE /admin/api/session` is deliberately not behind
+    // authentication and changes nothing on the server, so the only thing that can fail
+    // is the cookie not being cleared — which the next request would report as an expiry
+    // anyway. Showing the form immediately is what the owner asked for by pressing it.
+    setSession({ kind: 'absent' })
+    void signOut().catch(() => {
+      // Nothing to report: the surface the owner wanted is already on screen, and a
+      // failure here cannot leave them signed in to anything they can reach.
+    })
+  }, [])
+
   React.useEffect(() => {
     void readSession()
       .then((result) => {
@@ -70,23 +90,5 @@ export function App() {
     )
   }
 
-  return (
-    <Triage
-      onExpired={() => {
-        setSession({ kind: 'expired' })
-      }}
-      onSignOut={() => {
-        // Optimistic, and safe to be: `DELETE /admin/api/session` is deliberately not
-        // behind authentication and changes nothing on the server, so the only thing
-        // that can fail is the cookie not being cleared — which the next request would
-        // report as an expiry anyway. Showing the form immediately is what the owner
-        // asked for by pressing the button.
-        setSession({ kind: 'absent' })
-        void signOut().catch(() => {
-          // Nothing to report: the surface the owner wanted is already on screen, and
-          // a failure here cannot leave them signed in to anything they can reach.
-        })
-      }}
-    />
-  )
+  return <Triage onExpired={onExpired} onSignOut={onSignOut} />
 }

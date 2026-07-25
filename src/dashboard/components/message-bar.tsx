@@ -18,22 +18,10 @@
 import type * as React from 'react'
 import { RotateCcwIcon, TriangleAlertIcon, UndoIcon, XIcon } from 'lucide-react'
 
-import type { Announcement, ActionFailure, UndoOffer } from '../queue'
-import { UNDO_WINDOW_MS } from '../queue'
+import type { ActionFailure, Announcement, UndoOffer } from '../queue'
+import { ATTEMPTED, DECIDED, UNDO_WINDOW_MS } from '../queue'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Button } from '../ui/button'
-
-const DONE: Record<UndoOffer['to'], string> = {
-  approved: 'Approved',
-  spam: 'Marked spam',
-  deleted: 'Deleted',
-}
-
-const ATTEMPT: Record<ActionFailure['status'], string> = {
-  approved: 'approve',
-  spam: 'mark spam on',
-  deleted: 'delete',
-}
 
 export interface MessageBarProps {
   undo: UndoOffer | null
@@ -83,7 +71,7 @@ export function MessageBar({
             <Alert variant="destructive" className="border-destructive/40 shadow-lg">
               <TriangleAlertIcon />
               <AlertTitle>
-                Could not {ATTEMPT[failure.status]} the comment by {failure.comment.authorName}
+                Could not {ATTEMPTED[failure.status]} the comment by {failure.comment.authorName}
               </AlertTitle>
               <AlertDescription>
                 {/*
@@ -112,7 +100,7 @@ export function MessageBar({
               <div className="overflow-hidden rounded-lg border bg-card shadow-lg">
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                   <p className="text-sm">
-                    <span className="font-medium">{DONE[undo.to]}</span>
+                    <span className="font-medium">{DECIDED[undo.to]}</span>
                     {': '}
                     {undo.comment.authorName}
                   </p>

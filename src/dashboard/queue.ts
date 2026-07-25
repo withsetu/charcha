@@ -153,11 +153,28 @@ export type QueueAction =
 /** How long a decision can be taken back for, in milliseconds. */
 export const UNDO_WINDOW_MS = 12_000
 
-/** The words for each status, used in announcements and in the undo bar. */
-const DECIDED: Record<DecisionStatus, string> = {
+/**
+ * The two ways this surface names a decision, in one place because both the
+ * announcement built below and the visible bar in
+ * src/dashboard/components/message-bar.tsx need them.
+ *
+ * They were briefly two copies, and the copies disagreed: the bar said "Could not mark
+ * spam on the comment by X" and the announcement said "Could not mark spam the comment
+ * by X". A screen-reader user got the ungrammatical one, and the test asserting
+ * `toContain('mark spam')` passed either way — which is why they are exported from here
+ * rather than retyped there.
+ */
+export const DECIDED: Record<DecisionStatus, string> = {
   approved: 'Approved',
   spam: 'Marked spam',
   deleted: 'Deleted',
+}
+
+/** The verb for an attempt that failed, phrased to precede "the comment by X". */
+export const ATTEMPTED: Record<DecisionStatus, string> = {
+  approved: 'approve',
+  spam: 'mark spam on',
+  deleted: 'delete',
 }
 
 /**
@@ -240,13 +257,6 @@ function insertAt(
   const next = [...comments]
   next.splice(Math.min(Math.max(index, 0), next.length), 0, comment)
   return next
-}
-
-/** The verb for a failed decision, so the message names what was attempted. */
-const ATTEMPTED: Record<DecisionStatus, string> = {
-  approved: 'approve',
-  spam: 'mark spam',
-  deleted: 'delete',
 }
 
 export function reduce(state: QueueState, action: QueueAction): QueueState {

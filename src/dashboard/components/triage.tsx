@@ -79,10 +79,18 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
   const [state, dispatch] = React.useReducer(reduce, undefined, () => initialState('pending'))
   const now = useMinuteClock()
 
-  // The listener below is registered once, so it needs the current state without
-  // being re-registered on every keystroke. A ref is the standard answer and it is
-  // also the correct one here: re-attaching a document listener 200 times while a
+  // The listener below is registered once, so it needs the current state without being
+  // re-registered on every keystroke: re-attaching a document listener 200 times while a
   // queue is cleared is work that buys nothing.
+  //
+  // **Assigned during render, not in an effect, and that is deliberate.** React's
+  // guidance is to avoid writing refs while rendering, and the alternative here is
+  // worse: passive effects flush after paint, so a keystroke landing between the commit
+  // and the flush would be handled against the previous state — which on this surface
+  // means a decision applied to the comment that was current a moment ago. The
+  // assignment is idempotent and reads nothing, so a double render under StrictMode
+  // writes the same value twice. This component uses no concurrent feature that could
+  // discard the render it belongs to.
   const latest = React.useRef(state)
   latest.current = state
 
@@ -356,7 +364,6 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
           {state.phase === 'failed' && state.loadFailure !== null && (
             <QueueFailed
               failure={state.loadFailure}
-              busy={false}
               onRetry={() => {
                 load(state.view)
               }}
@@ -374,7 +381,13 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
                 the #24 cap was reached, so "50" would be a number the owner would
                 plan their afternoon around and it would be wrong.
               */}
-              <p className="pb-2 text-sm text-muted-foreground" role="status">
+              {/*
+                Not a live region. It changes on every decision, and the decision is
+                already announced — "49 loaded, and there are more" read out after
+                "Approved: Ada Lovelace. Press Z to undo." is two sentences per
+                keystroke, which is how a moderator learns to turn the screen reader off.
+              */}
+              <p className="pb-2 text-sm text-muted-foreground">
                 {state.nextCursor === null
                   ? `${String(total)} ${total === 1 ? 'comment' : 'comments'}`
                   : `${String(total)} loaded, and there are more`}

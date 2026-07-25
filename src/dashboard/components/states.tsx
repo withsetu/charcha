@@ -103,15 +103,7 @@ export const QueueEmpty = React.forwardRef<HTMLDivElement, { view: ViewStatus }>
  * itself clear. It names what failed, shows the server's own sentence, and offers the
  * retry, which is the whole of "specific, recoverable, never silent".
  */
-export function QueueFailed({
-  failure,
-  onRetry,
-  busy,
-}: {
-  failure: ApiFailure
-  onRetry: () => void
-  busy: boolean
-}) {
+export function QueueFailed({ failure, onRetry }: { failure: ApiFailure; onRetry: () => void }) {
   return (
     <Alert variant="destructive">
       <TriangleAlertIcon />
@@ -123,7 +115,7 @@ export function QueueFailed({
             The server answered {failure.status} ({failure.code}).
           </p>
         )}
-        <Button variant="outline" size="sm" className="mt-2" disabled={busy} onClick={onRetry}>
+        <Button variant="outline" size="sm" className="mt-2" onClick={onRetry}>
           <RotateCcwIcon aria-hidden="true" />
           Try again
         </Button>
