@@ -18,10 +18,10 @@
 # it — which for the password below would be a published one. `check:deploy` fails
 # on a non-empty value for that reason.
 #
-# One of the three is required. The other two turn a defence layer off when they
-# are absent rather than failing: an unconfigured deployment still takes comments,
-# because the alternative is a site whose comment form is broken by a secret its
-# owner never knew about.
+# Only the dashboard password is required. Every other name here turns a feature or
+# a defence layer off when it is absent rather than failing: an unconfigured
+# deployment still takes comments, because the alternative is a site whose comment
+# form is broken by a secret its owner never knew about.
 #
 # Never commit `.dev.vars`.
 
@@ -50,3 +50,36 @@ IP_HASH_SECRET=
 # layer 3 abstains and comments are still accepted.
 # https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
 TURNSTILE_SECRET_KEY=
+
+# ---------------------------------------------------------------------------
+# Email notifications (#14) — all three together, or the feature is simply off.
+#
+# There is no partial state worth having: a key with no recipient has nowhere to
+# send, and Charcha has no account and no owner email anywhere in its schema to
+# guess one from. Leave all three empty and no email is ever sent, nothing is
+# transmitted to anyone, and comments still arrive in the moderation queue at
+# /admin — which is where you would read them anyway.
+#
+# Before these are worth filling in, you need a domain **verified in Resend**.
+# Resend's own `resend.dev` sender can only mail the address on your Resend
+# account; sending to anyone else from an unverified domain is answered 403.
+# https://resend.com/docs/knowledge-base/403-error-resend-dev-domain
+#
+# Enabling this sends the commenter's display name and an excerpt of their comment
+# to Resend, a third party. It does **not** send their email address or anything
+# derived from their IP. If your site has a privacy notice, the first sentence is
+# the one that belongs in it.
+# ---------------------------------------------------------------------------
+
+# A Resend API key. https://resend.com/docs/api-reference/introduction
+RESEND_API_KEY=
+
+# The address notifications are sent *from*, on a domain verified in the Resend
+# account that issued the key above. A display name is allowed:
+# `Charcha <comments@example.com>`.
+CHARCHA_NOTIFY_FROM=
+
+# Where notifications go — your own inbox. This is the only address Charcha ever
+# mails, and clearing it is how you stop the emails: there is no unsubscribe link,
+# because there is nobody to unsubscribe but you.
+CHARCHA_NOTIFY_TO=
