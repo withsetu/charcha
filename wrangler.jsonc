@@ -54,6 +54,45 @@
     "crons": ["0 4 * * *"]
   },
 
+  // The login throttle (#12). `POST /admin/api/session` is a public,
+  // unauthenticated endpoint guarding the one credential that can delete every
+  // comment on the site, so it needs a brute-force bound — and it must not be #8's
+  // rate-limit layer. That one counts rows in `comments` by `ip_hash`, and a login
+  // attempt writes no comment row; a D1-backed attempt counter would mean one write
+  // per failed attempt, so a brute-forcer at 10 req/s spends 864k writes/day against
+  // a 100k/day budget and takes commenting down site-wide. This binding stores
+  // nothing and costs nothing.
+  //
+  // "Rate limits that you define and enforce in your Worker are local to the
+  // Cloudflare location that your Worker runs in" and the counters are "permissive,
+  // eventually consistent, and intentionally designed to not be used as an accurate
+  // accounting system" — which is the right trade for a login throttle and the wrong
+  // one for a quota. `period` must be 10 or 60; there is no other value.
+  // https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
+  // GA since 2025-09-19: https://developers.cloudflare.com/changelog/2025-09-19-ratelimit-workers-ga/
+  // Both checked 2026-07-25.
+  //
+  // **Free-plan availability is undocumented.** The binding is GA and nothing says
+  // it is plan-gated, but nothing says it is not — and it is not in the Deploy
+  // button's list of provisioned resources either (that list is KV, D1, R2,
+  // Hyperdrive, Vectorize, Secrets Store, Durable Objects, Workers AI, Queues,
+  // checked 2026-07-25). It needs no provisioning, being declared entirely here,
+  // but a plan gate would fail `wrangler deploy` for every one-click deployer. See
+  // the owner check on #12.
+  "ratelimits": [
+    {
+      "name": "LOGIN_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        // Ten attempts a minute per client. A person mistyping their own password
+        // does not reach it; a script is stopped at three orders of magnitude
+        // below what guessing a real secret would need.
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
+
   // The Deploy to Cloudflare button reads this file to decide what to provision,
   // and rewrites `database_id` with the ID of the database it creates. The value
   // below is a placeholder that exists only so the binding is well-formed before

@@ -137,11 +137,12 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
         //   arrange.
         // - review loses nothing and bypasses nothing: the comment is held for
         //   the human gate, and — because a review does not stop the run (see
-        //   runLayers) — rate limiting still bounds how many arrive. Note that
-        //   the *reason* does not currently reach that human: the pipeline
-        //   stores every public comment as `pending` and discards the reason, so
-        //   a held comment is intended to be distinguishable from a clean one in
-        //   the queue but is not yet. That is #70.
+        //   runLayers) — rate limiting still bounds how many arrive. The reason
+        //   reaches that human: runSubmission stores it as `comments.spam_reason`
+        //   and the queue read selects it (#70), so a comment held because
+        //   siteverify was unreachable is distinguishable in the queue from one
+        //   that arrived clean.
+        //   Enforced by test/worker/submit/pipeline.test.ts.
         //
         // The deliberate error is caught rather than inspected: a DNS failure, a
         // TLS failure, an abort and a body that is not JSON all mean the same

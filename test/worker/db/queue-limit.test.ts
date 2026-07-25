@@ -53,31 +53,32 @@ beforeEach(async () => {
 
 describe('the moderation queue page size', () => {
   it('returns a bounded page when the caller asks for no particular size', async () => {
-    const queue = await listModerationQueue(db, 'pending')
+    const queue = (await listModerationQueue(db, 'pending', {})).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('gives the caller a smaller page when they ask for one', async () => {
-    const queue = await listModerationQueue(db, 'pending', 5)
+    const queue = (await listModerationQueue(db, 'pending', { limit: 5 })).comments
 
     expect(queue).toHaveLength(5)
   })
 
   it('refuses to read the whole table however large a page is asked for', async () => {
-    const queue = await listModerationQueue(db, 'pending', 1_000_000)
+    const queue = (await listModerationQueue(db, 'pending', { limit: 1_000_000 })).comments
 
     expect(queue).toHaveLength(MAX_QUEUE_LIMIT)
   })
 
   it('caps a page asked for one row past the maximum', async () => {
-    const queue = await listModerationQueue(db, 'pending', MAX_QUEUE_LIMIT + 1)
+    const queue = (await listModerationQueue(db, 'pending', { limit: MAX_QUEUE_LIMIT + 1 }))
+      .comments
 
     expect(queue).toHaveLength(MAX_QUEUE_LIMIT)
   })
 
   it('hands back exactly the maximum when the maximum is what was asked for', async () => {
-    const queue = await listModerationQueue(db, 'pending', MAX_QUEUE_LIMIT)
+    const queue = (await listModerationQueue(db, 'pending', { limit: MAX_QUEUE_LIMIT })).comments
 
     expect(queue).toHaveLength(MAX_QUEUE_LIMIT)
   })
@@ -89,43 +90,45 @@ describe('a moderation queue page size that is not a page size', () => {
   // in survive — so the guard is a runtime one and these are its real inputs.
 
   it('falls back to the default when asked for no rows at all', async () => {
-    const queue = await listModerationQueue(db, 'pending', 0)
+    const queue = (await listModerationQueue(db, 'pending', { limit: 0 })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default when asked for a negative number of rows', async () => {
-    const queue = await listModerationQueue(db, 'pending', -1)
+    const queue = (await listModerationQueue(db, 'pending', { limit: -1 })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('truncates a fractional page size downwards rather than rounding it up', async () => {
-    const queue = await listModerationQueue(db, 'pending', 2.5)
+    const queue = (await listModerationQueue(db, 'pending', { limit: 2.5 })).comments
 
     expect(queue).toHaveLength(2)
   })
 
   it('falls back to the default for NaN', async () => {
-    const queue = await listModerationQueue(db, 'pending', Number.NaN)
+    const queue = (await listModerationQueue(db, 'pending', { limit: Number.NaN })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for Infinity, which is not a count', async () => {
-    const queue = await listModerationQueue(db, 'pending', Number.POSITIVE_INFINITY)
+    const queue = (await listModerationQueue(db, 'pending', { limit: Number.POSITIVE_INFINITY }))
+      .comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for negative Infinity', async () => {
-    const queue = await listModerationQueue(db, 'pending', Number.NEGATIVE_INFINITY)
+    const queue = (await listModerationQueue(db, 'pending', { limit: Number.NEGATIVE_INFINITY }))
+      .comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default when handed null', async () => {
-    const queue = await listModerationQueue(db, 'pending', null)
+    const queue = (await listModerationQueue(db, 'pending', { limit: null })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
@@ -136,74 +139,74 @@ describe('a moderation queue page size arriving as a string', () => {
   // parse it must not be the difference between a bounded read and a full scan.
 
   it('reads a numeric string as the number it spells', async () => {
-    const queue = await listModerationQueue(db, 'pending', '25')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '25' })).comments
 
     expect(queue).toHaveLength(25)
   })
 
   it('caps a numeric string that spells a number past the maximum', async () => {
-    const queue = await listModerationQueue(db, 'pending', '1000000')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '1000000' })).comments
 
     expect(queue).toHaveLength(MAX_QUEUE_LIMIT)
   })
 
   it('falls back to the default for "0"', async () => {
-    const queue = await listModerationQueue(db, 'pending', '0')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '0' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for "-1"', async () => {
-    const queue = await listModerationQueue(db, 'pending', '-1')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '-1' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('truncates "2.5" downwards, as it does the number', async () => {
-    const queue = await listModerationQueue(db, 'pending', '2.5')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '2.5' })).comments
 
     expect(queue).toHaveLength(2)
   })
 
   it('falls back to the default for "NaN"', async () => {
-    const queue = await listModerationQueue(db, 'pending', 'NaN')
+    const queue = (await listModerationQueue(db, 'pending', { limit: 'NaN' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for "Infinity"', async () => {
-    const queue = await listModerationQueue(db, 'pending', 'Infinity')
+    const queue = (await listModerationQueue(db, 'pending', { limit: 'Infinity' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for a string that is not a number at all', async () => {
-    const queue = await listModerationQueue(db, 'pending', 'all')
+    const queue = (await listModerationQueue(db, 'pending', { limit: 'all' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for an empty string', async () => {
-    const queue = await listModerationQueue(db, 'pending', '')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   it('falls back to the default for a string of only whitespace', async () => {
-    const queue = await listModerationQueue(db, 'pending', '   ')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '   ' })).comments
 
     expect(queue).toHaveLength(DEFAULT_QUEUE_LIMIT)
   })
 
   // '1e9' and '0x10' are both valid to Number(). Neither may widen the read.
   it('caps a page size written in exponent notation', async () => {
-    const queue = await listModerationQueue(db, 'pending', '1e9')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '1e9' })).comments
 
     expect(queue).toHaveLength(MAX_QUEUE_LIMIT)
   })
 
   it('caps a page size written in hexadecimal', async () => {
-    const queue = await listModerationQueue(db, 'pending', '0xFFFF')
+    const queue = (await listModerationQueue(db, 'pending', { limit: '0xFFFF' })).comments
 
     expect(queue).toHaveLength(MAX_QUEUE_LIMIT)
   })

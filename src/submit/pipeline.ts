@@ -132,6 +132,12 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
   // No status is passed: insertComment derives it from byOwner, which this public
   // path never sets, so the comment is stored `pending` and enters the moderation
   // queue. A public handler that could choose the status could self-approve.
+  //
+  // The `review` verdict's reason is stored with it (#70). Without it a held
+  // comment and a clean one are the same row — both `pending` — and the human
+  // gate is asked to decide with the one thing the layers learned thrown away. It
+  // is stored only for `review`: an `allow` has no reason, and a `reject` never
+  // reaches this line.
   const stored = await insertComment(deps.db, {
     threadId: thread.id,
     parentId: comment.parentId ?? null,
@@ -140,6 +146,7 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     body: comment.body,
     bodyHash,
     ipHash,
+    spamReason: verdict.action === 'review' ? verdict.reason : null,
     now: deps.now,
   })
 

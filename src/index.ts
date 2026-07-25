@@ -1,4 +1,17 @@
 import { Hono } from 'hono'
+import type { Context } from 'hono'
+import { adminError, notFound as adminNotFound } from './admin/api'
+import {
+  ADMIN_API_PREFIX,
+  COMMENT_STATUS_PATH,
+  QUEUE_PATH,
+  SESSION_PATH,
+  handleCommentStatus,
+  handleLogin,
+  handleLogout,
+  handleQueue,
+  handleSession,
+} from './admin/route'
 import { getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
 import {
   isUnlistedBrowserOrigin,
@@ -75,6 +88,27 @@ app.options(PREVIEW_PATH, async (c) => {
   return preflightResponse(decision.allowedOrigin)
 })
 
+// The moderation dashboard's API (#12). Everything under /admin/api is the owner's
+// authenticated surface, and it is the half of this Worker that lets a stored
+// comment ever be judged — before these routes existed, setCommentStatus had no
+// caller and Charcha was a one-way write.
+//
+// **No `app.options` here, and no CORS headers anywhere in src/admin.** That is the
+// policy rather than an omission: there is no legitimate cross-origin caller for a
+// moderation queue, so a preflight is answered with the 404 that stops a browser
+// from ever sending the real request. The reader-facing routes above need CORS
+// because the embed lives on another origin; the dashboard is served from this one.
+//
+// The session cookie these set is scoped `Path=/admin`, which is what keeps card
+// rule 8 true: the browser never attaches it to the /comments requests registered
+// above. See src/admin/session.ts.
+// Enforced by test/worker/admin/route.test.ts and test/worker/admin/cookie-scope.test.ts.
+app.post(SESSION_PATH, (c) => handleLogin(c))
+app.delete(SESSION_PATH, (c) => handleLogout(c))
+app.get(SESSION_PATH, (c) => handleSession(c))
+app.get(QUEUE_PATH, (c) => handleQueue(c))
+app.post(COMMENT_STATUS_PATH, (c) => handleCommentStatus(c))
+
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a
 // query. Enforced by test/worker/health.test.ts.
@@ -89,13 +123,32 @@ app.get('/health', async (c) => {
   return c.json({ status: 'ok', database: 'ok' }, 200, { 'cache-control': 'no-store' })
 })
 
-app.notFound((c) => c.text('Not found', 404))
+/**
+ * Whether this request was for the dashboard's API, and so wants JSON.
+ *
+ * The two failures a dashboard client is most likely to meet are an unknown path and
+ * a server error, and both are answered here rather than in any route — so without an
+ * admin branch they were the only two admin responses *not* in the
+ * `{error:{code,message}}` shape, and a client branching on `error.code` would throw
+ * parsing them. Found by review. It is the same argument src/admin/api.ts makes for
+ * re-answering the size guard's plain-text 413.
+ * Enforced by test/worker/admin/route.test.ts and test/worker/admin/queue.test.ts.
+ */
+function wantsAdminJson(c: Context<{ Bindings: Env }>): boolean {
+  return new URL(c.req.url).pathname.startsWith(ADMIN_API_PREFIX)
+}
+
+app.notFound((c) =>
+  wantsAdminJson(c) ? adminNotFound('There is nothing at that address.') : c.text('Not found', 404),
+)
 
 // Never surface an internal message to a caller — this Worker's main surface is
 // public and unauthenticated. Enforced by test/worker/errors.test.ts.
 app.onError((error, c) => {
   console.error('unhandled error', error)
-  return c.text('Internal error', 500)
+  return wantsAdminJson(c)
+    ? adminError('UNAVAILABLE', 'Something went wrong. Try again.', 500)
+    : c.text('Internal error', 500)
 })
 
 /**
