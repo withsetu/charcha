@@ -33,6 +33,29 @@ export default defineConfig({
           include: ['test/node/**/*.test.ts'],
         },
       },
+      {
+        // The embed runs in a browser, and neither environment above has a DOM —
+        // which is why src/embed/mount.ts shipped with no test able to run at all
+        // (#91). happy-dom over jsdom: it adds 6 packages to this lockfile where
+        // jsdom adds 36, and it implements `scrollIntoView`, which mount.ts calls
+        // on its write-error path and jsdom does not define at all — under jsdom
+        // that call would have to be stubbed, hiding the very line under test.
+        // Both measured on 2026-07-25; the method is on the PR closing #91.
+        //
+        // The include is a directory glob rather than a file list on purpose. The
+        // next DOM module must arrive tested, and a config that has to be edited
+        // first is a config that gets skipped — which is exactly how #91 happened.
+        test: {
+          name: 'dom',
+          environment: 'happy-dom',
+          include: ['test/dom/**/*.test.ts'],
+          // A real page address, because the embed reads the thread for the page
+          // it is on from `location.href` (src/embed/api.ts). happy-dom's own
+          // default is `about:blank`, against which a test cannot tell a read URL
+          // built from the page from one that ignored it.
+          environmentOptions: { happyDOM: { url: 'https://example.com/posts/hello/' } },
+        },
+      },
     ],
   },
 })
