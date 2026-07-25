@@ -30,9 +30,17 @@
 // read's policy; the write needs more because a write happens whether or not the
 // caller can read the answer.
 //
-// Fail closed: an unconfigured deployment allows no origin. Card rule 5.
+// Fail closed: an unconfigured deployment allows no **cross**-origin page. Card rule 5.
+//
+// **Its own origin is the one exception, and it is not a widening of the allowlist —
+// it is the observation that CORS is a cross-origin rule.** See resolveOrigin. This
+// is what #57 was: nothing in the one-click deploy flow can put a row in `settings`,
+// so a deployment whose only answer came from that row refused every comment from the
+// moment it went live, and the documented escape hatch ran through a D1-scoped API
+// token the intended audience does not have.
 // Enforced by test/worker/cors.test.ts and test/worker/read/route.test.ts.
 
+import { readSetting } from './db'
 import { fragmentHeaders } from './response-headers'
 
 /** The `settings` key holding the owner's allowlist. */
@@ -74,19 +82,47 @@ const ALLOWED_METHODS = 'GET, POST, OPTIONS'
 const ALLOWED_HEADERS = 'content-type'
 
 /**
+ * One entry as an origin a browser could actually send, or null when it is not one.
+ *
+ * The canonicalisation every origin in this project passes through, in one function so
+ * that the allowlist reader and the dashboard's settings write cannot disagree about
+ * what `https://Maya.Build/` means. Scheme and host lowercased, a default port and any
+ * path dropped — `URL.origin` is the canonical serialisation and is what a browser
+ * puts in the `Origin` header.
+ *
+ * Non-http(s) schemes are refused because no browser sends one as a page origin, and
+ * the literal `null` — what a sandboxed iframe, a `file://` page and some redirects
+ * send — can never be admitted, whatever a settings row or an owner typed.
+ * Enforced by test/worker/cors.test.ts.
+ */
+export function normaliseOrigin(entry: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(entry)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+  if (parsed.hostname === '') return null
+
+  // `URL.origin` is "null" for opaque origins, which the scheme check above already
+  // excludes — the guard is here anyway because admitting that string once would allow
+  // every sandboxed frame at once.
+  if (parsed.origin === 'null') return null
+  return parsed.origin
+}
+
+/**
  * Turns the stored settings value into the origins it names.
  *
  * Comma or whitespace separated, because a settings box invites one per line and a
- * README invites one line. Each entry is normalised through the URL parser to a
- * canonical origin — scheme and host lowercased, default port and path dropped — so
- * that `https://Maya.Build/` and `https://maya.build:443` are the one origin a
- * browser will actually send, rather than two spellings that never match.
+ * README invites one line. Each entry goes through normaliseOrigin, which is also
+ * what the dashboard's settings write uses — one canonicalisation, so a value the
+ * owner saved is the value this reads back.
  *
  * A malformed entry is dropped rather than failing the whole list: one typo should
- * not take the site's real origin down with it. Non-http(s) schemes are dropped
- * because no browser sends one as a page origin, and the literal `null` — what a
- * sandboxed iframe, a `file://` page and some redirects send — can never be
- * admitted, whatever the settings row says.
+ * not take the site's real origin down with it. The dashboard, whose caller is the
+ * owner and can be told, refuses the typo instead — see src/admin/settings.ts.
  * Enforced by test/worker/cors.test.ts.
  */
 export function parseAllowedOrigins(value: string | null): string[] {
@@ -98,20 +134,8 @@ export function parseAllowedOrigins(value: string | null): string[] {
     if (entry === '') continue
     if (origins.length >= MAX_ALLOWED_ORIGINS) break
 
-    let parsed: URL
-    try {
-      parsed = new URL(entry)
-    } catch {
-      continue
-    }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue
-    if (parsed.hostname === '') continue
-
-    // `URL.origin` is the canonical serialisation and is "null" for opaque origins,
-    // which the scheme check above already excludes — the guard is here anyway
-    // because admitting that string once would allow every sandboxed frame at once.
-    if (parsed.origin === 'null') continue
-    origins.push(parsed.origin)
+    const origin = normaliseOrigin(entry)
+    if (origin !== null) origins.push(origin)
   }
   return origins
 }
@@ -125,12 +149,7 @@ export function parseAllowedOrigins(value: string | null): string[] {
  * Enforced by test/worker/cors.test.ts.
  */
 export async function readAllowedOrigins(db: D1Database): Promise<string[]> {
-  const row = await db
-    .prepare('select value from settings where key = ?1')
-    .bind(ALLOWED_ORIGINS_SETTING)
-    .first<{ value: string }>()
-
-  return parseAllowedOrigins(row?.value ?? null)
+  return parseAllowedOrigins(await readSetting(db, ALLOWED_ORIGINS_SETTING))
 }
 
 /**
@@ -206,16 +225,71 @@ export interface OriginDecision {
 }
 
 /**
- * Resolves the inbound request's origin against the owner's allowlist.
+ * The origin this Worker is answering on, for this request, or null if that cannot be
+ * parsed.
+ *
+ * Taken from `request.url`, which Cloudflare builds from the request line and the Host
+ * the edge resolved — **never from a header a caller chose**, which is the whole reason
+ * it can be compared against `Origin` at all. src/admin/csrf.ts asks the same question
+ * for the dashboard's CSRF check and takes its answer from here, so there is one
+ * definition of "this deployment" rather than two that can drift.
+ * Enforced by test/worker/cors.test.ts and test/worker/admin/csrf.test.ts.
+ */
+export function selfOrigin(request: Request): string | null {
+  return normaliseOrigin(request.url)
+}
+
+/**
+ * Resolves the inbound request's origin against this deployment's own origin and then
+ * the owner's allowlist.
  *
  * A request with no `Origin` header skips the settings read entirely: it is not a
  * cross-origin browser request, so no header this file emits would change what it
  * sees, and the v1.1 build-time renderer should not pay a D1 read for a policy that
  * cannot apply to it.
+ *
+ * **A same-origin request is allowed with no settings row and no write, and that is
+ * #57's fix.** Three things make it the correct default rather than a permissive one:
+ *
+ *   - **It is not what CORS refuses.** The harm this file exists to stop is *another*
+ *     site's page posting into this deployment's queue from a reader's browser. A page
+ *     whose origin is this Worker's is a page this Worker served, and there are only
+ *     two: `/` and `/admin`. Every other HTML this project emits carries
+ *     `Content-Security-Policy: … sandbox`, which forces the document into an opaque
+ *     origin, so a browser navigated to `GET /comments` is not on this origin at all
+ *     (src/response-headers.ts). Neither of the two documents can run injected script:
+ *     `/admin` is `script-src 'self'` with no inline and no nonce, and `/` is
+ *     `default-src 'none'` with no script directive at all.
+ *   - **It cannot be widened by anybody.** `selfOrigin` reads `request.url`, so the
+ *     comparison is "did this request's own address match its own `Origin`" — a
+ *     browser sets both from the same URL and a page cannot set either. Reaching this
+ *     Worker under a hostname the owner did not route to it is not something an
+ *     attacker can arrange: Cloudflare refuses a cross-account CNAME outright (Error
+ *     1014, https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1014,
+ *     checked 2026-07-25).
+ *   - **It is per-request and remembers nothing**, which is why it is derived here
+ *     rather than seeded into `settings` on first contact. A stored seed taken from the
+ *     same header would be the strictly worse trade: if the hostname were ever wrong
+ *     once, a comparison forgets it and a row hands it to every request afterwards.
+ *     It also keeps the read path free of writes (#20) — the write budget is 100k/day
+ *     against 5M reads, so a write reachable from a read lets traffic exhaust the
+ *     day's comments.
+ *
+ * The same-origin answer comes before the allowlist read, so it costs no D1 query. The
+ * owner's list is still the whole of the cross-origin policy: the seed makes a fresh
+ * deployment work, and the setting is what makes it work for their site.
+ * Enforced by test/worker/cors.test.ts.
  */
 export async function resolveOrigin(db: D1Database, request: Request): Promise<OriginDecision> {
   const requestOrigin = request.headers.get('origin')
   if (requestOrigin === null) return { requestOrigin: null, allowedOrigin: null }
+
+  // Through matchOrigin rather than a bare `===`, so the empty and literal-"null"
+  // origins are refused by the same guard that refuses them against a real list.
+  const self = selfOrigin(request)
+  const sameOrigin = self === null ? null : matchOrigin(requestOrigin, [self])
+  if (sameOrigin !== null) return { requestOrigin, allowedOrigin: sameOrigin }
+
   return {
     requestOrigin,
     allowedOrigin: matchOrigin(requestOrigin, await readAllowedOrigins(db)),
@@ -237,6 +311,26 @@ export function isUnlistedBrowserOrigin(decision: OriginDecision): boolean {
 }
 
 /**
+ * What a refusal says, and why it says this much.
+ *
+ * The audience for both strings is the site owner: the response carries no
+ * allow-origin header, so the page that was refused cannot read the body, and the
+ * person looking at a 403 during setup is the person who deployed it. #57 found out
+ * what the old one-sentence version cost — the owner went looking for an allowlist,
+ * found Turnstile's **Hostname Management** screen, added four hostnames to it, and had
+ * no way to tell they were in the wrong product. Two allowlists, both Cloudflare
+ * adjacent, both about hostnames, and only one of them discoverable in a dashboard.
+ *
+ * So it names the surface, names the setting, and rules out the wrong one by name. It
+ * discloses nothing: `/admin` is a fixed path in this repository, and a caller learns
+ * only that the origin it already knows is not listed.
+ * Enforced by test/worker/cors.test.ts.
+ */
+const WHERE_THE_LIST_LIVES =
+  'Site owner: add it to Allowed origins in your Charcha dashboard at /admin. ' +
+  'That is a Charcha setting, not Turnstile’s hostname list.'
+
+/**
  * The refusal for a write from an unlisted browser origin.
  *
  * Plain text and a 403, matching the preflight's refusal and the route house style.
@@ -247,18 +341,21 @@ export function isUnlistedBrowserOrigin(decision: OriginDecision): boolean {
  * It carries the #98 headers too, which is that issue's open question answered:
  * uniformity is the cheaper rule, and `nosniff` is not decorative on a plain-text
  * body — it is what stops a browser inferring HTML out of one.
- * Enforced by test/worker/response-headers.test.ts.
+ * Enforced by test/worker/response-headers.test.ts and test/worker/cors.test.ts.
  */
 export function unlistedOriginResponse(): Response {
-  return new Response('That origin is not allowed to comment on this site.', {
-    status: 403,
-    headers: {
-      ...corsHeaders(null),
-      ...fragmentHeaders(),
-      'content-type': 'text/plain; charset=utf-8',
-      'cache-control': 'no-store',
+  return new Response(
+    `That origin is not allowed to comment on this site. ${WHERE_THE_LIST_LIVES}`,
+    {
+      status: 403,
+      headers: {
+        ...corsHeaders(null),
+        ...fragmentHeaders(),
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'no-store',
+      },
     },
-  })
+  )
 }
 
 /**
@@ -275,15 +372,18 @@ export function unlistedOriginResponse(): Response {
  */
 export function preflightResponse(allowedOrigin: string | null): Response {
   if (allowedOrigin === null) {
-    return new Response('That origin is not allowed to use this Charcha deployment.', {
-      status: 403,
-      headers: {
-        ...corsHeaders(null),
-        ...fragmentHeaders(),
-        'content-type': 'text/plain; charset=utf-8',
-        'cache-control': 'no-store',
+    return new Response(
+      `That origin is not allowed to use this Charcha deployment. ${WHERE_THE_LIST_LIVES}`,
+      {
+        status: 403,
+        headers: {
+          ...corsHeaders(null),
+          ...fragmentHeaders(),
+          'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store',
+        },
       },
-    })
+    )
   }
 
   return new Response(null, {

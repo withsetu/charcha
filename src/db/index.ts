@@ -760,6 +760,56 @@ export async function countCommentsByStatus(db: D1Database): Promise<StatusCount
 }
 
 /**
+ * One `settings` row's value, or null when the owner has set none.
+ *
+ * A primary-key lookup, so it is one row seek whatever else is in the table. It exists
+ * as a function rather than as three copies of the same `select` because the statement
+ * was written out three times — here, in `getIpHashRetentionDays`, and in src/cors.ts —
+ * and the third one was added by someone who did not know about the first two.
+ *
+ * It returns the raw string and validates nothing: every setting has its own idea of
+ * what a usable value is, and the callers above disagree about what to do with an
+ * unusable one. Both treat it as untrusted input regardless of who wrote it.
+ */
+export async function readSetting(db: D1Database, key: string): Promise<string | null> {
+  const row = await db
+    .prepare('select value from settings where key = ?1')
+    .bind(key)
+    .first<{ value: string }>()
+  return row?.value ?? null
+}
+
+/**
+ * Sets one `settings` row, creating it on first write.
+ *
+ * One statement, so two dashboard tabs saving at once cannot interleave into a row
+ * that is neither of their values. `updated_at` is passed in like every other clock in
+ * this file.
+ *
+ * **Nothing on a public path may reach this.** The only caller is the authenticated
+ * dashboard (src/admin/settings.ts): the write budget is 100k rows/day against 5M
+ * reads, so a settings write reachable from the read or submit path would let traffic
+ * spend the day's comments — which is the trade #20 fixed and the reason #57's
+ * same-origin default is derived per request rather than seeded into this table.
+ * Enforced by test/worker/admin/settings.test.ts and test/worker/first-deploy.test.ts.
+ */
+export async function writeSetting(
+  db: D1Database,
+  key: string,
+  value: string,
+  now: number,
+): Promise<void> {
+  await db
+    .prepare(
+      `insert into settings (key, value, updated_at)
+       values (?1, ?2, ?3)
+       on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .bind(key, value, now)
+    .run()
+}
+
+/**
  * The retention window for `ip_hash`, in days, when the owner has set none.
  *
  * `ip_hash` is an HMAC of the commenter's IP kept only for rate limiting (#8
@@ -788,14 +838,10 @@ const SECONDS_PER_DAY = 86_400
  * Enforced by test/worker/db/ip-hash-purge.test.ts.
  */
 export async function getIpHashRetentionDays(db: D1Database): Promise<number> {
-  const row = await db
-    .prepare('select value from settings where key = ?1')
-    .bind(IP_HASH_RETENTION_SETTING)
-    .first<{ value: string }>()
+  const value = await readSetting(db, IP_HASH_RETENTION_SETTING)
+  if (value === null) return DEFAULT_IP_HASH_RETENTION_DAYS
 
-  if (row === null) return DEFAULT_IP_HASH_RETENTION_DAYS
-
-  const parsed = Number(row.value)
+  const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_IP_HASH_RETENTION_DAYS
   return parsed
 }
@@ -841,6 +887,46 @@ export async function purgeExpiredIpHashes(
   const cutoff = now - retentionDays * SECONDS_PER_DAY
   const { meta } = await db.prepare(PURGE_IP_HASH_SQL).bind(cutoff).run()
   return { purged: meta.changes, cutoff, retentionDays }
+}
+
+/** What a health check can find, as three distinguishable answers rather than two. */
+export type DatabaseStatus = 'ready' | 'unmigrated' | 'unreachable'
+
+/**
+ * Whether this deployment's D1 binding points at a database with Charcha's schema in
+ * it, as one statement (#140).
+ *
+ * **It asks `sqlite_master` for a table rather than running `select 1`, and that is
+ * the whole point of it.** `select 1` proves the binding resolves and nothing else: a
+ * Worker published against the database Cloudflare created and never migrated answers
+ * it perfectly, and then fails on the first real query. That is not a hypothetical —
+ * the deploy button creates the database and leaves migrating it to the repository's
+ * own `deploy` script, and `wrangler d1 migrations apply` exits non-zero with no
+ * useful output when its token lacks D1 (workers-sdk#5077). "Migrated" and "reachable"
+ * are therefore different questions, and a status page that could only answer the
+ * second would report a green light on the exact failure it exists to catch.
+ *
+ * `comments` is the table it looks for because it is the one this project cannot
+ * function without and the one migration 0001 creates. The query reads a row of
+ * SQLite's own schema table and no application data at all, which is what keeps it
+ * safe to run from a public, unauthenticated page.
+ * Enforced by test/worker/db/database-status.test.ts.
+ */
+export const DATABASE_STATUS_SQL = `select 1 as present
+     from sqlite_master
+    where type = 'table'
+      and name = 'comments'`
+
+export async function databaseStatus(db: D1Database): Promise<DatabaseStatus> {
+  try {
+    const row = await db.prepare(DATABASE_STATUS_SQL).first<{ present: number }>()
+    return row === null ? 'unmigrated' : 'ready'
+  } catch (error) {
+    // Logged rather than swallowed: the caller turns this into one word on a page, and
+    // the reason D1 refused is the part only the owner's log can carry.
+    console.error('database status: D1 query failed', error)
+    return 'unreachable'
+  }
 }
 
 /**
