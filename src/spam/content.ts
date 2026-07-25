@@ -142,8 +142,10 @@ export function contentLayer(config: ContentConfig = {}): SpamLayer {
       if (body.length >= duplicateMinLength) {
         const bodyHash = await computeBodyHash(body)
         // Same thread and inside the window: `comments_by_body` is
-        // (thread_id, body_hash), so this is one indexed seek. Asking across
-        // every thread would be a table scan on the busiest write path.
+        // (thread_id, body_hash, created_at), so this is one indexed seek and the
+        // index answers it without touching a row. Asking across every thread
+        // would be a table scan on the busiest write path.
+        // Enforced by test/worker/spam/query-plan.test.ts.
         const duplicate = await hasDuplicateBodyOnPage(
           context.db,
           context.pageKey,

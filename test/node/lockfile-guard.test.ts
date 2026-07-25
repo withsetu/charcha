@@ -102,14 +102,83 @@ describe('checkLockfiles', () => {
     expect(statuses(result)).toEqual(['wrong-package-manager'])
   })
 
-  it('fails an unreadable package.json instead of treating it as unpinned', async () => {
-    await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
-    await write('package.json', '{ not json')
+  // #75. `toEqual`, not `toContain`: the bug was a *second*, unfounded violation
+  // riding along. A file that did not parse cannot be shown to lack
+  // `packageManager` — that is unknown, not false — and reporting it as false
+  // sends the reader hunting for a field that may be sitting right there, at the
+  // moment they are already confused. One problem must also read as one problem,
+  // because the CLI prints the count.
+  describe('an unreadable package.json', () => {
+    const malformed = '{ not json'
 
-    const result = await checkLockfiles({ cwd })
+    it('is the only violation reported, rather than also being called unpinned', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', malformed)
 
-    expect(result.ok).toBe(false)
-    expect(statuses(result)).toContain('unreadable-package-json')
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unreadable-package-json'])
+    })
+
+    it('says the pin is unknown rather than absent, and quotes the parse failure', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', malformed)
+
+      const [violation] = (await checkLockfiles({ cwd })).violations
+
+      expect(violation?.message).toContain('package.json')
+      expect(violation?.message).toMatch(/unknown/i)
+      // The underlying reason, not just "something went wrong": this is the whole
+      // reason the message is worth reading.
+      expect(violation?.message).toMatch(/JSON/)
+      expect(violation?.message).not.toMatch(/has no `packageManager` field/)
+    })
+
+    it('is diagnosed differently from a readable file that is genuinely unpinned', async () => {
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', malformed)
+      const unreadable = await checkLockfiles({ cwd })
+
+      await write('package.json', JSON.stringify({ name: 'charcha' }))
+      const unpinned = await checkLockfiles({ cwd })
+
+      expect(unreadable.ok).toBe(false)
+      expect(unpinned.ok).toBe(false)
+      // Disjoint, not merely unequal: the collapsed sentinel made the unreadable
+      // case a superset of the unpinned one, which is "different" while still
+      // telling the reader the wrong thing.
+      expect(statuses(unreadable).filter((one) => statuses(unpinned).includes(one))).toEqual([])
+      expect(unreadable.violations[0]?.message).not.toBe(unpinned.violations[0]?.message)
+    })
+
+    it('reports a package.json that parses but is not an object', async () => {
+      // The same misdiagnosis by a third route, and the one route `JSON.parse`
+      // does not catch for us: `"a string".packageManager` is simply `undefined`,
+      // so a file whose top level is not an object would read as a repository
+      // that merely forgot the field. It is not — nothing about the pin can be
+      // established from it either.
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+      await write('package.json', '"not an object"')
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unreadable-package-json'])
+      expect(result.violations[0]?.message).toMatch(/object/)
+    })
+
+    it('reports a package.json that is not there at all, rather than passing it', async () => {
+      // Same collapsed sentinel, reached by a different route: `readFile` throws
+      // ENOENT and the catch is the same one. A repository with no package.json
+      // is not an unpinned repository, it is a broken one.
+      await write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+
+      const result = await checkLockfiles({ cwd })
+
+      expect(result.ok).toBe(false)
+      expect(statuses(result)).toEqual(['unreadable-package-json'])
+    })
   })
 
   // The Cloudflare build image ships pnpm 10.11.1 and reads lockfileVersion
