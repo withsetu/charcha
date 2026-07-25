@@ -39,7 +39,14 @@ export interface ValidatedComment {
   title?: string
 }
 
-export type ParseResult = { ok: true; value: ValidatedComment } | { ok: false; message: string }
+/**
+ * A parse that either produced a value or a single sentence the reader can act on.
+ * Generic because the preview route validates a body on its own (#78) and needs
+ * the same shape for a `string`.
+ */
+export type Parsed<T> = { ok: true; value: T } | { ok: false; message: string }
+
+export type ParseResult = Parsed<ValidatedComment>
 
 // Grouping-safe thousands separator, so the too-long message names the real limit
 // without depending on the runtime's locale data.
@@ -58,16 +65,31 @@ const nullishToAbsent = (value: unknown) =>
 
 const BODY_TOO_LONG = `Your comment is too long (maximum ${withThousands(MAX_BODY_LENGTH)} characters).`
 
+const BODY_REQUIRED = 'A comment is required.'
+
+/**
+ * What a comment body may be, on its own and apart from the rest of a submission.
+ *
+ * Named and exported because two endpoints validate one: the write, through the
+ * object below, and the composer's preview (#78), which has a body and nothing
+ * else. Sharing the schema — not merely the number — is what makes the preview
+ * refuse exactly what the write would refuse, in the same words, so a draft that
+ * previews cleanly cannot then fail to post for a reason the reader was not shown.
+ *
+ * The same message for a missing, empty, or non-string body: the reader's problem
+ * is identical ("there is no comment"), and the type-machinery default ("expected
+ * string, received number") is both unhelpful and a small internal leak.
+ * Enforced by test/worker/submit/schema.test.ts and test/worker/preview/route.test.ts.
+ */
+export const commentBodySchema = z
+  .string({ error: BODY_REQUIRED })
+  .trim()
+  .min(1, BODY_REQUIRED)
+  .max(MAX_BODY_LENGTH, BODY_TOO_LONG)
+
 const schema = z.object(
   {
-    // The same message for a missing, empty, or non-string body: the reader's
-    // problem is identical ("there is no comment"), and the type-machinery default
-    // ("expected string, received number") is both unhelpful and a small internal leak.
-    body: z
-      .string({ error: 'A comment is required.' })
-      .trim()
-      .min(1, 'A comment is required.')
-      .max(MAX_BODY_LENGTH, BODY_TOO_LONG),
+    body: commentBodySchema,
 
     authorName: z
       .string({ error: 'A name is required.' })
@@ -142,4 +164,20 @@ export function parseComment(input: unknown): ParseResult {
 
   const message = result.error.issues[0]?.message ?? 'Those comment details are not valid.'
   return { ok: false, message }
+}
+
+/**
+ * Validates a comment body on its own — the whole of what the preview route needs
+ * (#78) — through the very schema the submission uses for the same field.
+ *
+ * It returns the *trimmed* body, which is what makes the preview honest: the write
+ * trims before it stores, so rendering the untrimmed draft would differ from the
+ * published comment by whatever the reader typed at the edges.
+ * Enforced by test/worker/preview/route.test.ts.
+ */
+export function parseCommentBody(input: unknown): Parsed<string> {
+  const result = commentBodySchema.safeParse(input)
+  if (result.success) return { ok: true, value: result.data }
+
+  return { ok: false, message: result.error.issues[0]?.message ?? BODY_REQUIRED }
 }
