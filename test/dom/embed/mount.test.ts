@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EmbedConfig } from '../../../src/embed/config'
 import { REPLYING_CLASS, fieldIds } from '../../../src/embed/markup'
 import { mountWidget } from '../../../src/embed/mount'
+import type { RenderableComment } from '../../../src/render'
+import { renderComments } from '../../../src/render'
 
 const API = 'https://comments.example.com'
 // No sitekey: the deployment has not configured Turnstile (#79), which is the
@@ -33,58 +35,62 @@ const POSTED_PUBLISHED = 'Thanks — your comment is published.'
 /* The Worker's side of the wire                                               */
 /* -------------------------------------------------------------------------- */
 
+// The bodies below are produced by the renderer the Worker actually calls, not
+// written out beside it (#94).
+//
+// Hand-written markup was the only option until the renderer's input type stopped
+// coming from the data layer, which is typed against Cloudflare's ambient globals
+// this program deliberately does not have (test/dom/tsconfig.json). It had already
+// drifted twice by the time #94 was picked up: the invitation carried a full stop
+// the renderer does not emit, and a posted comment arrived as a bare `<li>` where
+// src/submit/pipeline.ts sends a whole rendered list.
+//
+// Rendering for real is what couples mount.ts's selectors to the names it selects.
+// The class names and the `charcha-comment-${id}` template are the renderer's
+// public contract; mount.ts reads them as string literals, and so do the
+// assertions below — deliberately, because a selector derived from the same source
+// as the markup would follow a rename and prove nothing about mount.ts. The
+// literals are the pin; the fixture is what moves under them.
+
+/** One fixed instant, so a rendered fixture is the same string on every run. */
+const CREATED_AT = Date.UTC(2026, 6, 24, 10, 0, 0) / 1000
+
 /**
- * The comment HTML the Worker sends, mirroring src/render/comments.ts.
- *
- * Written out here rather than imported: the renderer's module reaches the data
- * layer for a type, and the data layer is typed against Cloudflare's ambient
- * globals, which this program deliberately does not have (test/dom/tsconfig.json).
- * The class names below are the renderer's public contract, frozen by
- * test/worker/render/comments.test.ts — this file consumes them, it does not own
- * them. That the copy is uncoupled from the original is a real gap and is tracked
- * on #94: a rename made consistently across the renderer and its own test would
- * leave these fixtures, and mount.ts's selectors, out of step with nothing red.
- *
- * `author` is given already escaped, because that is what arrives over the wire.
+ * A row as the data layer hands one over. `author` is given raw — the renderer
+ * escapes it, which is the trip over the wire these tests are about.
  */
-function commentHtml(options: {
+function comment(options: {
   id: number
   author: string
   body?: string
-  replies?: readonly { id: number; author: string }[]
-}): string {
-  const replies = options.replies ?? []
-  return (
-    `<li class="charcha-comment" id="charcha-comment-${options.id}">` +
-    `<div class="charcha-comment-header">` +
-    `<span class="charcha-comment-author">${options.author}</span>` +
-    `<time class="charcha-comment-time" datetime="2026-07-24T10:00:00.000Z">2026-07-24 10:00 UTC</time>` +
-    `</div>` +
-    `<div class="charcha-comment-body"><p>${options.body ?? 'Hello.'}</p></div>` +
-    (replies.length === 0
-      ? ''
-      : `<ol class="charcha-replies">` +
-        replies
-          .map(
-            (reply) =>
-              `<li class="charcha-comment charcha-reply" id="charcha-comment-${reply.id}">` +
-              `<div class="charcha-comment-header">` +
-              `<span class="charcha-comment-author">${reply.author}</span>` +
-              `</div>` +
-              `<div class="charcha-comment-body"><p>A reply.</p></div>` +
-              `</li>`,
-          )
-          .join('') +
-        `</ol>`) +
-    `</li>`
-  )
+  parentId?: number
+}): RenderableComment {
+  const parentId = options.parentId ?? null
+  return {
+    id: options.id,
+    parentId,
+    depth: parentId === null ? 0 : 1,
+    authorName: options.author,
+    body: options.body ?? 'Hello.',
+    byOwner: false,
+    createdAt: CREATED_AT,
+  }
 }
 
-function threadHtml(...comments: string[]): string {
-  return `<ol class="charcha-comments">${comments.join('')}</ol>`
+/** What `GET /comments` answers with (src/read/route.ts): the page, rendered. */
+function threadHtml(...comments: readonly RenderableComment[]): string {
+  return renderComments(comments)
 }
 
-const EMPTY_THREAD = '<p class="charcha-empty">Be the first to comment.</p>'
+/**
+ * What `POST /comments` answers with: the one comment just accepted, flattened
+ * to a root and rendered on its own — exactly what src/submit/pipeline.ts sends.
+ */
+function postedHtml(posted: RenderableComment): string {
+  return renderComments([{ ...posted, parentId: null }])
+}
+
+const EMPTY_THREAD = threadHtml()
 
 /* -------------------------------------------------------------------------- */
 /* A network the test owns                                                     */
@@ -226,7 +232,7 @@ describe('mounting the widget', () => {
   it('reads the page it is on, and shows what came back', async () => {
     const { calls } = serve({
       status: 200,
-      body: threadHtml(commentHtml({ id: 1, author: 'Ada' })),
+      body: threadHtml(comment({ id: 1, author: 'Ada' })),
     })
 
     const harness = await mount()
@@ -243,10 +249,13 @@ describe('mounting the widget', () => {
   })
 
   it('offers a Reply on every root comment, and on no reply', async () => {
+    // Flat rows, the way the page read returns them; the nesting below is the
+    // renderer's, not the fixture's.
     serve({
       status: 200,
       body: threadHtml(
-        commentHtml({ id: 1, author: 'Ada', replies: [{ id: 2, author: 'Grace' }] }),
+        comment({ id: 1, author: 'Ada' }),
+        comment({ id: 2, author: 'Grace', parentId: 1 }),
       ),
     })
 
@@ -305,7 +314,7 @@ describe('when the read fails', () => {
   it('reads again when the retry is pressed, and renders what arrives', async () => {
     const { calls } = serve(
       { networkError: 'connection refused' },
-      { status: 200, body: threadHtml(commentHtml({ id: 7, author: 'Ada' })) },
+      { status: 200, body: threadHtml(comment({ id: 7, author: 'Ada' })) },
     )
 
     const harness = await mount()
@@ -396,7 +405,7 @@ describe('what the server says about a rejected comment', () => {
     serve(
       { status: 200, body: EMPTY_THREAD },
       { status: 400, body: 'Your comment is empty.' },
-      { status: 201, body: commentHtml({ id: 3, author: 'Reader' }) },
+      { status: 201, body: postedHtml(comment({ id: 3, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -425,7 +434,7 @@ describe('posting a comment', () => {
       { status: 200, body: EMPTY_THREAD },
       // 202 is the moderation queue: a success, and the reader is told the truth
       // about it rather than watching their words vanish behind a promise (#5).
-      { status: 202, body: commentHtml({ id: 4, author: 'Reader' }) },
+      { status: 202, body: postedHtml(comment({ id: 4, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -448,7 +457,7 @@ describe('posting a comment', () => {
     // native POST an endpoint reading JSON would answer 400 to.
     const { calls } = serve(
       { status: 200, body: EMPTY_THREAD },
-      { status: 201, body: commentHtml({ id: 11, author: 'Reader' }) },
+      { status: 201, body: postedHtml(comment({ id: 11, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -464,7 +473,7 @@ describe('posting a comment', () => {
   it('badges nothing when the comment was published outright', async () => {
     serve(
       { status: 200, body: EMPTY_THREAD },
-      { status: 201, body: commentHtml({ id: 5, author: 'Reader' }) },
+      { status: 201, body: postedHtml(comment({ id: 5, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -481,7 +490,7 @@ describe('posting a comment', () => {
   it('replaces the invitation rather than commenting underneath it', async () => {
     serve(
       { status: 200, body: EMPTY_THREAD },
-      { status: 202, body: commentHtml({ id: 6, author: 'Reader' }) },
+      { status: 202, body: postedHtml(comment({ id: 6, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -504,7 +513,7 @@ describe('posting a comment', () => {
   it('moves focus to the comment it just placed', async () => {
     serve(
       { status: 200, body: EMPTY_THREAD },
-      { status: 202, body: commentHtml({ id: 8, author: 'Reader' }) },
+      { status: 202, body: postedHtml(comment({ id: 8, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -522,7 +531,7 @@ describe('posting a comment', () => {
   it('empties the body but keeps the name, so a second comment is not retyped', async () => {
     serve(
       { status: 200, body: EMPTY_THREAD },
-      { status: 201, body: commentHtml({ id: 9, author: 'Reader' }) },
+      { status: 201, body: postedHtml(comment({ id: 9, author: 'Reader' })) },
     )
 
     const harness = await mount()
@@ -595,12 +604,9 @@ describe('replying to a comment', () => {
     serve(
       {
         status: 200,
-        body: threadHtml(
-          commentHtml({ id: 1, author: 'Ada' }),
-          commentHtml({ id: 2, author: 'Grace' }),
-        ),
+        body: threadHtml(comment({ id: 1, author: 'Ada' }), comment({ id: 2, author: 'Grace' })),
       },
-      { status: 202, body: commentHtml({ id: 10, author: 'Reader' }) },
+      { status: 202, body: postedHtml(comment({ id: 10, author: 'Reader' })) },
     )
     return mount()
   }
@@ -648,9 +654,13 @@ describe('replying to a comment', () => {
     // escaping is already undone by the time it gets here. `&lt;img&gt;` on the
     // wire is `<img …>` in hand — written with `innerHTML` it becomes an element
     // that loads a URL of the attacker's choosing from the reader's browser.
+    //
+    // The name is written here as the commenter typed it, and the real renderer is
+    // what turns it into `&lt;img …&gt;` on the wire — so this test drives the
+    // escape-then-unescape round trip rather than assuming the first half of it.
     serve({
       status: 200,
-      body: threadHtml(commentHtml({ id: 1, author: '&lt;img src=x onerror=alert(1)&gt;' })),
+      body: threadHtml(comment({ id: 1, author: '<img src=x onerror=alert(1)>' })),
     })
 
     const harness = await mount()
@@ -664,8 +674,8 @@ describe('replying to a comment', () => {
 
   it('sends the reply with the parent it was written under', async () => {
     const { calls } = serve(
-      { status: 200, body: threadHtml(commentHtml({ id: 2, author: 'Grace' })) },
-      { status: 202, body: commentHtml({ id: 10, author: 'Reader' }) },
+      { status: 200, body: threadHtml(comment({ id: 2, author: 'Grace' })) },
+      { status: 202, body: postedHtml(comment({ id: 10, author: 'Reader' })) },
     )
 
     const harness = await mount()
