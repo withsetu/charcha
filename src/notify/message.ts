@@ -28,7 +28,7 @@
 // by mistake.
 // Enforced by test/worker/notify/message.test.ts.
 
-import type { CommentCreatedEvent } from './index'
+import type { CommentCreatedEvent } from './event'
 
 /**
  * How much of a comment body the email carries.

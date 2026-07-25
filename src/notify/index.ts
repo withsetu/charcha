@@ -46,47 +46,18 @@
 // Enforced by test/worker/notify/notifier.test.ts and
 // test/worker/notify/pipeline-seam.test.ts.
 
-import type { CommentStatus } from '../db'
-// `announceOnce` lives under src/spam because that is where it was first needed, but
-// it is generic isolate-scoped observability and src/admin already reuses it from
-// two files. Its dedupe set is shared across callers, so the key is namespaced.
 // `announceOnce` lives under src/spam because that is where it was first needed, but
 // it is generic isolate-scoped observability and src/admin already reuses it from two
 // files. Its dedupe set is shared across callers, so the keys here are namespaced.
 import { announceOnce } from '../spam/log'
 import type { NotifyEnv } from './env'
+import type { CommentCreatedEvent } from './event'
 import { buildOwnerNotification } from './message'
 import { sendEmail } from './resend'
 import { sendBudget } from './throttle'
 import type { SendBudget } from './throttle'
 
-/**
- * What the pipeline tells the notifier about a comment it just stored.
- *
- * Three fields are **deliberately absent**, in the same spirit as
- * `RenderableComment` in src/db/index.ts — the field does not exist, so no mistake
- * downstream can send it:
- *
- *   - `authorEmail`, so a reader's address cannot reach a third party.
- *   - any IP-derived value, for the same reason.
- *   - `pageUrl`, because the origin in it is attacker-chosen. `derivePageKey` drops
- *     the origin from a thread's identity, so a submission reporting
- *     `https://evil.example/notes/leaving` lands on the real `/notes/leaving` thread;
- *     carrying that URL into an email the owner's own domain signed would make this a
- *     phishing relay. `pageKey` is enough to say which page. Found in review.
- *
- * Enforced by test/worker/notify/pipeline-seam.test.ts.
- */
-export interface CommentCreatedEvent {
-  commentId: number
-  /** Untrusted. Flattened and capped before it reaches the email. */
-  authorName: string
-  /** Untrusted, unmoderated, and up to 10,000 characters. Quoted and capped. */
-  body: string
-  /** Worker-derived path and query, never an absolute URL. See src/page-key.ts. */
-  pageKey: string
-  status: CommentStatus
-}
+export type { CommentCreatedEvent } from './event'
 
 export interface Notifier {
   /**
@@ -99,16 +70,6 @@ export interface Notifier {
    * Enforced by test/worker/notify/notifier.test.ts.
    */
   commentCreated(event: CommentCreatedEvent): Promise<void>
-}
-
-/**
- * The notifier for a deployment that has not configured email: it does nothing,
- * silently and correctly. Mirrors `allowAllSpamCheck` — a default that abstains.
- */
-export const noopNotifier: Notifier = {
-  commentCreated(): Promise<void> {
-    return Promise.resolve()
-  },
 }
 
 /**
@@ -132,13 +93,15 @@ export interface NotifierOverrides {
   now?: () => number
 }
 
-/** Which of the three required values are missing, for the one-per-isolate log line. */
-function missing(env: NotifyEnv): string[] {
-  const absent: string[] = []
-  if ((env.RESEND_API_KEY ?? '').trim() === '') absent.push('RESEND_API_KEY')
-  if ((env.CHARCHA_NOTIFY_FROM ?? '').trim() === '') absent.push('CHARCHA_NOTIFY_FROM')
-  if ((env.CHARCHA_NOTIFY_TO ?? '').trim() === '') absent.push('CHARCHA_NOTIFY_TO')
-  return absent
+/**
+ * The trimmed value, or null when the owner has not set it.
+ *
+ * Trimmed because a trailing newline from `wrangler secret put` is a real way to
+ * configure a broken `Authorization` header, and a blank string is not a secret.
+ */
+function configured(value: string | undefined): string | null {
+  const trimmed = (value ?? '').trim()
+  return trimmed === '' ? null : trimmed
 }
 
 /**
@@ -153,8 +116,16 @@ function missing(env: NotifyEnv): string[] {
  * Enforced by test/worker/notify/notifier.test.ts.
  */
 export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}): Notifier {
-  const absent = missing(env)
-  if (absent.length > 0) {
+  const apiKey = configured(env.RESEND_API_KEY)
+  const from = configured(env.CHARCHA_NOTIFY_FROM)
+  const to = configured(env.CHARCHA_NOTIFY_TO)
+
+  if (apiKey === null || from === null || to === null) {
+    const absent: string[] = []
+    if (apiKey === null) absent.push('RESEND_API_KEY')
+    if (from === null) absent.push('CHARCHA_NOTIFY_FROM')
+    if (to === null) absent.push('CHARCHA_NOTIFY_TO')
+
     return {
       commentCreated(): Promise<void> {
         announceOnce('notify-unconfigured', {
@@ -166,12 +137,6 @@ export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}
       },
     }
   }
-
-  // Non-null after `missing` found nothing absent, and trimmed because a trailing
-  // newline in a `wrangler secret put` is a real way to configure a broken header.
-  const apiKey = (env.RESEND_API_KEY ?? '').trim()
-  const from = (env.CHARCHA_NOTIFY_FROM ?? '').trim()
-  const to = (env.CHARCHA_NOTIFY_TO ?? '').trim()
 
   const budget = overrides.budget ?? isolateBudget
   const now = overrides.now ?? (() => Date.now())

@@ -4,7 +4,7 @@
 // burst cannot become a mail flood.
 
 import { describe, expect, it } from 'vitest'
-import { createNotifier, noopNotifier } from '../../../src/notify'
+import { createNotifier } from '../../../src/notify'
 import type { CommentCreatedEvent } from '../../../src/notify'
 import { NOTIFY_BURST, NOTIFY_REFILL_INTERVAL_MS, sendBudget } from '../../../src/notify/throttle'
 
@@ -93,10 +93,6 @@ describe('when the owner has not configured notifications', () => {
     await notifier.commentCreated(eventFor())
 
     expect(bodies).toHaveLength(0)
-  })
-
-  it('the noop notifier sends nothing and resolves', async () => {
-    await expect(noopNotifier.commentCreated(eventFor())).resolves.toBeUndefined()
   })
 })
 
