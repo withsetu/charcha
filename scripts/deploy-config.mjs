@@ -240,7 +240,16 @@ function d1Bindings(config) {
     .filter((binding) => typeof binding === 'string')
 }
 
-const MIGRATE_COMMAND = /wrangler\s+d1\s+migrations\s+apply\s+(\S+)((?:\s+\S+)*)/
+/**
+ * The migration step inside a `deploy` script: its target, then its flags.
+ *
+ * The flag group stops at a shell operator rather than running to the end of the
+ * line. Without that, `… apply DB --local && wrangler deploy --x-remote` reads as
+ * having `--remote` — the `--remote` assertion would then be satisfied by a word
+ * belonging to a different command, which is a check that passes for the wrong
+ * reason. Enforced by test/node/deploy-config.test.ts.
+ */
+const MIGRATE_COMMAND = /wrangler\s+d1\s+migrations\s+apply\s+([^\s&|;]+)((?:\s+[^\s&|;]+)*)/
 
 /**
  * @param {{ cwd?: string }} options

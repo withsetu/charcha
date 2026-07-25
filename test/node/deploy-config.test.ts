@@ -178,6 +178,20 @@ describe('checkDeployConfig', () => {
     expect(statuses(result)).toEqual(['migrates-locally'])
   })
 
+  it('does not read a later command’s flags as the migration’s own', async () => {
+    // `--remote` here belongs to `wrangler deploy`, not to the migration. A flag
+    // group that ran to the end of the line would satisfy the assertion with a word
+    // from a different command, and the check would pass for the wrong reason.
+    await writeHealthyRepo(
+      withDeployScript('wrangler d1 migrations apply DB --local && wrangler deploy --remote'),
+    )
+
+    const result = await checkDeployConfig({ cwd })
+
+    expect(result.ok).toBe(false)
+    expect(statuses(result)).toEqual(['migrates-locally'])
+  })
+
   it('fails when the deploy happens before the migration', async () => {
     await writeHealthyRepo(
       withDeployScript('wrangler deploy && wrangler d1 migrations apply DB --remote'),
