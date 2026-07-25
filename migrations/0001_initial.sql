@@ -39,6 +39,14 @@ CREATE TABLE comments (
   moderated_at INTEGER,
   CHECK (parent_id IS NOT NULL OR depth = 0),
   CHECK (parent_id IS NULL     OR depth = 1),
+  -- A comment may not be its own parent. This is a constraint rather than a
+  -- trigger because the threading guards below cannot see it: `set parent_id = id`
+  -- makes the row a reply and a replied-to comment in the same statement, and both
+  -- depth guards read the pre-update row, where nothing points at it yet. Such a
+  -- row renders as nothing at all — src/render files it under its parent and emits
+  -- no root for it, so it and its subtree leave the page in silence.
+  -- Enforced by test/worker/db/threading-triggers.test.ts.
+  CHECK (parent_id IS NULL     OR parent_id <> id),
   CHECK (length(author_name)  BETWEEN 1 AND 80),
   CHECK (length(body)         BETWEEN 1 AND 10000),
   CHECK (author_email IS NULL OR length(author_email) <= 254)
@@ -81,8 +89,8 @@ END;
 --
 -- Paired on update for the same reason as the depth guard: `update comments set
 -- thread_id = ...` would otherwise move a comment onto a page it was never posted
--- to (#29). Both directions of the edge are covered when the *reply* is the row
--- being written; moving a row that has replies of its own is #60.
+-- to (#29). That covers the edge when the *reply* is the row being written; the
+-- pair below covers it when the row being written is the one being replied to.
 -- Enforced by test/worker/db/threading-triggers.test.ts.
 CREATE TRIGGER comments_parent_thread_guard BEFORE INSERT ON comments
 WHEN NEW.parent_id IS NOT NULL
@@ -94,6 +102,77 @@ END;
 CREATE TRIGGER comments_parent_thread_guard_on_update BEFORE UPDATE OF parent_id, thread_id ON comments
 WHEN NEW.parent_id IS NOT NULL
  AND (SELECT thread_id FROM comments WHERE id = NEW.parent_id) <> NEW.thread_id
+BEGIN
+  SELECT RAISE(ABORT, 'a reply must be on the same page as the comment it replies to');
+END;
+
+-- The same two rules, enforced from the other end of the edge (#60). Every guard
+-- above opens with `NEW.parent_id IS NOT NULL`, so it only ever sees the reply.
+-- Updating the comment being *replied to* never touches that column: moving a root
+-- to another page strands its replies on the old one, still pointing at it, and
+-- making a root into a reply puts everything under it three levels deep while the
+-- replies' own `depth` column still reads 1, so no CHECK notices either. There is
+-- no INSERT counterpart to this pair, because a row cannot have replies before it
+-- exists.
+--
+-- The EXISTS looks for OLD.id rather than NEW.id: the replies point at the id the
+-- row had when they were written, and an UPDATE is free to name `id` in the same
+-- SET clause.
+--
+-- Cost, and why it is affordable: each of these adds a seek on comments_by_parent
+-- to an UPDATE whose SET clause names the columns in its OF list. src/db writes
+-- only two UPDATEs to this table — moderation, which sets status and moderated_at
+-- on a comment and its replies, and the nightly ip_hash purge, which sets ip_hash
+-- across the whole table — and neither names parent_id, thread_id or depth, so
+-- `UPDATE OF` does not fire these triggers at all. Nothing writes those columns
+-- after the insert today, so the seek lands only on the feature that first moves a
+-- comment between threads. On the path that is allowed through, the seek finds
+-- nothing to read: D1 reports the same rows_read with these triggers as without
+-- them, on a page of any size. The test measures that, and measures against a
+-- statement whose trigger does read a row, so a rows_read that had stopped counting
+-- trigger work could not pass for a guard that costs nothing.
+--
+-- `depth` is in the depth guard's OF list although it is not what makes a depth-only
+-- UPDATE safe: the CHECK constraints reject `set depth = 1` on a root whether the
+-- trigger is consulted or not. What it buys is which of the two answers, since
+-- BEFORE triggers run ahead of constraint checking — the guard's message rather
+-- than a constraint's, and a guard still standing if those CHECKs are ever loosened.
+--
+-- The thread guard compares NEW.thread_id with OLD.thread_id rather than reading
+-- the replies' own thread_id. That is cheaper — the EXISTS stays on the index —
+-- but the reason is correctness: a multi-row `UPDATE ... WHERE thread_id = ?` would
+-- otherwise be accepted or rejected according to the order SQLite happened to visit
+-- the rows in, which is a guard that passes in a test and fails in production.
+--
+-- The consequence, stated plainly because it is the price of the above: with these
+-- in place **no** ordering of UPDATE statements moves a comment and its replies to
+-- another page. The parent is refused while its replies are still behind, and each
+-- reply is refused while its parent is. A merge-threads or move-comment feature has
+-- to detach the replies (parent_id NULL, depth 0), move every row, then re-attach —
+-- three steps, and 2N+1 statements for a comment with N replies, all of which the
+-- guards do allow.
+--
+-- The thread guard lists only thread_id, because its WHEN cannot be true unless
+-- thread_id is in the SET clause; listing the other two would buy nothing but a
+-- trigger program run on every re-parent.
+--
+-- `UPDATE OF` fires on a column appearing in the SET clause, not on its value
+-- changing, and it silently ignores names that do not exist, so renaming any of
+-- these columns disarms the guard that lists it with no error at all
+-- (https://sqlite.org/lang_createtrigger.html, checked 2026-07-25).
+-- Enforced by test/worker/db/threading-triggers.test.ts.
+CREATE TRIGGER comments_depth_guard_on_update_with_replies
+BEFORE UPDATE OF parent_id, thread_id, depth ON comments
+WHEN (NEW.parent_id IS NOT NULL OR NEW.depth <> 0)
+ AND EXISTS (SELECT 1 FROM comments WHERE parent_id = OLD.id)
+BEGIN
+  SELECT RAISE(ABORT, 'replies may not be nested more than one level');
+END;
+
+CREATE TRIGGER comments_parent_thread_guard_on_update_with_replies
+BEFORE UPDATE OF thread_id ON comments
+WHEN NEW.thread_id <> OLD.thread_id
+ AND EXISTS (SELECT 1 FROM comments WHERE parent_id = OLD.id)
 BEGIN
   SELECT RAISE(ABORT, 'a reply must be on the same page as the comment it replies to');
 END;
