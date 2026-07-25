@@ -10,18 +10,32 @@
 #
 # The text shown beside each field is `cloudflare.bindings.<NAME>.description` in
 # package.json, same page. Both halves are asserted rather than remembered:
-# `pnpm check:deploy` fails if a secret src/ reads is missing from this file, if a
-# name here has no description, or if a name here is read by nothing.
+# `pnpm check:deploy` fails if a secret src/ reads is neither listed here nor
+# documented in README.md as a `wrangler secret put`, if a name here has no
+# description, if a description survives the field it explained, or if a name here
+# is read by nothing.
 #
 # **Leave every value empty.** The deploy form pre-fills from this file, so a
 # committed value becomes the default credential on every deployment that accepts
 # it — which for the password below would be a published one. `check:deploy` fails
 # on a non-empty value for that reason.
 #
-# Only the dashboard password is required. Every other name here turns a feature or
-# a defence layer off when it is absent rather than failing: an unconfigured
-# deployment still takes comments, because the alternative is a site whose comment
-# form is broken by a secret its owner never knew about.
+# **Only two names are live here, and the four commented-out ones below are the
+# design rather than an oversight (#139).** The deploy form **requires every field
+# it shows**, and Cloudflare documents no way to mark one optional
+# (cloudflare/workers-sdk#14075, open, reproduced against the live form). A field
+# that must be filled, whose only safe value is nothing, is a trap: a deployer who
+# types a placeholder into `TURNSTILE_SECRET_KEY` to get past it breaks their own
+# comment form silently and permanently, because every verification then fails
+# against a key that matches no widget (#104). So the form asks only for the two
+# secrets where a value is needed *and* any value the deployer supplies is safe.
+# The rest are commented out — still here for local development, invisible to the
+# deploy form, and documented in README.md under "Turning on the optional
+# features", which is where a deployer is sent to set them.
+#
+# A `#` line is a comment in every dotenv parser, Cloudflare's included, and if
+# that inference is ever wrong the failure is today's behaviour rather than a
+# worse one: the four reappear as form fields.
 #
 # Never commit `.dev.vars`.
 
@@ -44,19 +58,31 @@ CHARCHA_DASHBOARD_PASSWORD=
 # database — it is the only thing between the stored hashes and a map of who
 # commented from where. Unset means no hash is stored at all, and the per-IP half
 # abstains; the per-thread half still runs.
+#
+# It stays in the deploy form, unlike the four below, because it is the one where
+# a hurried deployer cannot hurt themselves: this is an HMAC key, so *any* string
+# produces a working rate limit and only its randomness is at stake. Skipping it
+# would ship every one-click deployment with the per-IP limit switched off, which
+# is worse than a hastily-chosen key on the surface this project exists to defend.
 IP_HASH_SECRET=
 
-# The secret key of your Cloudflare Turnstile widget (#8, layer 3). Unset means
-# layer 3 abstains and comments are still accepted.
-# https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
-TURNSTILE_SECRET_KEY=
-
 # ---------------------------------------------------------------------------
+# Set after the deploy, not during it — see the header. Uncomment for local
+# development; README.md has the `wrangler secret put` line for each.
+# ---------------------------------------------------------------------------
+
+# The secret key of your Cloudflare Turnstile widget (#8, layer 3). Unset means
+# layer 3 abstains and comments are still accepted. The *sitekey* is the widget's
+# other half: it is public, it goes on your own page as `data-turnstile-sitekey`,
+# and it is not this value. Setting one without the other is #104.
+# https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
+# TURNSTILE_SECRET_KEY=
+
 # Email notifications (#14) — all three together, or the feature is simply off.
 #
 # There is no partial state worth having: a key with no recipient has nowhere to
 # send, and Charcha has no account and no owner email anywhere in its schema to
-# guess one from. Leave all three empty and no email is ever sent, nothing is
+# guess one from. Leave all three unset and no email is ever sent, nothing is
 # transmitted to anyone, and comments still arrive in the moderation queue at
 # /admin — which is where you would read them anyway.
 #
@@ -69,17 +95,18 @@ TURNSTILE_SECRET_KEY=
 # to Resend, a third party. It does **not** send their email address or anything
 # derived from their IP. If your site has a privacy notice, the first sentence is
 # the one that belongs in it.
-# ---------------------------------------------------------------------------
 
 # A Resend API key. https://resend.com/docs/api-reference/introduction
-RESEND_API_KEY=
+# RESEND_API_KEY=
 
 # The address notifications are sent *from*, on a domain verified in the Resend
 # account that issued the key above. A display name is allowed:
-# `Charcha <comments@example.com>`.
-CHARCHA_NOTIFY_FROM=
+# `Charcha <comments@example.com>`. A typo here is silent — no email arrives, and
+# absence is exactly what the feature looks like when it is switched off — which
+# is the other reason this is not a masked deploy-form field (#139).
+# CHARCHA_NOTIFY_FROM=
 
 # Where notifications go — your own inbox. This is the only address Charcha ever
 # mails, and clearing it is how you stop the emails: there is no unsubscribe link,
 # because there is nobody to unsubscribe but you.
-CHARCHA_NOTIFY_TO=
+# CHARCHA_NOTIFY_TO=

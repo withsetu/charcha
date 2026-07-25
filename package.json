@@ -57,22 +57,10 @@
   "cloudflare": {
     "bindings": {
       "CHARCHA_DASHBOARD_PASSWORD": {
-        "description": "**Required.** The only password for your moderation dashboard, at `/admin`. Generate one with `openssl rand -base64 24` and keep it in a password manager — there is no account to create and no reset. Left empty, the dashboard refuses every request, including its own login, and comments arriving on your site cannot be moderated."
+        "description": "**Required — this form asks for nothing optional, so every field here needs a real value.** The only password for your moderation dashboard, at `/admin`. Generate one with `openssl rand -base64 24` and keep it in a password manager: there is no account to create, no second user and no reset. Left empty, the dashboard refuses every request including its own login, and comments arriving on your site cannot be moderated. Turnstile, email notifications and the rest are **not** asked for here — they are off until you switch them on, and the [README](https://github.com/withsetu/charcha#turning-on-the-optional-features) has the one command each."
       },
       "IP_HASH_SECRET": {
-        "description": "**Recommended.** A random key that turns a commenter's IP address into the identifier the per-IP spam rate limit counts — `openssl rand -hex 32`. It never leaves your Worker, and no IP address is stored without it. Left empty, no IP is stored at all and the per-IP half of the rate limit stops running; the per-thread half still does."
-      },
-      "TURNSTILE_SECRET_KEY": {
-        "description": "**Optional.** The *secret* key of a [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/get-started/) widget, if you want the invisible bot check. The matching sitekey goes on your own page, as `data-turnstile-sitekey`. Left empty, Turnstile is off, nothing third-party is loaded into your readers' browsers, and comments are still accepted."
-      },
-      "RESEND_API_KEY": {
-        "description": "**Optional.** A [Resend](https://resend.com/docs/api-reference/introduction) API key, if you want an email when a comment arrives. Needs the two `CHARCHA_NOTIFY_*` values below and a domain verified in the same Resend account — all three together, or the feature is off. Enabling it sends the commenter's name and an excerpt of their comment to Resend; it never sends their email address or anything derived from their IP. Left empty, no email is sent, nothing is transmitted anywhere, and comments still arrive in the queue at `/admin`."
-      },
-      "CHARCHA_NOTIFY_FROM": {
-        "description": "**Optional.** The address notification emails come *from*, on a domain [verified in Resend](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain) under the same account as the key above — Resend's own `resend.dev` sender can only mail your Resend account's address. A display name is allowed: `Charcha <comments@example.com>`."
-      },
-      "CHARCHA_NOTIFY_TO": {
-        "description": "**Optional.** Where notifications go — your own inbox. The only address Charcha ever mails, and clearing it is how you stop the emails: there is no unsubscribe link, because there is nobody to unsubscribe but you."
+        "description": "**Required, and any long random string will do — `openssl rand -hex 32` if you have a terminal open.** This is the key that turns a commenter's IP address into the identifier the per-IP spam rate limit counts. It is an HMAC key, not a credential to look up anywhere: nothing has to recognise it, it never leaves your Worker, and no IP address is stored without it. Use a random one — anyone who guessed it and also had a copy of your database could turn the stored hashes back into IP addresses."
       }
     }
   },

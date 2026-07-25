@@ -8,17 +8,32 @@
 // Each violation below is a deploy that goes green and hands someone a broken
 // install, which is why they are gates and not documentation:
 //
-//   1. **A secret `src/` reads that no example file lists.** The Deploy flow builds
-//      its form from that file — "Worker secrets can be defined in a
-//      `.dev.vars.example` or `.env.example` file with a dotenv format"
-//      (https://developers.cloudflare.com/workers/platform/deploy-buttons/). A name
-//      left out is never asked for, so the deployer has to discover it exists and
-//      set it by hand. #12 made `CHARCHA_DASHBOARD_PASSWORD` required and
-//      fail-closed: unasked, it means a dashboard that 401s every route forever
-//      while comments keep arriving.
-//   2. **A secret with no description.** Same page: a `cloudflare.bindings` entry in
-//      package.json is what puts an explanation next to the field. Without one the
-//      deployer sees a bare box labelled with a constant name.
+//   1. **A secret `src/` reads that a deployer is never told about — in either of the
+//      two places they could be.** The Deploy flow builds its form from the example
+//      file — "Worker secrets can be defined in a `.dev.vars.example` or
+//      `.env.example` file with a dotenv format"
+//      (https://developers.cloudflare.com/workers/platform/deploy-buttons/) — so a
+//      name listed there is asked for at deploy time, and a name left out has to be
+//      found and set by hand. #12 made `CHARCHA_DASHBOARD_PASSWORD` required and
+//      fail-closed: unasked *and* undocumented, it means a dashboard that 401s every
+//      route forever while comments keep arriving.
+//
+//      Leaving a name out is now a legitimate choice rather than always a mistake, and
+//      #139 is why: the deploy form **requires every field it shows**, with no
+//      documented way to mark one optional
+//      (https://github.com/cloudflare/workers-sdk/issues/14075, open, reproduced
+//      against the live form on 2026-05-28). For `TURNSTILE_SECRET_KEY` that is worse
+//      than a long form — the only value a deployer can invent breaks their own
+//      comment form silently (#104), so the safe value is *no field*. The rule this
+//      guard enforces is therefore the deployer's view rather than the file's: every
+//      secret is either **collected at deploy time** or **documented in README.md as a
+//      post-deploy `wrangler secret put`**. Neither, and it is invisible.
+//   2. **A secret with no description.** Same Cloudflare page: a `cloudflare.bindings`
+//      entry in package.json is what puts an explanation next to the field. Without
+//      one the deployer sees a bare box labelled with a constant name. The converse is
+//      checked too — a description for a name the form does not show is text nobody
+//      will ever read, and it is exactly what gets left behind when a secret moves out
+//      of the form, so it would otherwise rot into a false record of guidance given.
 //   3. **A `deploy` script that does not apply migrations, or does not stop when
 //      they fail.** Cloudflare provisions the D1 database and rewrites
 //      `database_id`, and it does not run migrations — "If you would like to run
@@ -33,7 +48,8 @@
 //      that is different from that of your source repository." The deploy form lets
 //      a deployer rename the database; the binding is the only stable handle.
 //
-// All four checked against Cloudflare's docs on 2026-07-25.
+// All four checked against Cloudflare's docs on 2026-07-25; the required-field
+// behaviour in (1) is not in those docs and is cited to the workers-sdk issue instead.
 //
 // Enforced by test/node/deploy-config.test.ts, which also asserts that *this*
 // repository passes — a guard exercised only against synthetic fixtures proves the
@@ -53,6 +69,30 @@ export const EXAMPLE_SECRETS_FILES = ['.dev.vars.example', '.env.example']
 
 /** Where the Worker's own source lives, relative to the repository root. */
 export const SOURCE_DIR = 'src'
+
+/**
+ * The file a secret has to be documented in when the deploy form does not collect it.
+ *
+ * README.md rather than anywhere under docs/, because this is the page a deployer is
+ * already on: the Deploy button lives in it, and Cloudflare shows it beside the form.
+ */
+export const POST_DEPLOY_DOCS_FILE = 'README.md'
+
+/**
+ * The literal a secret's post-deploy documentation has to contain, which is the command
+ * that sets it.
+ *
+ * Prose mentioning the name would satisfy a looser check while telling a deployer
+ * nothing they can run, and the whole reason a secret is out of the form is that
+ * setting it afterwards is now their job. So the check is for the instruction, not for
+ * the word.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+export function postDeployInstruction(name) {
+  return `wrangler secret put ${name}`
+}
 
 /** Extensions a secret could be declared in. `.tsx` because the dashboard is React. */
 const SOURCE_EXTENSIONS = ['.ts', '.tsx']
@@ -406,15 +446,29 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
   const secrets = await declaredSecrets(cwd)
   const listed = [...new Set(example.map((entry) => entry.name))]
 
+  // Read rather than required to exist: a repository with no README fails every
+  // not-collected secret below, which is the right answer and a clearer one than a
+  // separate violation about the file.
+  let postDeployDocs
+  try {
+    postDeployDocs = await readFile(join(cwd, POST_DEPLOY_DOCS_FILE), 'utf8')
+  } catch {
+    postDeployDocs = ''
+  }
+
   if (anyExampleFile) {
     for (const secret of secrets) {
       if (listed.includes(secret.name)) continue
+      if (postDeployDocs.includes(postDeployInstruction(secret.name))) continue
       violations.push({
         status: 'unlisted-secret',
         message:
-          `${secret.file} declares the secret ${secret.name}, and no example file lists it — the ` +
-          `Deploy to Cloudflare form is built from ${EXAMPLE_SECRETS_FILES.join(' / ')}, so a ` +
-          `deployer is never asked for it and the code reads \`undefined\` on a fresh install`,
+          `${secret.file} declares the secret ${secret.name}, and a deployer is told about it in ` +
+          `neither place they could be: no example file lists it, so the Deploy to Cloudflare ` +
+          `form (built from ${EXAMPLE_SECRETS_FILES.join(' / ')}) never asks for it, and ` +
+          `${POST_DEPLOY_DOCS_FILE} does not contain \`${postDeployInstruction(secret.name)}\`, ` +
+          `so there is nothing to set it with afterwards either. The code reads \`undefined\` on ` +
+          `a fresh install and nobody involved knows why.`,
       })
     }
 
@@ -469,6 +523,27 @@ export async function checkDeployConfig({ cwd = process.cwd() } = {}) {
         `${name} as a bare field, and a deployer who does not already know what it is has to ` +
         `leave this repository to find out`,
     })
+  }
+
+  // And the converse. `description` is help text beside a form field; a name that is
+  // not a field has none, so the text is unreachable. It matters because it is what
+  // gets left behind when a secret moves out of the form — the description survives,
+  // reads like guidance that was given, and is seen by nobody.
+  // Skipped when there is no example file at all: `no-example-secrets-file` above has
+  // already said the one thing that matters, and repeating it once per description
+  // buries it — the same reason that violation is reported once rather than per secret.
+  if (anyExampleFile && typeof descriptions === 'object' && descriptions !== null) {
+    for (const name of Object.keys(descriptions)) {
+      if (listed.includes(name)) continue
+      violations.push({
+        status: 'undisplayed-description',
+        message:
+          `package.json describes ${name}, and no example file lists it — that description is ` +
+          `help text for a deploy-form field that does not exist, so no deployer will ever see ` +
+          `it. If ${name} is set after the deploy instead, its instructions belong in ` +
+          `${POST_DEPLOY_DOCS_FILE} where they can be read.`,
+      })
+    }
   }
 
   const scripts =
@@ -581,10 +656,27 @@ if (isCli) {
   }
 
   const secrets = await declaredSecrets(process.cwd())
+  const collected = new Set()
+  for (const file of EXAMPLE_SECRETS_FILES) {
+    try {
+      for (const entry of parseDotenv(await readFile(join(process.cwd(), file), 'utf8')))
+        collected.add(entry.name)
+    } catch {
+      continue
+    }
+  }
+  const names = secrets.map((secret) => secret.name)
+  const asked = names.filter((name) => collected.has(name))
+  const afterwards = names.filter((name) => !collected.has(name))
+
+  // Printed as two lists rather than one count, because which side a secret is on is
+  // the decision #139 was about and the thing worth seeing change in a diff of CI logs.
   console.log(
-    `[ok] the deploy form asks for every secret src/ reads ` +
-      `(${secrets.map((secret) => secret.name).join(', ')}), each has a description in ` +
-      `package.json, and the \`deploy\` script applies migrations to the D1 binding and stops if ` +
-      `they fail`,
+    `[ok] every secret src/ reads reaches the deployer.\n` +
+      `     asked for by the deploy form, and described in package.json: ` +
+      `${asked.join(', ') || '(none)'}\n` +
+      `     set after the deploy, with a \`wrangler secret put\` line in ` +
+      `${POST_DEPLOY_DOCS_FILE}: ${afterwards.join(', ') || '(none)'}\n` +
+      `     the \`deploy\` script applies migrations to the D1 binding and stops if they fail`,
   )
 }

@@ -44,36 +44,99 @@ keep developing from — later pushes to it redeploy.
 
 ### The secrets it asks for
 
-One is required. The other two switch a defence layer off when they are absent
-rather than failing, because an owner who skips a step should get a site that takes
-comments, not a broken comment form.
+**Two, and both want a real value.** Fill them in and you are done — everything else
+Charcha can do is off until you turn it on, and none of it is asked for here.
 
-| Secret | Required? | What it is, and what happens without it |
-|---|---|---|
-| `CHARCHA_DASHBOARD_PASSWORD` | **Yes** | The only credential for the moderation dashboard at `/admin`. No account, no reset, and no second user. Generate it — `openssl rand -base64 24`. Unset, the dashboard **refuses every request including its own login**: comments still arrive and nobody can moderate them. |
-| `IP_HASH_SECRET` | Recommended | The key that turns a commenter's IP into the identifier the per-IP spam rate limit counts — `openssl rand -hex 32`. Unset, no IP is stored at all and the per-IP half of the rate limit stops running; the per-thread half still does. |
-| `TURNSTILE_SECRET_KEY` | No | The *secret* key of a [Turnstile](https://developers.cloudflare.com/turnstile/get-started/) widget, if you want the invisible bot check. The matching sitekey is public and goes on your own page as `data-turnstile-sitekey`. Unset, Turnstile is off and nothing third-party is loaded into your readers' browsers. |
+| Secret | What it is |
+|---|---|
+| `CHARCHA_DASHBOARD_PASSWORD` | The only credential for the moderation dashboard at `/admin`. No account, no reset, and no second user. Generate it — `openssl rand -base64 24`. Unset, the dashboard **refuses every request including its own login**: comments still arrive and nobody can moderate them. |
+| `IP_HASH_SECRET` | The key that turns a commenter's IP into the identifier the per-IP spam rate limit counts. **Any long random string** — `openssl rand -hex 32` if you have a terminal open. It is an HMAC key, not a credential registered with anything, so nothing has to recognise it. Unset, no IP is stored at all and the per-IP half of the rate limit stops running. |
 
 They are declared in [`.dev.vars.example`](.dev.vars.example), which is the file the
 deploy form is built from, with the help text beside each field coming from
 `cloudflare.bindings` in `package.json`. Both are Cloudflare's
 [documented mechanism](https://developers.cloudflare.com/workers/platform/deploy-buttons/).
-`pnpm check:deploy` fails if a secret the code reads is absent from that file, and if
-a field the form would show has no description — a required secret the form never
-asks for is exactly how a deploy produces a Worker that cannot be administered.
 
-### Setting or changing a secret afterwards
+#### Why the optional ones are not on that form
 
-Nothing about the deploy form is a one-time chance. From a checkout of your
-deployed repository:
+The deploy form **requires a value in every field it shows**, and there is no
+documented way to mark one optional
+([cloudflare/workers-sdk#14075](https://github.com/cloudflare/workers-sdk/issues/14075)).
+For `TURNSTILE_SECRET_KEY` that is a trap rather than an inconvenience: the only thing
+a deployer can do with a mandatory field they have no value for is invent one, and an
+invented Turnstile secret matches no widget, so **every verification fails and every
+comment on the site is refused** — silently, and for good, until someone thinks to
+look at that field again.
+
+So the form asks only for the two secrets above, which are the two where a value is
+genuinely needed *and* any value you supply is safe. The optional features are set
+afterwards, one command each, below. `pnpm check:deploy` enforces that split: a secret
+the code reads must be either collected by the form **or** documented here as a
+`wrangler secret put`, with no third option, and a help text left behind by a field
+that no longer exists fails too.
+
+### Turning on the optional features
+
+Nothing about the deploy form is a one-time chance, and none of these has to be decided
+during it. Run these from a checkout of your deployed repository — or set the same
+names in the Cloudflare dashboard, in your Worker under **Settings → Variables and
+Secrets**. Each takes effect on the next request; there is nothing to redeploy.
+
+**The invisible bot check ([Turnstile](https://developers.cloudflare.com/turnstile/get-started/)).**
+A Turnstile widget has **two keys, and they are not interchangeable**:
+
+- the **sitekey**, which is public, goes in your page's HTML as
+  `data-turnstile-sitekey`, and is what puts the widget on the page;
+- the **secret key**, which is private, goes in the Worker, and is what lets the Worker
+  check the widget's answer.
+
+Create a widget at **Cloudflare dashboard → Turnstile → Add widget**, then:
+
+```sh
+pnpm wrangler secret put TURNSTILE_SECRET_KEY
+```
+
+Set both halves or neither. A secret key with no sitekey on the page means every
+comment arrives with no token to verify and is refused; a sitekey with no secret key
+means the widget renders and nothing checks it
+([#104](https://github.com/withsetu/charcha/issues/104)). Turnstile is also the one
+thing that can put a third party in your reader's browser, which is why it is off until
+you do this and [documented plainly](docs/theming.md#turnstile) when you do.
+
+**An email when a comment arrives.** All three of these together, or the feature is
+simply off — a key with no recipient has nowhere to send, and Charcha has no owner
+address anywhere in its schema to guess one from:
+
+```sh
+pnpm wrangler secret put RESEND_API_KEY
+pnpm wrangler secret put CHARCHA_NOTIFY_FROM
+pnpm wrangler secret put CHARCHA_NOTIFY_TO
+```
+
+`CHARCHA_NOTIFY_FROM` must be on a domain
+[verified in Resend](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain)
+under the same account as the key — Resend's own `resend.dev` sender can only mail your
+Resend account's own address, and anything else is answered 403. `CHARCHA_NOTIFY_TO` is
+your inbox, and it is the only address Charcha ever mails; clearing it is how you stop
+the emails, because there is no unsubscribe link and nobody to unsubscribe but you.
+**Check both addresses for typos before you paste them.** The failure mode is silence,
+and silence is indistinguishable from the feature being switched off.
+
+Enabling this sends the commenter's display name and an excerpt of their comment to
+Resend, a third party. It does not send their email address or anything derived from
+their IP. If your site has a privacy notice, that first sentence is the one that belongs
+in it.
+
+### Changing a secret afterwards
+
+The same command replaces one:
 
 ```sh
 pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD
 ```
 
-Or in the Cloudflare dashboard, in your Worker under **Settings → Variables and
-Secrets**. Changing the dashboard password also signs out every open session, because
-sessions are signed with a key derived from it rather than stored.
+Changing the dashboard password also signs out every open session, because sessions are
+signed with a key derived from it rather than stored.
 
 ### Deploying from a terminal instead
 
@@ -111,6 +174,11 @@ Then three things, none of which take long:
    fresh deployment starts out allowing only its own address.
 3. **Paste [the snippet](#adding-it-to-a-page) into your page**, with your Worker's
    address in place of the example one.
+
+That is a working install. The bot check and the email notifications are separate and
+optional — [Turning on the optional features](#turning-on-the-optional-features) has the
+one command each, and skipping them leaves a site that takes comments rather than a
+broken form.
 
 If you want to check the deployment from a script rather than a browser, `/health`
 answers JSON, and it distinguishes the three states that matter:

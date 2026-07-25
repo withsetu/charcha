@@ -43,6 +43,12 @@ refuses every comment on the site: the Worker requires a token that nothing on t
 is producing. The sitekey is public by design — it appears in the page HTML of every
 site that uses Turnstile — so putting it in an attribute discloses nothing.
 
+The Worker's half is **not** collected by the deploy form, deliberately: that form
+requires a value in every field it shows, and an invented Turnstile secret matches no
+widget and refuses every comment. Set it afterwards, with
+`pnpm wrangler secret put TURNSTILE_SECRET_KEY` —
+[the README has the whole step](https://github.com/withsetu/charcha#turning-on-the-optional-features).
+
 When it is on, Charcha renders the widget inside its own composer, in
 `interaction-only` mode: most readers never see it, and one who is challenged sees it
 appear directly above the Post button. Tokens are valid for

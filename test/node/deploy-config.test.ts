@@ -6,6 +6,7 @@ import {
   checkDeployConfig,
   declaredSecrets,
   parseDotenv,
+  postDeployInstruction,
   stripJsonComments,
 } from '../../scripts/deploy-config.mjs'
 
@@ -94,16 +95,76 @@ describe('checkDeployConfig', () => {
   })
 
   // The #12 failure, generalised: a required secret the Deploy form never asks for
-  // means a dashboard that 401s every route while comments keep arriving.
-  it('fails when a secret src/ declares is missing from the example file', async () => {
+  // means a dashboard that 401s every route while comments keep arriving. #139 made
+  // "not in the form" a legitimate choice, so the guard now asks the deployer's
+  // question instead — is this secret reachable *anywhere* — and both answers have to
+  // be missing before it fires.
+  it('fails when a secret src/ declares is in neither the example file nor the README', async () => {
     await writeHealthyRepo()
     await write('.dev.vars.example', '')
+    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
 
     const result = await checkDeployConfig({ cwd })
 
     expect(statuses(result)).toEqual(['unlisted-secret'])
     expect(result.violations[0]?.message).toContain('CHARCHA_DASHBOARD_PASSWORD')
     expect(result.violations[0]?.message).toContain('src/admin/env.ts')
+  })
+
+  // The #139 shape: the deploy form requires every field it shows and offers no way to
+  // mark one optional (workers-sdk#14075), so a secret whose only safe value is nothing
+  // must not be a field. It still has to be findable.
+  it('accepts a secret documented as a post-deploy step instead of collected', async () => {
+    await writeHealthyRepo()
+    await write('.dev.vars.example', '')
+    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
+    await write(
+      'README.md',
+      `Set it afterwards: \`${postDeployInstruction('CHARCHA_DASHBOARD_PASSWORD')}\`\n`,
+    )
+
+    const result = await checkDeployConfig({ cwd })
+
+    expect(result.violations).toEqual([])
+  })
+
+  // Naming the secret is not documenting it. A deployer reading "you may also want to
+  // set CHARCHA_DASHBOARD_PASSWORD" has been told a fact, not given an instruction, and
+  // the whole reason the secret left the form is that setting it is now their job.
+  it('does not accept prose that merely mentions the secret’s name', async () => {
+    await writeHealthyRepo()
+    await write('.dev.vars.example', '')
+    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
+    await write('README.md', 'Charcha also reads CHARCHA_DASHBOARD_PASSWORD.\n')
+
+    const result = await checkDeployConfig({ cwd })
+
+    expect(statuses(result)).toEqual(['unlisted-secret'])
+  })
+
+  it('fails a post-deploy secret whose README instruction names a different secret', async () => {
+    await writeHealthyRepo()
+    await write('.dev.vars.example', '')
+    await write('package.json', JSON.stringify({ ...HEALTHY_MANIFEST, cloudflare: {} }))
+    await write('README.md', `\`${postDeployInstruction('SOME_OTHER_SECRET')}\`\n`)
+
+    const result = await checkDeployConfig({ cwd })
+
+    expect(statuses(result)).toEqual(['unlisted-secret'])
+  })
+
+  // What gets left behind when a secret moves out of the form. The description reads
+  // like guidance that was given and is attached to a field that no longer exists, so
+  // it is seen by nobody and looks like coverage to the next maintainer.
+  it('fails when a description outlives the deploy-form field it explained', async () => {
+    await writeHealthyRepo()
+    await write('.dev.vars.example', '')
+    await write('README.md', `\`${postDeployInstruction('CHARCHA_DASHBOARD_PASSWORD')}\`\n`)
+
+    const result = await checkDeployConfig({ cwd })
+
+    expect(statuses(result)).toEqual(['undisplayed-description'])
+    expect(result.violations[0]?.message).toContain('CHARCHA_DASHBOARD_PASSWORD')
   })
 
   it('finds a secret declared without `readonly`, which TypeScript does not require', async () => {
