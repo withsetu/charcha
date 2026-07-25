@@ -113,10 +113,19 @@ Then three things, none of which take long:
    address in place of the example one.
 
 If you want to check the deployment from a script rather than a browser, `/health`
-answers JSON. It currently reports `ok` on a database that exists but was never
-migrated, which is the failure most worth catching —
-[#141](https://github.com/withsetu/charcha/issues/141) is fixing that; until it lands,
-the check that actually settles it is the migration step in your build log.
+answers JSON, and it distinguishes the three states that matter:
+
+| | |
+|---|---|
+| `200 {"status":"ok","database":"ok"}` | Running, and the migrations have been applied. |
+| `503 {"status":"degraded","database":"unmigrated"}` | The database exists and Charcha's tables do not. This is what a deploy whose migration step failed looks like — see [the troubleshooting entry](#troubleshooting-a-deploy) for `no such table: comments`. |
+| `503 {"status":"degraded","database":"unreachable"}` | The D1 binding itself refused the query. |
+
+The middle row is why the endpoint changed: it used to run `select 1`, which an
+unmigrated database answers perfectly, so it reported `ok` on the one failure a
+one-click deploy actually produces
+([#141](https://github.com/withsetu/charcha/issues/141)). `database: "error"` no longer
+appears; `unreachable` replaced it.
 
 ### Allowed origins, and why a comment can be refused
 
@@ -232,7 +241,8 @@ same field under
 meantime are not lost; they are held in the queue.
 
 **Every request fails, and the log says `no such table: comments`.** The database
-exists and the migrations did not run. Read the build log for the
+exists and the migrations did not run. `/health` says so without needing the logs —
+`{"status":"degraded","database":"unmigrated"}`. Read the build log for the
 `wrangler d1 migrations apply DB --remote` line that `pnpm run deploy` runs before
 deploying, and note that this failure is quieter than it should be: `wrangler d1
 migrations apply` is known to exit non-zero with no useful output when the token it

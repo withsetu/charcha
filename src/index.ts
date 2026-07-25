@@ -14,7 +14,7 @@ import {
 } from './admin/route'
 import { SETTINGS_PATH, handleReadSettings, handleWriteSettings } from './admin/settings'
 import { DASHBOARD_HEADERS, DASHBOARD_HTML } from './dashboard/document'
-import { getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
+import { databaseStatus, getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
 import {
   isUnlistedBrowserOrigin,
   preflightResponse,
@@ -156,18 +156,41 @@ app.get('/admin/', dashboardDocument)
 // Enforced by test/worker/root/page.test.ts.
 app.get('/', (c) => c.body(ROOT_PAGE, 200, ROOT_PAGE_HEADERS))
 
-// Liveness for the site owner and for deploy verification: it answers only if the
-// Worker is running *and* its D1 binding resolves to a database that will answer a
-// query. Enforced by test/worker/health.test.ts.
+// Liveness for the site owner and for deploy verification (#141).
+//
+// It used to run `select 1`, and that made it green on the one failure it existed to
+// catch: Cloudflare's deploy button creates the D1 database and does not migrate it,
+// an empty database answers `select 1` perfectly, and the next real query fails. So
+// `/health` said `{"status":"ok","database":"ok"}` about a deployment that could not
+// take a comment. It now asks `databaseStatus`, which reads one row of SQLite's own
+// schema table for the same one-query cost — see src/db/index.ts.
+//
+// **The contract, decided on #141 rather than inherited from the helper:**
+//
+//   - `200 {"status":"ok","database":"ok"}` — unchanged, so the response every healthy
+//     deployment returns, and anything already branching on it, is untouched.
+//   - `503 {"status":"degraded","database":"unmigrated"}` — reachable, no schema. New:
+//     nothing represented this before, so no meaning was taken away.
+//   - `503 {"status":"degraded","database":"unreachable"}` — the binding refused the
+//     query. This replaces `database: "error"`, which is gone. A third value had to
+//     arrive either way, and `error` named a category while the other two name a
+//     state; a consumer reading only the HTTP status — what a health check is for —
+//     sees no change at all.
+//
+// **Saying `unmigrated` on a public, unauthenticated address is the deliberate part.**
+// #145 took exactly this fact off `/`, and the two calls differ because the pages do:
+// `/` is where a stranger following the deploy-success link lands, `/health` is what a
+// deploy check and a monitor read on purpose. The fact is also not a secret — every
+// other endpoint on an unmigrated deployment fails, so a scanner learns it anyway —
+// and it is the one word that turns "something is wrong" into "run the migrations".
+// Two fields, no configuration, no counts, nothing about the request.
+// Enforced by test/worker/health.test.ts.
 app.get('/health', async (c) => {
-  try {
-    await c.env.DB.prepare('select 1').first()
-  } catch (error) {
-    console.error('health: D1 query failed', error)
-    return c.json({ status: 'degraded', database: 'error' }, 503, { 'cache-control': 'no-store' })
-  }
+  const database = await databaseStatus(c.env.DB)
 
-  return c.json({ status: 'ok', database: 'ok' }, 200, { 'cache-control': 'no-store' })
+  return database === 'ready'
+    ? c.json({ status: 'ok', database: 'ok' }, 200, { 'cache-control': 'no-store' })
+    : c.json({ status: 'degraded', database }, 503, { 'cache-control': 'no-store' })
 })
 
 /**

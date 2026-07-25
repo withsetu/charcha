@@ -1,8 +1,8 @@
 // The migration check written for the status readout on `/` (#140), and the reason it
-// is not `select 1`. That readout is gone — #145 took it off a public address — and the
-// check is kept for #141, which gives it to `/health`. These tests are what keep it
-// honest in the meantime, so that the endpoint adopting it inherits something proven
-// rather than something merely still compiling.
+// is not `select 1`. That readout is gone — #145 took it off a public address — and
+// #141 gave the check to `/health` instead. These tests cover the three answers at the
+// helper; test/worker/health.test.ts covers what the endpoint makes of them, and both
+// are needed: the words could be right here and mapped wrong there.
 
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
