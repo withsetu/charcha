@@ -72,13 +72,39 @@
   // GA since 2025-09-19: https://developers.cloudflare.com/changelog/2025-09-19-ratelimit-workers-ga/
   // Both checked 2026-07-25.
   //
-  // **Free-plan availability is undocumented.** The binding is GA and nothing says
-  // it is plan-gated, but nothing says it is not — and it is not in the Deploy
-  // button's list of provisioned resources either (that list is KV, D1, R2,
-  // Hyperdrive, Vectorize, Secrets Store, Durable Objects, Workers AI, Queues,
-  // checked 2026-07-25). It needs no provisioning, being declared entirely here,
-  // but a plan gate would fail `wrangler deploy` for every one-click deployer. See
-  // the owner check on #12.
+  // **Free-plan availability is undocumented, and #119 established that it is
+  // undocumented rather than merely unread.** Checked 2026-07-25: the binding
+  // reference says nothing about plans, the bindings index says nothing about which
+  // bindings a plan gates, the Workers pricing page — which does carry a
+  // Free-vs-Paid table for Workers, KV, Hyperdrive, Queues, Workflows, D1, Durable
+  // Objects, Vectorize, R2 and Containers — does not mention rate limiting at all,
+  // and the GA changelog mentions no plan. It is also not in the Deploy button's
+  // list of provisioned resources (that list is KV, D1, R2, Hyperdrive, Vectorize,
+  // Secrets Store, Durable Objects, Workers AI, Queues). That last omission is
+  // expected rather than evidence: the binding is declared entirely here and needs
+  // no provisioning.
+  // https://developers.cloudflare.com/workers/platform/pricing/
+  // https://developers.cloudflare.com/workers/runtime-apis/bindings/
+  //
+  // So the honest state is *unknown*, and it stays unknown until someone deploys to
+  // a real Workers Free account — the owner check on #119.
+  //
+  // What #119's own preferred fallback cannot be is the Cache API. One half of that
+  // is documented outright: "For Workers fronted by Cloudflare Access, the Cache API
+  // is not currently available", and Access is #108. The other half is an
+  // *inference* from an enumeration, and is flagged as one rather than quoted as
+  // fact — "Workers deployed to custom domains have access to functional `cache`
+  // operations. So do Pages functions, whether attached to custom domains or
+  // `*.pages.dev` domains." `*.workers.dev` is conspicuously not in that list, and a
+  // one-click deploy lands there. A counter that stores nothing reads as zero
+  // attempts forever, which is the #107 failure again, so the option is treated as
+  // closed pending someone measuring it.
+  // https://developers.cloudflare.com/workers/runtime-apis/cache/ (2026-07-25)
+  //
+  // Nothing here is changed on a guess. A plan gate would fail `wrangler deploy`
+  // for every one-click deployer, and README's deploy troubleshooting names the
+  // symptom and what to do, because a stranger reading a wrangler error cannot
+  // otherwise know that this is the line to delete.
   "ratelimits": [
     {
       "name": "LOGIN_RATE_LIMITER",
@@ -96,7 +122,27 @@
   // The Deploy to Cloudflare button reads this file to decide what to provision,
   // and rewrites `database_id` with the ID of the database it creates. The value
   // below is a placeholder that exists only so the binding is well-formed before
-  // any deployment has happened.
+  // any deployment has happened. Cloudflare's instruction is to "make sure your
+  // source repository includes default values for resource names, resource IDs and
+  // any other properties for each binding"; what it does with a binding that has
+  // none is not documented, and the placeholder means nobody has to find out.
+  //
+  // **Cloudflare creates the database and does not migrate it.** Applying migrations
+  // is the repository's job, "as part of your `deploy` script", which is why
+  // package.json's `deploy` runs `wrangler d1 migrations apply DB --remote` before
+  // `wrangler deploy`, joined by `&&` — the order and the `&&` together are what
+  // make a failed migration a red build rather than a live Worker querying an empty
+  // database. Both are asserted, ordering and separator, by
+  // test/node/deploy-config.test.ts.
+  //
+  // The migration target is the *binding* `DB` and not the database name, on
+  // Cloudflare's explicit instruction: "The migration command should reference the
+  // binding name rather than the database name to ensure migrations are successful
+  // when users specify a database name that is different from that of your source
+  // repository" — the deploy form lets a deployer rename the database, and
+  // `database_name` below is only this repository's default. Also asserted by
+  // test/node/deploy-config.test.ts, against the binding declared here.
+  // https://developers.cloudflare.com/workers/platform/deploy-buttons/ (2026-07-25)
   "d1_databases": [
     {
       "binding": "DB",

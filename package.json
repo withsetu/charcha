@@ -32,7 +32,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "types": "wrangler types ./src/worker-configuration.d.ts",
@@ -48,8 +48,22 @@
     "check:licences": "node scripts/licence-policy.mjs",
     "check:actions": "node scripts/actions-pinned.mjs",
     "check:actions:upstream": "node scripts/actions-upstream.mjs",
+    "check:deploy": "node scripts/deploy-config.mjs",
     "check:audit": "pnpm audit --prod --audit-level=low && pnpm audit --audit-level=high",
-    "check": "pnpm types:check && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm check:size && pnpm check:lockfile && pnpm check:licences && pnpm check:actions && pnpm check:audit"
+    "check": "pnpm types:check && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm check:size && pnpm check:lockfile && pnpm check:licences && pnpm check:actions && pnpm check:deploy && pnpm check:audit"
+  },
+  "cloudflare": {
+    "bindings": {
+      "CHARCHA_DASHBOARD_PASSWORD": {
+        "description": "**Required.** The only password for your moderation dashboard, at `/admin`. Generate one with `openssl rand -base64 24` and keep it in a password manager — there is no account to create and no reset. Left empty, the dashboard refuses every request, including its own login, and comments arriving on your site cannot be moderated."
+      },
+      "IP_HASH_SECRET": {
+        "description": "**Recommended.** A random key that turns a commenter's IP address into the identifier the per-IP spam rate limit counts — `openssl rand -hex 32`. It never leaves your Worker, and no IP address is stored without it. Left empty, no IP is stored at all and the per-IP half of the rate limit stops running; the per-thread half still does."
+      },
+      "TURNSTILE_SECRET_KEY": {
+        "description": "**Optional.** The *secret* key of a [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/get-started/) widget, if you want the invisible bot check. The matching sitekey goes on your own page, as `data-turnstile-sitekey`. Left empty, Turnstile is off, nothing third-party is loaded into your readers' browsers, and comments are still accepted."
+      }
+    }
   },
   "dependencies": {
     "hono": "^4.12.31",
