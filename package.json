@@ -62,6 +62,15 @@
       },
       "TURNSTILE_SECRET_KEY": {
         "description": "**Optional.** The *secret* key of a [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/get-started/) widget, if you want the invisible bot check. The matching sitekey goes on your own page, as `data-turnstile-sitekey`. Left empty, Turnstile is off, nothing third-party is loaded into your readers' browsers, and comments are still accepted."
+      },
+      "RESEND_API_KEY": {
+        "description": "**Optional.** A [Resend](https://resend.com/docs/api-reference/introduction) API key, if you want an email when a comment arrives. Needs the two `CHARCHA_NOTIFY_*` values below and a domain verified in the same Resend account — all three together, or the feature is off. Enabling it sends the commenter's name and an excerpt of their comment to Resend; it never sends their email address or anything derived from their IP. Left empty, no email is sent, nothing is transmitted anywhere, and comments still arrive in the queue at `/admin`."
+      },
+      "CHARCHA_NOTIFY_FROM": {
+        "description": "**Optional.** The address notification emails come *from*, on a domain [verified in Resend](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain) under the same account as the key above — Resend's own `resend.dev` sender can only mail your Resend account's address. A display name is allowed: `Charcha <comments@example.com>`."
+      },
+      "CHARCHA_NOTIFY_TO": {
+        "description": "**Optional.** Where notifications go — your own inbox. The only address Charcha ever mails, and clearing it is how you stop the emails: there is no unsubscribe link, because there is nobody to unsubscribe but you."
       }
     }
   },

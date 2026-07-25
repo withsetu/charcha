@@ -12,6 +12,7 @@ import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
 import { getOrCreateThread, insertComment, isReplyTarget } from '../db'
 import type { StoredComment } from '../db'
+import type { Notifier } from '../notify'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { clientIp, hashIp, usableIpSecret } from '../spam/ip'
 import { computeBodyHash } from './hash'
@@ -44,6 +45,23 @@ export interface SubmitDeps {
    * Enforced by test/worker/submit/ip-hash.test.ts.
    */
   ipSecret?: string
+  /**
+   * Who to tell about a stored comment (#14). Absent means nobody, which is the
+   * default and a valid state — see src/notify/index.ts.
+   */
+  notifier?: Notifier
+  /**
+   * How to run work *after* the reader's response has gone out — `ctx.waitUntil`
+   * in the Worker, a collector in tests.
+   *
+   * Both this and `notifier` are required for a notification to happen, and the
+   * missing-`defer` case does nothing rather than falling back. A notifier with no
+   * way to defer has only two other options: `await` it, which puts a third party's
+   * uptime in front of the reader's POST, or drop the promise, which is the
+   * unreported failure CLAUDE.md names. Neither is better than not notifying.
+   * Enforced by test/worker/notify/pipeline-seam.test.ts.
+   */
+  defer?: (work: Promise<unknown>) => void
 }
 
 export type SubmitResult =
@@ -150,10 +168,63 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     now: deps.now,
   })
 
+  // After the write and after nothing else. A rejected comment returned above, so a
+  // spam flood the layers stopped costs zero emails and zero of the owner's Resend
+  // quota — the cheapest flood control there is, and it comes free from where this
+  // line sits. Enforced by test/worker/notify/pipeline-seam.test.ts.
+  notifyOwner(stored, key.pageKey, comment.authorName, deps)
+
   const html = renderSingle(stored, deps.strings)
   return stored.status === 'approved'
     ? { outcome: 'published', html }
     : { outcome: 'pending', html }
+}
+
+/**
+ * Hands the stored comment to the notifier, without waiting for it and without
+ * letting it cost the reader their comment.
+ *
+ * Two guards, and they are different guards. The `Notifier` contract promises never
+ * to reject, which is what makes handing the promise to `ctx.waitUntil` safe; this
+ * `try`/`catch` covers the other half — a *synchronous* throw from `commentCreated`
+ * or from `defer` itself, which no contract on the returned promise can prevent. A
+ * comment is already committed by this point, so a notifier bug turning a stored
+ * comment into a 500 would tell the reader their comment was lost when it was not.
+ *
+ * Two things are deliberately not passed and have no field on the event type: the
+ * commenter's email, and `key.pageUrl` — whose origin is attacker-chosen, because
+ * `derivePageKey` drops the origin from a thread's identity. See src/notify/index.ts.
+ *
+ * `commentCreated` is called before `defer` receives its promise, so a throwing
+ * `defer` leaves that promise unattended. That is safe only because the contract says
+ * it cannot reject — the one place here that leans on the contract rather than
+ * checking it — and src/notify/index.ts makes it total with its own catch.
+ * Enforced by test/worker/notify/pipeline-seam.test.ts.
+ */
+function notifyOwner(
+  stored: StoredComment,
+  pageKey: string,
+  authorName: string,
+  deps: SubmitDeps,
+): void {
+  const { notifier, defer } = deps
+  if (notifier === undefined || defer === undefined) return
+
+  try {
+    defer(
+      notifier.commentCreated({
+        commentId: stored.id,
+        authorName,
+        body: stored.body,
+        pageKey,
+        status: stored.status,
+      }),
+    )
+  } catch (error) {
+    // Reported, not swallowed: a notifier that throws on every comment is otherwise
+    // invisible, because the reader's submission succeeds regardless.
+    console.error('notify: dispatch failed', error)
+  }
 }
 
 /**

@@ -470,11 +470,22 @@ declare global {
   })
 
   it('finds every secret this repository declares', async () => {
+    // The exact set, not a subset, so adding a secret is a decision someone makes
+    // here rather than a line that appears in a deploy form unnoticed. Updating this
+    // list is the point of the failure, not an obstacle to it.
     const repoRoot = join(import.meta.dirname, '..', '..')
 
     const names = (await declaredSecrets(repoRoot)).map((secret) => secret.name).sort()
 
-    expect(names).toEqual(['CHARCHA_DASHBOARD_PASSWORD', 'IP_HASH_SECRET', 'TURNSTILE_SECRET_KEY'])
+    expect(names).toEqual([
+      'CHARCHA_DASHBOARD_PASSWORD',
+      // The three of #14, which are all optional and only work as a set.
+      'CHARCHA_NOTIFY_FROM',
+      'CHARCHA_NOTIFY_TO',
+      'IP_HASH_SECRET',
+      'RESEND_API_KEY',
+      'TURNSTILE_SECRET_KEY',
+    ])
   })
 })
 
