@@ -11,6 +11,7 @@
 // Enforced by test/worker/admin/authenticate.test.ts.
 
 import { announceOnce } from '../spam/log'
+import { unauthorized } from './api'
 import type { AdminEnv } from './env'
 import { usableDashboardPassword } from './password'
 import { readSessionCookies, verifySession } from './session'
@@ -126,4 +127,30 @@ export async function resolveIdentity(
     if (identity !== null) return identity
   }
   return null
+}
+
+/**
+ * Whoever the request is, or a 401 response to return instead.
+ *
+ * **Every authenticated handler starts here, and none of them re-derives the answer.**
+ * A helper rather than Hono middleware because middleware is registered per route
+ * pattern and a route added later can simply not be covered by it — a mistake that
+ * would look like a working endpoint. This cannot be forgotten without the handler
+ * having no identity to use.
+ *
+ * It lives in this file rather than beside the first handler that needed it, which is
+ * where it started: src/admin/settings.ts is the second surface behind this door, and
+ * a second copy of the check guarding the moderation queue is the kind of near-duplicate
+ * that drifts in exactly one direction. There is one gate.
+ * Enforced by test/worker/admin/route.test.ts and test/worker/admin/settings.test.ts.
+ */
+export async function authenticated(
+  env: AdminEnv,
+  request: Request,
+  now: number,
+): Promise<{ ok: true; via: string } | { ok: false; response: Response }> {
+  const identity = await resolveIdentity(adminAuthenticators(env), request, now)
+  return identity === null
+    ? { ok: false, response: unauthorized() }
+    : { ok: true, via: identity.via }
 }

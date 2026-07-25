@@ -7,9 +7,15 @@ import {
   matchOrigin,
   parseAllowedOrigins,
   readAllowedOrigins,
+  resolveOrigin,
+  selfOrigin,
+  unlistedOriginResponse,
 } from '../../src/cors'
 
 const db = env.DB
+
+/** The address a deployed Charcha answers on, as the Worker sees it in `request.url`. */
+const DEPLOYMENT = 'https://charcha.example.workers.dev'
 
 async function setAllowedOrigins(value: string) {
   await db
@@ -135,5 +141,192 @@ describe('matching a request origin against the allowlist', () => {
     // page in any tab post into this deployment's moderation queue from a reader's
     // browser. The owner lists their origins instead.
     expect(matchOrigin('https://anywhere.example', parseAllowedOrigins('*'))).toBeNull()
+  })
+})
+
+/**
+ * A database that fails if it is consulted at all.
+ *
+ * The double cast is the point rather than a shortcut: the assertion is that
+ * `resolveOrigin` never reaches D1 on the same-origin path, and a stub that throws is
+ * the only way to prove a call did not happen without counting calls on a real one.
+ */
+const unreadableDb = {
+  prepare() {
+    throw new Error('the settings row must not be read for a same-origin request')
+  },
+} as unknown as D1Database
+
+describe("this deployment's own origin", () => {
+  it('is derived from the request the Worker was handed', () => {
+    expect(selfOrigin(new Request(`${DEPLOYMENT}/comments?url=https://maya.build/a`))).toBe(
+      DEPLOYMENT,
+    )
+  })
+
+  it('keeps a non-default port, so a local wrangler dev is its own origin', () => {
+    expect(selfOrigin(new Request('http://localhost:8787/comments'))).toBe('http://localhost:8787')
+  })
+})
+
+describe('a fresh deployment, with nothing in settings at all', () => {
+  it('accepts a request from its own origin — the state after a deploy is not "refuses everything"', async () => {
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: DEPLOYMENT },
+      }),
+    )
+
+    expect(decision).toEqual({ requestOrigin: DEPLOYMENT, allowedOrigin: DEPLOYMENT })
+  })
+
+  it('still refuses every other origin — fail closed, card rule 5', async () => {
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: 'https://maya.build' },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBeNull()
+  })
+
+  it('records nothing anywhere, so no request can widen the allowlist for the next one', async () => {
+    await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: DEPLOYMENT },
+      }),
+    )
+
+    const { results } = await db.prepare('select key from settings').all()
+    expect(results).toEqual([])
+  })
+
+  it('does not spend a D1 query on the settings row it does not need', async () => {
+    const decision = await resolveOrigin(
+      unreadableDb,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: DEPLOYMENT },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBe(DEPLOYMENT)
+  })
+})
+
+describe('an origin that only claims to be this deployment', () => {
+  it('is refused when the Origin names another host', async () => {
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: 'https://evil.example' },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBeNull()
+  })
+
+  it('is refused when a forwarding header claims the request arrived somewhere else', async () => {
+    // The self-origin comes from `request.url` and from no header. This is the guard
+    // against a future `x-forwarded-host` (or `x-forwarded-proto`, or `:authority`)
+    // being read instead: reading one would make this pair same-origin, and any page
+    // could then name itself so. Kill-shot confirmed on the PR for #57 — teaching
+    // `selfOrigin` to prefer `x-forwarded-host` fails exactly this test.
+    //
+    // **`Host` is deliberately not in this list, and saying so is the point.** It is a
+    // forbidden header name, so the `Request` constructor drops it and an assertion
+    // including it would be inert — it would read like a kill-shot against Host-header
+    // trust while testing nothing. The real protection against that is not a test at
+    // all: no browser lets a page set `Host`, and a client that can set it can omit
+    // `Origin` and was never subject to CORS.
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: {
+          origin: 'https://evil.example',
+          'x-forwarded-host': 'evil.example',
+          'x-forwarded-proto': 'https',
+        },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBeNull()
+  })
+
+  it('is refused for the same host on another scheme, even though it is nearly this one', async () => {
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: 'http://charcha.example.workers.dev' },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBeNull()
+  })
+})
+
+describe('a deployment the owner has configured', () => {
+  it('accepts the origins they listed', async () => {
+    await setAllowedOrigins('https://maya.build')
+
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: 'https://maya.build' },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBe('https://maya.build')
+  })
+
+  it('still accepts its own origin, which no list has to name', async () => {
+    await setAllowedOrigins('https://maya.build')
+
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: DEPLOYMENT },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBe(DEPLOYMENT)
+  })
+
+  it('refuses an origin they did not list', async () => {
+    await setAllowedOrigins('https://maya.build')
+
+    const decision = await resolveOrigin(
+      db,
+      new Request(`${DEPLOYMENT}/comments`, {
+        method: 'POST',
+        headers: { origin: 'https://evil.example' },
+      }),
+    )
+
+    expect(decision.allowedOrigin).toBeNull()
+  })
+})
+
+describe('the refusal a site owner reads while setting this up', () => {
+  it('names where the list is set, and says it is not Turnstile’s', async () => {
+    const body = await unlistedOriginResponse().text()
+
+    expect(body).toContain('/admin')
+    expect(body).toContain('Turnstile')
+  })
+
+  it('carries no allow-origin header, so the page that was refused cannot read it', () => {
+    expect(unlistedOriginResponse().headers.get('access-control-allow-origin')).toBeNull()
   })
 })

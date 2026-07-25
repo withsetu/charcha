@@ -13,7 +13,13 @@
 // Enforced by test/dashboard/triage.test.tsx and test/dashboard/shortcuts.test.tsx.
 
 import * as React from 'react'
-import { KeyboardIcon, LoaderCircleIcon, LogOutIcon, TriangleAlertIcon } from 'lucide-react'
+import {
+  GlobeIcon,
+  KeyboardIcon,
+  LoaderCircleIcon,
+  LogOutIcon,
+  TriangleAlertIcon,
+} from 'lucide-react'
 
 import type { ApiFailure, ApiResult, DecisionStatus, ViewStatus } from '../api'
 import { VIEW_STATUSES, decide, readQueue } from '../api'
@@ -33,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { CommentCard } from './comment-card'
 import { MessageBar } from './message-bar'
 import { ShortcutSheet } from './shortcut-sheet'
+import { SiteSettings } from './site-settings'
 import { QueueEmpty, QueueFailed, QueueLoading } from './states'
 
 const VIEW_LABELS: Record<ViewStatus, string> = {
@@ -139,6 +146,22 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
 
   const emptyState = React.useRef<HTMLDivElement>(null)
   const hadComments = React.useRef(false)
+
+  /**
+   * Whether the allowed-origins panel is open (#57).
+   *
+   * Local state and not a field on the queue's reducer, because it is not queue state:
+   * nothing in `reduce` reads it and nothing it does affects a comment. The ref beside
+   * it is what the document key listener needs — that listener is registered once and
+   * reads refs rather than being re-attached, so a `useState` alone would leave it
+   * acting on a stale value. Assigned during render for the same reason `latest` is:
+   * an effect flushes after paint, and a keystroke landing in between would be handled
+   * against the previous value — which here means `s` marking a comment spam behind an
+   * open modal.
+   */
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const settingsIsOpen = React.useRef(settingsOpen)
+  settingsIsOpen.current = settingsOpen
 
   /**
    * Starts async work and guarantees the failure has somewhere to go.
@@ -313,6 +336,13 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
 
       const current = latest.current
 
+      // While the settings panel is open it owns the surface completely — including
+      // `?`, unlike the shortcut sheet, because opening a second dialog over an
+      // unsaved textarea would put the owner's typing behind a modal. Escape is
+      // Radix's and closes the panel. Returning before `preventDefault` below is what
+      // leaves the browser's own use of every key intact inside the form.
+      if (settingsIsOpen.current) return
+
       // While the sheet is open it owns the surface. `?` still toggles it and Escape
       // is Radix's — every other binding would be acting on a list the owner cannot
       // see, behind a modal that claims the rest of the page is hidden.
@@ -367,6 +397,23 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
       <header className="flex flex-wrap items-center justify-between gap-3 py-6">
         <h1 className="text-lg font-semibold">Charcha moderation</h1>
         <div className="flex items-center gap-2">
+          {/*
+            No keyboard shortcut, deliberately, and it is the only header control
+            without one. Every binding in src/dashboard/keys.ts is a bare letter that
+            costs one keystroke to fire by accident; this one opens a panel over the
+            queue and is used about twice in a deployment's life. The letters are worth
+            more on the queue.
+          */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSettingsOpen(true)
+            }}
+          >
+            <GlobeIcon aria-hidden="true" />
+            Allowed origins
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -524,6 +571,8 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
           dispatch({ type: 'help', open })
         }}
       />
+
+      <SiteSettings open={settingsOpen} onOpenChange={setSettingsOpen} onExpired={onExpired} />
     </div>
   )
 }

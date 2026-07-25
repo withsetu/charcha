@@ -91,6 +91,39 @@ That script is deliberately not just `wrangler deploy`: Cloudflare creates the D
 database but never migrates it, so the migration runs first and a failure there stops
 the deploy instead of publishing a Worker that queries an empty database.
 
+## After it deploys
+
+Open the Worker URL Cloudflare gives you. `/` is a status page: it says whether the
+Worker is running and whether its database was migrated, and it prints the snippet
+below with your own deployment's address already filled in. It is public, so it shows
+nothing about your comments or your configuration.
+
+Then do two things in the dashboard at `/admin`:
+
+1. Sign in with `CHARCHA_DASHBOARD_PASSWORD`.
+2. Open **Allowed origins** and add your site's address — `https://example.com`, scheme
+   included, no trailing path.
+
+### Allowed origins, and why a comment can be refused
+
+Charcha only accepts comments from pages on addresses you have listed. A page anywhere
+else gets:
+
+```
+HTTP 403
+That origin is not allowed to comment on this site.
+```
+
+That list lives in **your Charcha dashboard**, under **Allowed origins**. It is
+**not** Turnstile's *Hostname Management* screen — that one governs where the Turnstile
+widget may render, and editing it does nothing here. The two are easy to confuse and
+have been ([#57](https://github.com/withsetu/charcha/issues/57)).
+
+A fresh deployment starts with an empty list and still works: **your Worker's own
+address is always allowed**, without being listed and without anything being written to
+the database. That is what makes a one-click deploy usable before you have touched any
+setting — but your site is a different address, so it has to be added.
+
 ## Adding it to a page
 
 ```html
@@ -98,7 +131,8 @@ the deploy instead of publishing a Worker that queries an empty database.
 <script src="https://your-worker.example.workers.dev/embed.js" defer></script>
 ```
 
-That is the whole integration. `embed.js` is under 7 KB gzipped, ships no framework
+That is the whole integration — and the status page at `/` prints it with your address
+in place of the example one. `embed.js` is under 7 KB gzipped, ships no framework
 and no Markdown parser, and is served as a static asset so it costs your deployment
 nothing against the Cloudflare request budget. [Theming](docs/theming.md) covers the
 attributes, the class names and the three styling modes.
@@ -147,6 +181,16 @@ Tests run inside the Workers runtime via `@cloudflare/vitest-pool-workers`, agai
 the same bindings the deployed Worker gets.
 
 ## Troubleshooting a deploy
+
+**Visiting the Worker URL used to answer `Not found`.** It does not any more — `/` is
+the status page described [above](#after-it-deploys). If you are on a version that
+predates it, the deployment was almost certainly fine: check `/health` and `/admin`.
+
+**Every comment is refused with `That origin is not allowed to comment on this site.`**
+Your site's address is not in **Allowed origins**. Add it in the dashboard at `/admin`
+— scheme included, no trailing path, one per line. See
+[Allowed origins](#allowed-origins-and-why-a-comment-can-be-refused) for why this is
+not Turnstile's hostname list, which is the wrong screen and the one people find first.
 
 **The dashboard returns 401 on every page, including the login.** The deployment
 has no `CHARCHA_DASHBOARD_PASSWORD`. That is the designed behaviour rather than a

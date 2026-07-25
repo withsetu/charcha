@@ -178,7 +178,7 @@ function readFailure(status: number, body: unknown): ApiFailure {
 }
 
 interface RequestSpec {
-  method: 'GET' | 'POST' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   path: string
   body?: unknown
   /** 204 answers carry no body; `undefined` is then the success value. */
@@ -281,4 +281,36 @@ export function decide(id: number, status: SettableStatus): Promise<ApiResult<De
     path: `/comments/${String(id)}/status`,
     body: { status },
   })
+}
+
+/** The origin policy as the server holds it (#57). */
+export interface Settings {
+  /** The cross-origin allowlist, canonicalised — what the public check compares. */
+  allowedOrigins: string[]
+  /**
+   * This deployment's own address, which is allowed whether or not it is listed.
+   *
+   * Sent so the dashboard can say the true thing. An owner shown only the list would
+   * reasonably read it as the whole rule, add this address to it by hand, and never
+   * learn that a fresh deployment already accepts its own origin — see resolveOrigin
+   * in src/cors.ts.
+   */
+  selfOrigin: string
+}
+
+/** `GET /admin/api/settings` — the origin policy. */
+export function readSettings(): Promise<ApiResult<Settings>> {
+  return request<Settings>({ method: 'GET', path: '/settings' })
+}
+
+/**
+ * `PUT /admin/api/settings` — replace the allowlist.
+ *
+ * The whole list every time, because an owner has to be able to remove an origin and
+ * an endpoint that only added could not de-list a staging domain. A rejected entry
+ * comes back as a `BAD_REQUEST` naming which one it was, so the UI can show it rather
+ * than asking the owner to check twenty addresses.
+ */
+export function writeAllowedOrigins(allowedOrigins: string[]): Promise<ApiResult<Settings>> {
+  return request<Settings>({ method: 'PUT', path: '/settings', body: { allowedOrigins } })
 }

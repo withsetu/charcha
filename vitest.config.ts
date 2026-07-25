@@ -15,7 +15,15 @@ export default defineConfig({
           cloudflareTest({
             main: './src/index.ts',
             wrangler: { configPath: './wrangler.jsonc' },
-            miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+            miniflare: {
+              bindings: { TEST_MIGRATIONS: migrations },
+              // A second D1 database, declared here and not in wrangler.jsonc, so it
+              // exists for tests and on no deployment. `apply-migrations.ts` migrates
+              // `DB` before every test file, so this is the only way to reach the
+              // state the deploy button actually leaves behind: a database that
+              // exists, answers `select 1`, and has no Charcha schema in it (#140).
+              d1Databases: ['DB', 'TEST_EMPTY_DB'],
+            },
           }),
         ],
         test: {

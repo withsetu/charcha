@@ -25,8 +25,11 @@
 // The shape mirrors isUnlistedBrowserOrigin in src/cors.ts rather than inventing a
 // second policy: "an Origin arrived and it is not one we accept" is the same
 // question there and here, and an absent Origin means the same thing in both — not
-// a browser page.
+// a browser page. "This Worker's own origin" comes from that file too, for the same
+// reason — see selfOrigin.
 // Enforced by test/worker/admin/csrf.test.ts.
+
+import { selfOrigin } from '../cors'
 
 /**
  * Whether this state-changing request came from a page that is not this Worker.
@@ -40,9 +43,15 @@
  * their own deployment and stop no attack.
  *
  * The comparison is on the whole canonical origin, never a prefix or suffix: this
- * Worker's own origin is taken from `request.url`, which Cloudflare sets from the
- * request line and the Host header the edge resolved, and `URL.origin` is the
- * canonical serialisation of both sides.
+ * Worker's own origin is taken from `request.url` by src/cors.ts's selfOrigin, which
+ * Cloudflare sets from the request line and the Host header the edge resolved, and
+ * `URL.origin` is the canonical serialisation of both sides. Shared with the public
+ * origin policy rather than recomputed here, so "this deployment" has one definition.
+ *
+ * A `request.url` that does not parse as an http(s) origin makes this true — the
+ * request is treated as cross-origin. It should be unreachable, and fail-closed is the
+ * only defensible direction for the check standing in front of the endpoint that can
+ * delete every comment on the site.
  * Enforced by test/worker/admin/csrf.test.ts.
  */
 export function isCrossOriginRequest(request: Request): boolean {
@@ -53,5 +62,6 @@ export function isCrossOriginRequest(request: Request): boolean {
   // redirect — is never this origin, and is exactly the case a suffix comparison
   // would get wrong. Handled by the equality below, and named here because
   // admitting it once would admit every sandboxed frame at once.
-  return origin !== new URL(request.url).origin
+  const self = selfOrigin(request)
+  return self === null || origin !== self
 }

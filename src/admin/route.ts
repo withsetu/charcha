@@ -19,18 +19,17 @@ import {
   setCommentStatus,
 } from '../db'
 import type { CommentStatus, QueueCursor, StatusCounts } from '../db'
-import { readCappedText } from '../request-body'
 import {
   adminJson,
   adminNoContent,
   badRequest,
   forbidden,
   notFound,
-  tooLarge,
+  readAdminJson,
   tooManyRequests,
   unauthorized,
 } from './api'
-import { adminAuthenticators, announceSecretUnset, resolveIdentity } from './authenticate'
+import { announceSecretUnset, authenticated } from './authenticate'
 import { isCrossOriginRequest } from './csrf'
 import type { AdminEnv } from './env'
 import { passwordMatches, usableDashboardPassword } from './password'
@@ -72,33 +71,6 @@ const statusSchema = z.object({
 const queueStatusSchema = z.enum(['pending', 'approved', 'spam', 'deleted'])
 
 /**
- * Reads a JSON body, bounded and never as a 500.
- *
- * Shares src/request-body.ts with the two public POSTs rather than carrying its own
- * number, for the reason that module gives: a second endpoint with its own looser
- * cap looks reasonable in isolation and is a way to spend the first one's budget.
- *
- * "Too large" keeps its own answer rather than collapsing into "unreadable". The
- * size guard's 413 is the one message that tells a client something it can act on —
- * send less — and folding it into a 400 would have the dashboard report a 70 KB
- * paste as malformed JSON.
- */
-async function readJson(
-  request: Request,
-): Promise<{ ok: true; value: unknown } | { ok: false; response: Response }> {
-  // readCappedText fails for one reason only — the body was over the cap — so the
-  // 413 is exact rather than a catch-all, and it is re-answered in this surface's
-  // JSON shape rather than the public routes' plain text.
-  const read = await readCappedText(request)
-  if (!read.ok) return { ok: false, response: tooLarge() }
-  try {
-    return { ok: true, value: JSON.parse(read.text) }
-  } catch {
-    return { ok: false, response: badRequest('That request could not be read.') }
-  }
-}
-
-/**
  * The counts the dashboard's tab strip shows (#135), which are the three statuses it
  * has views for.
  *
@@ -111,26 +83,6 @@ async function readJson(
  */
 function viewCounts(counts: StatusCounts) {
   return { pending: counts.pending, spam: counts.spam, approved: counts.approved }
-}
-
-/**
- * Whoever the request is, or a 401 response to return instead.
- *
- * Every authenticated handler starts here, and none of them re-derives the answer.
- * A helper rather than Hono middleware because middleware is registered per route
- * pattern and a route added later can simply not be covered by it — a mistake that
- * would look like a working endpoint. This cannot be forgotten without the handler
- * having no identity to use.
- * Enforced by test/worker/admin/route.test.ts.
- */
-async function authenticated(
-  c: AdminContext,
-  now: number,
-): Promise<{ ok: true; via: string } | { ok: false; response: Response }> {
-  const identity = await resolveIdentity(adminAuthenticators(c.env), c.req.raw, now)
-  return identity === null
-    ? { ok: false, response: unauthorized() }
-    : { ok: true, via: identity.via }
 }
 
 /**
@@ -175,7 +127,7 @@ export async function handleLogin(
   const env: AdminEnv = c.env
   if (!(await loginThrottle(env.LOGIN_RATE_LIMITER).allow(c.req.raw))) return tooManyRequests()
 
-  const body = await readJson(c.req.raw)
+  const body = await readAdminJson(c.req.raw)
   if (!body.ok) return body.response
 
   const parsed = loginSchema.safeParse(body.value)
@@ -229,7 +181,7 @@ export async function handleSession(
   c: AdminContext,
   config: AdminRouteConfig = {},
 ): Promise<Response> {
-  const auth = await authenticated(c, clock(config))
+  const auth = await authenticated(c.env, c.req.raw, clock(config))
   if (!auth.ok) return auth.response
   return adminJson({ authenticated: true, via: auth.via })
 }
@@ -255,7 +207,7 @@ export async function handleQueue(
   c: AdminContext,
   config: AdminRouteConfig = {},
 ): Promise<Response> {
-  const auth = await authenticated(c, clock(config))
+  const auth = await authenticated(c.env, c.req.raw, clock(config))
   if (!auth.ok) return auth.response
 
   const url = new URL(c.req.url)
@@ -313,7 +265,7 @@ export async function handleCommentStatus(
   if (isCrossOriginRequest(c.req.raw)) return forbidden()
 
   const now = clock(config)
-  const auth = await authenticated(c, now)
+  const auth = await authenticated(c.env, c.req.raw, now)
   if (!auth.ok) return auth.response
 
   // Checked before the database is asked, the same way isReplyTarget checks its id:
@@ -322,7 +274,7 @@ export async function handleCommentStatus(
   const id = idParam !== undefined && /^\d{1,15}$/.test(idParam) ? Number(idParam) : Number.NaN
   if (!Number.isSafeInteger(id) || id < 1) return badRequest('That is not a comment id.')
 
-  const body = await readJson(c.req.raw)
+  const body = await readAdminJson(c.req.raw)
   if (!body.ok) return body.response
 
   const parsed = statusSchema.safeParse(body.value)
