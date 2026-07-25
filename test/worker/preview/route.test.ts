@@ -346,6 +346,22 @@ describe('POST /comments/preview — attacker Markdown through the preview path'
     })
   }
 
+  it('stays cheap on a body written to make the scanner backtrack', async () => {
+    // This endpoint is where an attacker picks the renderer's input directly and
+    // can repeat it, so the cost of the *worst* legal body matters, not the
+    // average one. A full cap of unclosed link syntax is the shape that would go
+    // quadratic under a scanner that restarted its search on every `[`; the
+    // forward-only cursor in src/render/markdown.ts is what keeps it linear, and
+    // Workers Free allows 10 ms of CPU per request (verified 2026-07-25,
+    // https://developers.cloudflare.com/workers/platform/limits/).
+    const pathological = '['.repeat(MAX_BODY_LENGTH - 1) + ']'
+
+    const response = await preview(pathological)
+
+    expect(response.status).toBe(200)
+    for (const tag of tagsIn(await response.text())) expect(tag).toBe('p')
+  })
+
   it('invents no element for markup the subset does not know at all', async () => {
     const html = await preview(
       '<svg onload=alert(1)><math><style>x</style><object data="y">\n\n<form action=z>',
