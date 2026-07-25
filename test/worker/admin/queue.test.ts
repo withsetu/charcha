@@ -5,6 +5,7 @@
 import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getOrCreateThread, insertComment } from '../../../src/db'
+import { app } from '../../../src/index'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import { TEST_PASSWORD, configurePassword, restoreLimiter, stubLimiter } from './env'
 
@@ -369,5 +370,47 @@ describe('POST /admin/api/comments/:id/status — bad input', () => {
     expect(body).toEqual({
       error: { code: 'NOT_FOUND', message: 'There is no comment with that id.' },
     })
+  })
+})
+
+describe('POST /admin/api/comments/:id/status — when the database is the problem', () => {
+  // The handler catches `NoSuchCommentError` **by class** and re-throws everything
+  // else. Catching whatever setCommentStatus threw would report a D1 outage as "no
+  // such comment", which is the report that stops anyone investigating — and the
+  // kill-shot on card rule 6 found that no test noticed the difference.
+  //
+  // Driven through `app.fetch(request, env)` with a poisoned DB rather than through
+  // the deployed default export, which is the only way to hand the same route a
+  // binding that fails.
+
+  async function requestWithBrokenDb(id: number): Promise<Response> {
+    const broken = {
+      ...(env as unknown as Record<string, unknown>),
+      DB: {
+        prepare: () => {
+          throw new Error('D1_ERROR: the database is unreachable')
+        },
+      },
+    }
+    return await app.fetch(
+      new Request(`${origin}/admin/api/comments/${id}/status`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ status: 'approved' }),
+      }),
+      broken,
+    )
+  }
+
+  it('is a 500, not a 404 — a broken binding is not a missing comment', async () => {
+    const response = await requestWithBrokenDb(1)
+
+    expect(response.status).toBe(500)
+  })
+
+  it('leaks nothing about what went wrong', async () => {
+    const response = await requestWithBrokenDb(1)
+
+    expect(await response.text()).toBe('Internal error')
   })
 })

@@ -76,7 +76,7 @@ describe('a submitted password that is not a password', () => {
     expect(await passwordMatches(supplied, secret)).toBe(false)
   })
 
-  it('is refused when longer than the cap, without hashing it', async () => {
+  it('is refused when longer than the cap', async () => {
     expect(await passwordMatches('x'.repeat(MAX_SUPPLIED_PASSWORD_LENGTH + 1), secret)).toBe(false)
   })
 
@@ -84,6 +84,39 @@ describe('a submitted password that is not a password', () => {
     const long = 'y'.repeat(MAX_SUPPLIED_PASSWORD_LENGTH)
 
     expect(await passwordMatches(long, long)).toBe(true)
+  })
+})
+
+describe('the work an over-long submission can ask for', () => {
+  // The cap cannot change the *answer* — a 1,025-character value is not the secret
+  // either way — so asserting only the answer tests it not at all, which the
+  // kill-shot on card rule 6 proved by removing it without a single test noticing.
+  // What it changes is whether a caller's own bytes reach SHA-256, so that is what
+  // is counted, with a control showing the counter can move.
+
+  async function digests(supplied: string): Promise<number> {
+    const real = crypto.subtle.digest.bind(crypto.subtle)
+    const subtle = crypto.subtle as unknown as { digest: typeof crypto.subtle.digest }
+    let calls = 0
+    subtle.digest = (...args: Parameters<typeof crypto.subtle.digest>) => {
+      calls += 1
+      return real(...args)
+    }
+
+    try {
+      await passwordMatches(supplied, secret)
+    } finally {
+      subtle.digest = real
+    }
+    return calls
+  }
+
+  it('is not hashed at all when it is past the cap', async () => {
+    expect(await digests('x'.repeat(MAX_SUPPLIED_PASSWORD_LENGTH + 1))).toBe(0)
+  })
+
+  it('is hashed when it is inside the cap, so the count above is about the cap', async () => {
+    expect(await digests('x'.repeat(MAX_SUPPLIED_PASSWORD_LENGTH))).toBeGreaterThan(0)
   })
 })
 
