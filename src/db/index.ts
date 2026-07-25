@@ -899,10 +899,15 @@ export type DatabaseStatus = 'ready' | 'unmigrated' | 'unreachable'
  * **Nothing calls this today.** It was written for the status readout on `/`, and #145
  * removed that readout — a public, unauthenticated address must not tell a stranger
  * that a deployment is half-broken. It is kept rather than deleted because
- * [#141](https://github.com/withsetu/charcha/issues/141) is the issue for giving it its
- * right caller: `/health`, which is the endpoint a deployer's own script asks, and
- * which today answers `ok` on precisely the database this function exists to
- * distinguish.
+ * [#141](https://github.com/withsetu/charcha/issues/141) is the issue for finding it a
+ * caller: `/health` answers `ok` today on precisely the database this function exists
+ * to distinguish, which is the failure it was written for.
+ *
+ * **That is a candidate, not a decision.** `/health` is public and unauthenticated too,
+ * so adopting this there discloses the same "half-broken" fact #145 just took off `/`,
+ * and #141 reserves that call explicitly rather than treating it as a consequence of
+ * reusing the helper. Whoever closes #141 makes it; this comment must not be read as
+ * having made it for them.
  *
  * **It asks `sqlite_master` for a table rather than running `select 1`, and that is
  * the whole point of it.** `select 1` proves the binding resolves and nothing else: a

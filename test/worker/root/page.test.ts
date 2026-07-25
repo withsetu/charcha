@@ -113,6 +113,12 @@ describe('what a stranger learns from it, which is nothing', () => {
     expect(html).not.toContain('id="charcha"')
   })
 
+  // The next two seed rows and then assert their absence. On today's handler that
+  // cannot fail without `is a constant` below having failed first and said why — the
+  // route reads no binding, so there is no path from these rows to the page. They are
+  // kept as a tripwire for a re-introduced binding read, not as live coverage, and the
+  // seeding is what makes them one: a guard that only holds because nothing queries is
+  // worth having on the day something does.
   it('reports no comment count, on a database that has comments in it', async () => {
     await db.exec(
       "INSERT INTO threads (id, page_key, created_at, updated_at) VALUES (1, 'maya.build/a', 1, 1)",
@@ -199,6 +205,22 @@ describe('the headers it is served with', () => {
 
     expect(csp).toContain("frame-ancestors 'none'")
     expect(csp).toContain("base-uri 'none'")
+    expect(csp).toContain("form-action 'none'")
+  })
+
+  // The rest of the set, pinned because until now every one of them could have been
+  // deleted from ROOT_PAGE_HEADERS with this suite green — the dashboard shell's
+  // equivalents are asserted in test/worker/dashboard/document.test.ts and `/` was
+  // never added to the table in test/worker/response-headers.test.ts. `style-src` is
+  // in here rather than assumed: it is the single permission this policy grants, and
+  // the file header's claim that nothing on this page can execute rests on it staying
+  // the only one.
+  it('sends the rest of its hardening headers, none of which anything else asserts', async () => {
+    const response = await get()
+
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('x-frame-options')).toBe('DENY')
+    expect(response.headers.get('content-security-policy')).toContain("style-src 'unsafe-inline'")
   })
 
   // The one address this page still knows is its own, and the outbound link is the

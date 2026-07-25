@@ -11,9 +11,12 @@
 // anything**, which is why it was rewritten rather than deleted. The hazard #140 named
 // — "a snippet that differs from the documented one is worse than none" — did not go
 // away with the third copy; two prose copies drift from each other just as happily, and
-// this test never watched that pair at all. It does now. If the remaining copies ever
-// disagree, a deployer following one page and reading the other sees two different
-// integrations.
+// this test never watched that pair at all. It does now.
+//
+// Every assertion below compares a page against SNIPPET rather than against the other
+// page. Comparing the two extractions to each other reads as the stronger test and is
+// the weaker one: with the snippet missing from both files, both sides are `undefined`
+// and the equality passes. A literal cannot go absent.
 //
 // It runs in the node project because it reads the filesystem.
 
@@ -28,52 +31,49 @@ import { describe, expect, it } from 'vitest'
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path: string) => readFileSync(join(root, path), 'utf8')
 
-const PAGES = {
-  'README.md': read('README.md'),
-  'docs/theming.md': read('docs/theming.md'),
-}
+/**
+ * The snippet, written out once so that changing the contract means changing it here,
+ * in front of the reason for it, rather than by editing two markdown files that agree.
+ *
+ * The example origin is the only part a deployer replaces.
+ */
+const SNIPPET =
+  '<div id="charcha"></div>\n' +
+  '<script src="https://your-worker.example.workers.dev/embed.js" defer></script>'
+
+const PAGES = ['README.md', 'docs/theming.md'] as const
 
 /**
  * Every copy of the snippet in one document.
  *
- * Deliberately loose about the address and tight about everything else: the origin is
- * the one part a deployer replaces, and `id="charcha"` plus the script's `defer` are
- * the whole contract — src/embed/index.ts mounts into `#charcha,[data-charcha]`, and
- * src/embed/config.ts derives the API base from `document.currentScript.src` when no
- * `data-api` is given.
+ * Deliberately loose about the address and tight about everything else: `id="charcha"`
+ * and the script's `defer` are the contract, and the origin is what varies.
  */
 function snippetsIn(markdown: string): string[] {
   return markdown.match(/<div id="charcha"><\/div>\n<script src="[^"]+" defer><\/script>/g) ?? []
 }
 
 describe('the integration snippet, everywhere it is written down', () => {
-  it.each(Object.keys(PAGES))('appears exactly once in %s', (page) => {
-    // Not a style rule: a second copy on the same page is a second thing to keep in
-    // step, and nothing would be watching it.
-    expect(snippetsIn(PAGES[page as keyof typeof PAGES])).toHaveLength(1)
+  it.each(PAGES)('appears in %s exactly once, and exactly as written here', (page) => {
+    // One assertion covering presence, wording and uniqueness: a page that lost the
+    // snippet, reworded it, or grew a second copy all land here. A second copy matters
+    // because it is a second thing to keep in step with nothing watching it.
+    expect(snippetsIn(read(page))).toEqual([SNIPPET])
   })
 
-  it('is the same snippet in the README as in the theming guide', () => {
-    const [readme] = snippetsIn(PAGES['README.md'])
-    const [theming] = snippetsIn(PAGES['docs/theming.md'])
+  it.each(PAGES)('shows no other script tag to paste in %s', (page) => {
+    const scriptTags = read(page).match(/<script src="[^"]*embed\.js"[^>]*>/g) ?? []
 
-    expect(readme).toBe(theming)
+    expect(scriptTags).toHaveLength(1)
   })
 
-  it('is the mount element and a deferred script, and nothing else', () => {
-    // Pinned literally so that a change to the contract has to be made here, in front
-    // of the reason for it, rather than by editing two markdown files that agree.
-    expect(snippetsIn(PAGES['README.md'])[0]).toBe(
-      '<div id="charcha"></div>\n' +
-        '<script src="https://your-worker.example.workers.dev/embed.js" defer></script>',
-    )
-  })
-
-  it('is the only script tag either page tells anyone to paste', () => {
-    for (const [page, markdown] of Object.entries(PAGES)) {
-      const scriptTags = markdown.match(/<script src="[^"]*embed\.js"[^>]*>/g) ?? []
-
-      expect(scriptTags, page).toHaveLength(1)
-    }
+  // The other half of the contract, and the half no test held after #145 removed
+  // `embedSnippet`: the snippet names a mount element, and something has to still look
+  // for it. `src/embed/index.ts` is the entry point that runs on a reader's page, and
+  // test/dom exercises `mount` directly rather than through it — so renaming this
+  // selector would leave both prose copies documenting a snippet that mounts nothing,
+  // with every other test green.
+  it('names a mount element the embed still looks for', () => {
+    expect(read('src/embed/index.ts')).toContain("'#charcha,[data-charcha]'")
   })
 })

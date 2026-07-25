@@ -35,7 +35,7 @@
 
 /**
  * The stylesheet, and it is the largest thing on this page — which is the correct
- * shape for a page with four paragraphs on it.
+ * shape for a page with a heading and three paragraphs on it.
  *
  * Inline because the CSP is `default-src 'none'`, and hand-written because the
  * dashboard's built stylesheet is 43 KB of Tailwind. The tokens are the handful this
@@ -111,9 +111,17 @@ a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
  * crawling.
  *
  * The copy is a claim about what Charcha does, and every clause of it is a property
- * this repository actually has: self-hosted, no reader accounts, and no reader-side
- * storage of any kind (card rule 8). No numbers, no names, no testimonials — there are
- * none, and a page shipped to strangers is the worst possible place to invent one.
+ * this repository actually has. Clause by clause, because a marketing sentence is the
+ * easiest place in a codebase for something untrue to survive: *runs in your own
+ * Cloudflare account* — the deploy button deploys to the owner's account and nothing
+ * phones home; *asks your readers for no account* — a name and an optional email, no
+ * sign-up and no social login; *sets no cookie* — card rule 8, and nothing in src/
+ * touches `document.cookie` or any browser storage. Deliberately **not** "on your own
+ * domain": a one-click deployment lives on `workers.dev` until its owner puts it
+ * somewhere else.
+ *
+ * No numbers, no names, no testimonials — there are none, and a page shipped to
+ * strangers is the worst possible place to invent one.
  */
 export const ROOT_PAGE = `<!doctype html>
 <html lang="en">
@@ -129,8 +137,8 @@ export const ROOT_PAGE = `<!doctype html>
 <main>
 <h1>Charcha is running</h1>
 <p class="lede">Self-hosted comments for static sites.</p>
-<p>A comment section for a blog or a website that stays on your own domain, asks your
-readers for no account and sets no cookie &mdash; read more at
+<p>A comment section for a blog or a website that runs in your own Cloudflare account,
+asks your readers for no account and sets no cookie &mdash; read more at
 <a href="https://charcha.dev" rel="noopener noreferrer">charcha.dev</a>.</p>
 <p class="foot">Anyone with this address can see this page, so it says nothing about this
 deployment.</p>

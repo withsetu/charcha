@@ -145,12 +145,12 @@ setting — but your site is a different address, so it has to be added.
 <script src="https://your-worker.example.workers.dev/embed.js" defer></script>
 ```
 
-That is the whole integration. Replace the example address with your own Worker's —
-the one Cloudflare gave you, the same one you signed in to `/admin` on.
-`embed.js` is under 7 KB gzipped, ships no framework
-and no Markdown parser, and is served as a static asset so it costs your deployment
-nothing against the Cloudflare request budget. [Theming](docs/theming.md) covers the
-attributes, the class names and the three styling modes.
+That is the whole integration. Replace the example address with your own Worker's — the
+one Cloudflare gave you, the same one you signed in to `/admin` on. `embed.js` is under
+7 KB gzipped, ships no framework and no Markdown parser, and is served as a static asset
+so it costs your deployment nothing against the Cloudflare request budget.
+[Theming](docs/theming.md) covers the attributes, the class names and the three styling
+modes.
 
 ## Documentation
 
@@ -198,7 +198,7 @@ the same bindings the deployed Worker gets.
 ## Troubleshooting a deploy
 
 **Visiting the Worker URL used to answer `Not found`.** It does not any more — `/` says
-Charcha is running, and nothing further, for the reasons
+Charcha is running, and nothing about your deployment, for the reasons
 [above](#after-it-deploys). If you are on a version that predates it, the deployment was
 almost certainly fine: check `/health` and `/admin`.
 
