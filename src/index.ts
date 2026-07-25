@@ -1,5 +1,8 @@
 import { Hono } from 'hono'
+import type { Context } from 'hono'
+import { adminError, notFound as adminNotFound } from './admin/api'
 import {
+  ADMIN_API_PREFIX,
   COMMENT_STATUS_PATH,
   QUEUE_PATH,
   SESSION_PATH,
@@ -120,13 +123,32 @@ app.get('/health', async (c) => {
   return c.json({ status: 'ok', database: 'ok' }, 200, { 'cache-control': 'no-store' })
 })
 
-app.notFound((c) => c.text('Not found', 404))
+/**
+ * Whether this request was for the dashboard's API, and so wants JSON.
+ *
+ * The two failures a dashboard client is most likely to meet are an unknown path and
+ * a server error, and both are answered here rather than in any route — so without an
+ * admin branch they were the only two admin responses *not* in the
+ * `{error:{code,message}}` shape, and a client branching on `error.code` would throw
+ * parsing them. Found by review. It is the same argument src/admin/api.ts makes for
+ * re-answering the size guard's plain-text 413.
+ * Enforced by test/worker/admin/route.test.ts and test/worker/admin/queue.test.ts.
+ */
+function wantsAdminJson(c: Context<{ Bindings: Env }>): boolean {
+  return new URL(c.req.url).pathname.startsWith(ADMIN_API_PREFIX)
+}
+
+app.notFound((c) =>
+  wantsAdminJson(c) ? adminNotFound('There is nothing at that address.') : c.text('Not found', 404),
+)
 
 // Never surface an internal message to a caller — this Worker's main surface is
 // public and unauthenticated. Enforced by test/worker/errors.test.ts.
 app.onError((error, c) => {
   console.error('unhandled error', error)
-  return c.text('Internal error', 500)
+  return wantsAdminJson(c)
+    ? adminError('UNAVAILABLE', 'Something went wrong. Try again.', 500)
+    : c.text('Internal error', 500)
 })
 
 /**

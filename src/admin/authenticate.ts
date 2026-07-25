@@ -10,9 +10,30 @@
 //
 // Enforced by test/worker/admin/authenticate.test.ts.
 
+import { announceOnce } from '../spam/log'
 import type { AdminEnv } from './env'
 import { usableDashboardPassword } from './password'
-import { readSessionCookie, verifySession } from './session'
+import { readSessionCookies, verifySession } from './session'
+
+/**
+ * The one line an owner whose deployment has no dashboard password ever sees.
+ *
+ * Announced from here as well as from the login handler, because the commonest way
+ * to meet an unconfigured dashboard is to *load* it: #13's shell calls
+ * `GET /admin/api/session` before anyone presses a button, and that path never
+ * touched the login handler — so the only channel for the fact stayed silent for
+ * exactly the owner who needed it. One `announceOnce` key, so it is still said once
+ * per isolate however many routes reach it.
+ * Enforced by test/worker/admin/route.test.ts.
+ */
+export function announceSecretUnset(): void {
+  announceOnce('dashboard-password-unset', {
+    event: 'admin_config',
+    guard: 'dashboard-password',
+    enabled: false,
+    reason: 'CHARCHA_DASHBOARD_PASSWORD is unset or blank; every admin request is refused',
+  })
+}
 
 /** Who the request is, and which authenticator said so. */
 export interface AdminIdentity {
@@ -50,12 +71,22 @@ export function sessionAuthenticator(env: AdminEnv): AdminAuthenticator {
     name: 'session',
     async authenticate(request: Request, now: number): Promise<AdminIdentity | null> {
       const secret = usableDashboardPassword(env.CHARCHA_DASHBOARD_PASSWORD)
-      if (secret === null) return null
+      if (secret === null) {
+        announceSecretUnset()
+        return null
+      }
 
-      const token = readSessionCookie(request)
-      if (token === null) return null
-
-      return (await verifySession(token, secret, now)) ? { via: 'session' } : null
+      // Every candidate, not the first. A request may carry several cookies of the
+      // same name — `__Secure-` constrains the `Secure` flag and the setting scheme
+      // but says nothing about `Domain`, so on a custom domain anything able to write
+      // a cookie on a sibling host can plant a junk value. Accepting only the first
+      // match would let that value sign the owner out of their own dashboard for as
+      // long as it sat there, with a 401 and no explanation.
+      // Enforced by test/worker/admin/session.test.ts.
+      for (const token of readSessionCookies(request)) {
+        if (await verifySession(token, secret, now)) return { via: 'session' }
+      }
+      return null
     },
   }
 }

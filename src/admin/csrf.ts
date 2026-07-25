@@ -10,10 +10,17 @@
 //     checked 2026-07-25), so an Origin check cannot tell a cross-site GET from an
 //     ordinary navigation and must not try.
 //   - An Origin check is what still holds if SameSite does not: an old browser, a
-//     policy that a future browser change relaxes, or a same-site-but-not-same-origin
-//     page — SameSite is a *site* rule (registrable domain), so a sibling subdomain
-//     is same-site and a different origin. On a workers.dev deployment that sibling
-//     is another tenant's Worker.
+//     policy a future browser change relaxes, or a page that is same-*site* but not
+//     same-*origin*. SameSite compares registrable domains rather than origins, so on
+//     a deployment behind a custom domain a sibling subdomain — and the same host on
+//     another scheme or port — is same-site and is not this origin. This check is what
+//     tells them apart.
+//
+//     (An earlier draft of this comment claimed the sibling case applies to a
+//     `workers.dev` deployment too. That depends on whether `workers.dev` is a public
+//     suffix, which this session could not confirm from the list itself — so the claim
+//     is dropped rather than left standing unverified. Card rule 7. The custom-domain
+//     case above needs no such claim and is enough on its own.)
 //
 // The shape mirrors isUnlistedBrowserOrigin in src/cors.ts rather than inventing a
 // second policy: "an Origin arrived and it is not one we accept" is the same

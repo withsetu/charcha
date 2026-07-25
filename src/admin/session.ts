@@ -61,8 +61,24 @@ export const SESSION_LIFETIME_SECONDS = 43_200
  */
 const MAX_TOKEN_LENGTH = 128
 
-/** The longest `Cookie` header this will parse, for the same reason. */
-const MAX_COOKIE_HEADER_LENGTH = 4096
+/**
+ * The most cookie pairs this will look at, and the most candidate tokens it will
+ * verify.
+ *
+ * **Deliberately a bound on the work, not on the header.** The first version of this
+ * refused to parse a `Cookie` header over 4096 bytes, which is not a guard at all:
+ * browsers allow roughly that much *per cookie* and well over a hundred cookies per
+ * domain, so an ordinary custom-domain deployment carrying analytics or CDN cookies
+ * would exceed it in normal use — and its owner would be signed out of their own
+ * dashboard with a 401 and nothing to diagnose. Anyone able to write one large cookie
+ * on a sibling host could do it deliberately. The token's own length cap already
+ * bounds the expensive part; this bounds the number of times it is paid.
+ * Enforced by test/worker/admin/session.test.ts.
+ */
+const MAX_COOKIE_PAIRS = 128
+
+/** The most session candidates verified per request. Each one costs two HMACs. */
+const MAX_SESSION_CANDIDATES = 4
 
 /** Ten digits of unix seconds runs to the year 2286. Anything longer is not a time. */
 const EXPIRY_PATTERN = /^\d{1,10}$/
@@ -114,11 +130,24 @@ function toBase64Url(bytes: ArrayBuffer): string {
 }
 
 /**
- * The bytes a base64url string stands for, or null if it is not one.
+ * The bytes a base64url string stands for, or null if it is not the *canonical*
+ * spelling of them.
  *
- * Strict about the alphabet before decoding, because `atob` is not: it accepts
- * whitespace and tolerates some malformed input, so a permissive decode would let
- * two different strings stand for one signature.
+ * Two checks, and the second exists because the first is not enough. The alphabet
+ * test rejects what `atob` would tolerate — whitespace, base64's `+` and `/`,
+ * padding — so a signature respelled in standard base64 is not a second spelling of
+ * the same session. But base64 is still not injective at the tail: 43 characters
+ * carry 258 bits where a signature is 256, so `atob` silently ignores two bits and
+ * **four different final characters decode to identical bytes**. A fresh-context
+ * review of this file found three other cookie values that verified against a valid
+ * token.
+ *
+ * Re-encoding and comparing closes that: only the spelling this module would itself
+ * have produced is accepted. No forgery was possible either way — the bytes still
+ * have to be the right HMAC — but a verifier that accepts more strings than it issues
+ * has a token that cannot be used as an identity, which is what a revocation list or
+ * a deduplicated log line would quietly assume it could be.
+ * Enforced by test/worker/admin/session.test.ts.
  */
 function fromBase64Url(value: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) return null
@@ -133,7 +162,8 @@ function fromBase64Url(value: string): Uint8Array | null {
 
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
-  return bytes
+
+  return toBase64Url(bytes.buffer) === value ? bytes : null
 }
 
 async function sign(secret: string, expiry: number): Promise<ArrayBuffer> {
@@ -255,24 +285,42 @@ export function clearedSessionCookie(): string {
 }
 
 /**
- * The session token the request carries, or null.
+ * Every session token the request carries, in the order the header lists them.
  *
- * Parses the `Cookie` header rather than reaching for a framework helper, so the
- * bound on the header's length is applied before any splitting. A name match is
- * exact: `x__Secure-charcha_session` and `__Secure-charcha_session_old` are
- * different cookies and neither is this one.
+ * **Plural, and that is the fix for a real lockout rather than a nicety.** A request
+ * may carry more than one cookie of the same name: the `__Secure-` prefix constrains
+ * the `Secure` attribute and the setting scheme, and says nothing whatsoever about
+ * `Domain`, so on a custom-domain deployment anything able to write a cookie on a
+ * sibling host can plant one. A reader that took only the first match would let that
+ * planted value sign the owner out of their own dashboard indefinitely — a 401 with
+ * no explanation, for as long as it sat there. The caller tries them all; see
+ * sessionAuthenticator.
+ *
+ * A value that cannot be a token is dropped here rather than counted against the
+ * candidate budget, so a jar full of same-named junk cannot crowd out the real one.
+ * A name match is exact: `x__Secure-charcha_session` and
+ * `__Secure-charcha_session_old` are different cookies and neither is this one.
  * Enforced by test/worker/admin/session.test.ts.
  */
-export function readSessionCookie(request: Request): string | null {
+export function readSessionCookies(request: Request): string[] {
   const header = request.headers.get('cookie')
-  if (header === null || header.length > MAX_COOKIE_HEADER_LENGTH) return null
+  if (header === null) return []
 
-  for (const pair of header.split(';')) {
+  const tokens: string[] = []
+  const pairs = header.split(';')
+  const scanned = Math.min(pairs.length, MAX_COOKIE_PAIRS)
+
+  for (let index = 0; index < scanned; index++) {
+    const pair = pairs[index] as string
     const separator = pair.indexOf('=')
     if (separator === -1) continue
     if (pair.slice(0, separator).trim() !== SESSION_COOKIE_NAME) continue
+
     const value = pair.slice(separator + 1).trim()
-    return value === '' ? null : value
+    if (value === '' || value.length > MAX_TOKEN_LENGTH) continue
+
+    tokens.push(value)
+    if (tokens.length === MAX_SESSION_CANDIDATES) break
   }
-  return null
+  return tokens
 }

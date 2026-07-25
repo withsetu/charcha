@@ -236,19 +236,41 @@ export async function getOrCreateThread(
 export const MAX_SPAM_REASON_LENGTH = 200
 
 /**
- * The reason as the column will hold it: null when there is none, truncated when
- * it is too long.
+ * The reason as the column will hold it: null when there is none, stripped of
+ * anything that is not text, and cut to the cap.
  *
  * Truncated rather than rejected, and that direction is the design. The reason is
  * diagnostic; the comment is the reader's. Failing the insert would mean a
  * third-party response longer than expected costs a real person their comment,
  * which is a far worse outcome than a triage badge that ends mid-word.
+ *
+ * Three things happen before the cut, and each is about the same fact — this string
+ * can come from siteverify's `error-codes`, so a third party chooses its bytes:
+ *
+ * - **Control characters go**, NUL first. A NUL makes SQLite's `length()` stop
+ *   counting there, which is why the CHECK measures a BLOB cast; the rest of the set
+ *   is what would turn a triage badge into a forged log line or a bidi override in
+ *   the moderator's own UI.
+ * - **A lone surrogate goes.** The cut counts UTF-16 units, so a character outside
+ *   the BMP landing on the boundary would leave half of itself bound as TEXT.
+ * - **Then it is cut**, to the same 200 bytes the CHECK enforces.
  * Enforced by test/worker/db/spam-reason.test.ts.
  */
+// C0, DEL and C1, plus the bidi marks and embedding controls. Naming them by escape
+// is the whole point of the guard, so the rule that objects to that is turned off for
+// this one line rather than the pattern rewritten into something less legible.
+// eslint-disable-next-line no-control-regex
+const NOT_TEXT = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E]/gu
+
 function storableSpamReason(reason: string | null | undefined): string | null {
-  const trimmed = reason?.trim()
-  if (trimmed === undefined || trimmed === '') return null
-  return trimmed.slice(0, MAX_SPAM_REASON_LENGTH)
+  if (reason === null || reason === undefined) return null
+
+  const trimmed = reason.replace(NOT_TEXT, '').trim()
+  if (trimmed === '') return null
+
+  const cut = trimmed.slice(0, MAX_SPAM_REASON_LENGTH)
+  // A high surrogate at the very end has lost its pair to the cut.
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut
 }
 
 /**
@@ -404,6 +426,44 @@ export class NoSuchCommentError extends Error {
   }
 }
 
+/** What a moderation decision returns: the outcome, and nothing it did not need. */
+export interface ModerationDecision {
+  id: number
+  threadId: number
+  parentId: number | null
+  status: CommentStatus
+  moderatedAt: number | null
+  /** How many replies the decision took down with it. Zero for an approval. */
+  cascaded: number
+}
+
+interface ModerationDecisionRow {
+  id: number
+  thread_id: number
+  parent_id: number | null
+  status: string
+  moderated_at: number | null
+}
+
+/**
+ * The moderation write, as a constant so the query plan can be asserted against the
+ * statement this project actually sends rather than a copy of it in a test.
+ *
+ * **It deliberately does not `returning` the body or the author name.** The
+ * `or (parent_id = ?1 ...)` clause makes this statement's result set as large as the
+ * number of replies under the comment, and nothing caps replies per parent — the
+ * depth guard caps nesting, not fan-out. Selecting `body` would pull up to 10,000
+ * characters per reply into a 128 MB isolate on the way to discarding all but one
+ * row, so hiding one popular comment would be an unbounded read on a path a spammer
+ * can inflate by replying to their own comment. What comes back is the decision: the
+ * ids, the status, and the count. Bounding the *write* is #122.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/comments.test.ts.
+ */
+export const MODERATE_SQL = `update comments set status = ?2, moderated_at = ?3
+        where id = ?1
+           or (parent_id = ?1 and ?2 in ('spam', 'deleted'))
+       returning id, thread_id, parent_id, status, moderated_at`
+
 /**
  * Records a moderation decision, and refuses to pretend it moderated nothing.
  *
@@ -418,21 +478,22 @@ export async function setCommentStatus(
   commentId: number,
   status: CommentStatus,
   now: number,
-): Promise<StoredComment> {
+): Promise<ModerationDecision> {
   const { results } = await db
-    .prepare(
-      `update comments set status = ?2, moderated_at = ?3
-        where id = ?1
-           or (parent_id = ?1 and ?2 in ('spam', 'deleted'))
-       returning id, thread_id, parent_id, depth, author_name, body, by_owner, status,
-                 created_at, moderated_at`,
-    )
+    .prepare(MODERATE_SQL)
     .bind(commentId, status, now)
-    .all<CommentRow>()
+    .all<ModerationDecisionRow>()
 
   const row = results.find((candidate) => candidate.id === commentId)
   if (row === undefined) throw new NoSuchCommentError(commentId)
-  return toStored(row)
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    parentId: row.parent_id,
+    status: row.status as CommentStatus,
+    moderatedAt: row.moderated_at,
+    cascaded: results.length - 1,
+  }
 }
 
 /**

@@ -16,6 +16,15 @@ export const TEST_PASSWORD = 'ThFn6Q7Rf2kZ8pWvB3xTqYuA'
 /** The binding the Worker is deployed with, kept so a stub can be undone. */
 const realLimiter = mutable.LOGIN_RATE_LIMITER
 
+/**
+ * The secret the Worker was deployed with, so a file can put it back exactly.
+ *
+ * `env` is one object shared by every test file in the isolate, so a file that
+ * restored a *constant* rather than what it found would hand the next file a
+ * dashboard it did not configure. Read once, at import.
+ */
+const realPassword = mutable.CHARCHA_DASHBOARD_PASSWORD
+
 export function configurePassword(secret: string | undefined): void {
   if (secret === undefined) delete mutable.CHARCHA_DASHBOARD_PASSWORD
   else mutable.CHARCHA_DASHBOARD_PASSWORD = secret
@@ -40,4 +49,9 @@ export function removeLimiter(): void {
 
 export function restoreLimiter(): void {
   mutable.LOGIN_RATE_LIMITER = realLimiter
+}
+
+/** Puts the secret back to whatever the Worker actually has. */
+export function restorePassword(): void {
+  configurePassword(realPassword)
 }

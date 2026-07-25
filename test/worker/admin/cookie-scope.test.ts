@@ -15,8 +15,14 @@
 
 import { exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SESSION_COOKIE_NAME } from '../../../src/admin/session'
-import { TEST_PASSWORD, configurePassword, restoreLimiter, stubLimiter } from './env'
+import { SESSION_COOKIE_NAME, SESSION_LIFETIME_SECONDS } from '../../../src/admin/session'
+import {
+  TEST_PASSWORD,
+  configurePassword,
+  restoreLimiter,
+  restorePassword,
+  stubLimiter,
+} from './env'
 
 const origin = 'https://charcha.example'
 
@@ -24,7 +30,15 @@ interface ParsedCookie {
   name: string
   value: string
   path: string
-  attributes: Set<string>
+  /**
+   * Lowercased attribute name to lowercased value, `''` for a valueless flag.
+   *
+   * A map rather than a set of names, because a review pointed out that a set would
+   * have let `SameSite=None` satisfy an assertion written as `has('samesite')` — so
+   * the file whose whole purpose is pinning the cookie's shape was not pinning the
+   * half of it that stops a cross-site request.
+   */
+  attributes: Map<string, string>
 }
 
 /**
@@ -37,15 +51,16 @@ interface ParsedCookie {
 function parseSetCookie(header: string, requestPath: string): ParsedCookie {
   const [pair, ...rest] = header.split(';')
   const separator = (pair as string).indexOf('=')
-  const attributes = new Set<string>()
+  const attributes = new Map<string, string>()
   let path: string | null = null
 
   for (const attribute of rest) {
     const trimmed = attribute.trim()
     const equals = trimmed.indexOf('=')
     const key = (equals === -1 ? trimmed : trimmed.slice(0, equals)).toLowerCase()
-    if (key === 'path') path = trimmed.slice(equals + 1)
-    else attributes.add(key)
+    const value = equals === -1 ? '' : trimmed.slice(equals + 1).trim()
+    if (key === 'path') path = value
+    else attributes.set(key, value.toLowerCase())
   }
 
   return {
@@ -93,7 +108,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   restoreLimiter()
-  configurePassword(TEST_PASSWORD)
+  restorePassword()
 })
 
 describe('the session cookie and the reader-facing endpoints', () => {
@@ -166,6 +181,17 @@ describe('the scope, as the Worker actually sends it', () => {
   it('still carries every other flag', () => {
     expect(cookie.attributes.has('httponly')).toBe(true)
     expect(cookie.attributes.has('secure')).toBe(true)
+  })
+
+  it('is SameSite=Strict, and the value is asserted rather than the attribute name', () => {
+    // `SameSite=None` would satisfy a check for the attribute's presence and would
+    // be the opposite of the guard — it is the first of the two CSRF layers and the
+    // only one that covers a cross-site GET.
+    expect(cookie.attributes.get('samesite')).toBe('strict')
+  })
+
+  it('has a bounded lifetime, matching the signed expiry', () => {
+    expect(cookie.attributes.get('max-age')).toBe(String(SESSION_LIFETIME_SECONDS))
   })
 })
 

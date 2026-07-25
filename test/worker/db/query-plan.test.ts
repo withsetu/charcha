@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import {
   MAX_PAGE_COMMENTS,
+  MODERATE_SQL,
   MODERATION_QUEUE_PAGE_SQL,
   MODERATION_QUEUE_SQL,
   PAGE_COMMENTS_SQL,
@@ -138,6 +139,30 @@ describe('the parent-eligibility read', () => {
 
     expect(plan).toMatch(/USING INTEGER PRIMARY KEY/)
     expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+})
+
+describe('the moderation write', () => {
+  // The `or (parent_id = ?1 ...)` clause makes this statement's result set as large
+  // as the number of replies under the comment, and nothing caps replies per parent
+  // — the depth guard caps nesting, not fan-out. So two properties matter here, and
+  // a review found the second one unasserted.
+
+  it('finds the replies on an index rather than scanning the comments table', async () => {
+    const plan = await planOf(MODERATE_SQL, 1, 'spam', 1_753_300_000)
+
+    expect(plan).toMatch(/comments_by_parent/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('never returns a comment body, however many replies it cascades over', () => {
+    // Selecting `body` would pull up to 10,000 characters per reply into a 128 MB
+    // isolate on the way to discarding all but one row, so hiding one popular
+    // comment would be an unbounded read — on a path a spammer can inflate by
+    // replying to their own comment. The decision needs the ids and the status.
+    expect(MODERATE_SQL).not.toMatch(/\bbody\b/)
+    expect(MODERATE_SQL).not.toMatch(/author_name/)
+    expect(MODERATE_SQL).not.toMatch(/author_email/)
   })
 })
 

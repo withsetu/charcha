@@ -7,7 +7,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getOrCreateThread, insertComment } from '../../../src/db'
 import { app } from '../../../src/index'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
-import { TEST_PASSWORD, configurePassword, restoreLimiter, stubLimiter } from './env'
+import {
+  TEST_PASSWORD,
+  configurePassword,
+  restoreLimiter,
+  restorePassword,
+  stubLimiter,
+} from './env'
 
 const db = env.DB
 const origin = 'https://charcha.example'
@@ -88,7 +94,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   restoreLimiter()
-  configurePassword(TEST_PASSWORD)
+  restorePassword()
 })
 
 describe('GET /admin/api/queue — behind the door', () => {
@@ -410,7 +416,17 @@ describe('POST /admin/api/comments/:id/status — when the database is the probl
 
   it('leaks nothing about what went wrong', async () => {
     const response = await requestWithBrokenDb(1)
+    const body = await response.text()
 
-    expect(await response.text()).toBe('Internal error')
+    expect(body).not.toContain('D1_ERROR')
+    expect(body).not.toContain('unreachable')
+  })
+
+  it('answers in the one admin error shape, not the public routes plain text', async () => {
+    const response = await requestWithBrokenDb(1)
+
+    expect(await response.json()).toEqual({
+      error: { code: 'UNAVAILABLE', message: 'Something went wrong. Try again.' },
+    })
   })
 })

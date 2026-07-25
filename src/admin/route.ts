@@ -14,7 +14,6 @@ import { z } from 'zod'
 import { NoSuchCommentError, listModerationQueue, parseQueueCursor, setCommentStatus } from '../db'
 import type { CommentStatus, QueueCursor } from '../db'
 import { readCappedText } from '../request-body'
-import { announceOnce } from '../spam/log'
 import {
   adminJson,
   adminNoContent,
@@ -25,12 +24,18 @@ import {
   tooManyRequests,
   unauthorized,
 } from './api'
-import { adminAuthenticators, resolveIdentity } from './authenticate'
+import { adminAuthenticators, announceSecretUnset, resolveIdentity } from './authenticate'
 import { isCrossOriginRequest } from './csrf'
 import type { AdminEnv } from './env'
 import { passwordMatches, usableDashboardPassword } from './password'
 import { clearedSessionCookie, issueSession, sessionCookie } from './session'
 import { loginThrottle } from './throttle'
+
+/**
+ * Everything under here is the dashboard's API, and answers JSON in one shape —
+ * including the 404 and the 500, which src/index.ts owns rather than any route.
+ */
+export const ADMIN_API_PREFIX = '/admin/api/'
 
 /** The routes, as constants, so src/index.ts and the tests name the same strings. */
 export const SESSION_PATH = '/admin/api/session'
@@ -118,10 +123,20 @@ async function authenticated(
  *   2. the throttle — the brute-force bound, and it must come before any hashing
  *      so that a guesser cannot make this Worker do SHA-256 and HMAC work per
  *      attempt
- *   3. the configured secret — an unconfigured deployment refuses, and says so to
+ *   3. the body — bounded, then parsed, then validated
+ *   4. the configured secret — an unconfigured deployment refuses, and says so to
  *      the log rather than to the caller
- *   4. the body — bounded, then parsed, then validated
  *   5. the comparison — constant time, on two digests
+ *
+ * **The body is validated before the secret is consulted, and the order matters for
+ * a reason a fresh-context review caught rather than one anyone designed.** With the
+ * secret checked first, an unconfigured deployment answered 401 to a malformed body
+ * where a configured one answered 400 or 413 — so a single unauthenticated request
+ * with a deliberately broken body revealed whether CHARCHA_DASHBOARD_PASSWORD was
+ * set, which is to say whether anybody was watching. That is exactly the disclosure
+ * the paragraph below claims not to make, and the test that claimed to cover it only
+ * ever sent a *well-formed* attempt. Validating first makes the malformed-input
+ * answers identical on both.
  *
  * A wrong password, an absent password field, a missing secret and a malformed
  * body are four different situations and the caller is told apart only the ones it
@@ -139,27 +154,23 @@ export async function handleLogin(
   const env: AdminEnv = c.env
   if (!(await loginThrottle(env.LOGIN_RATE_LIMITER).allow(c.req.raw))) return tooManyRequests()
 
-  const secret = usableDashboardPassword(env.CHARCHA_DASHBOARD_PASSWORD)
-  if (secret === null) {
-    // The one place the "unconfigured" case is reported, and it is reported to the
-    // owner rather than to the caller. An owner who never set the secret, or set it
-    // in the wrong place, has no other way to learn why their own dashboard refuses
-    // them — and a 401 that said "not configured" would tell an attacker that
-    // guessing is pointless *and* that the deployment is unattended.
-    announceOnce('dashboard-password-unset', {
-      event: 'admin_config',
-      guard: 'dashboard-password',
-      enabled: false,
-      reason: 'CHARCHA_DASHBOARD_PASSWORD is unset or blank; every admin request is refused',
-    })
-    return unauthorized()
-  }
-
   const body = await readJson(c.req.raw)
   if (!body.ok) return body.response
 
   const parsed = loginSchema.safeParse(body.value)
   if (!parsed.success) return badRequest('A password is required.')
+
+  const secret = usableDashboardPassword(env.CHARCHA_DASHBOARD_PASSWORD)
+  if (secret === null) {
+    // Announced for the owner, never answered to the caller. Someone who never set
+    // the secret, or set it in the wrong place, has no other way to learn why their
+    // own dashboard refuses them — and a 401 that said "not configured" would tell an
+    // attacker both that guessing is pointless and that nobody is watching.
+    // announceSecretUnset is shared with sessionAuthenticator so the line appears
+    // whichever admin route the owner reaches first.
+    announceSecretUnset()
+    return unauthorized()
+  }
 
   if (!(await passwordMatches(parsed.data.password, secret))) return unauthorized()
 

@@ -5,7 +5,14 @@
 import { exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
-import { TEST_PASSWORD, configurePassword, removeLimiter, restoreLimiter, stubLimiter } from './env'
+import {
+  TEST_PASSWORD,
+  configurePassword,
+  removeLimiter,
+  restoreLimiter,
+  restorePassword,
+  stubLimiter,
+} from './env'
 
 const origin = 'https://charcha.example'
 
@@ -29,7 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreLimiter()
-  configurePassword(TEST_PASSWORD)
+  restorePassword()
 })
 
 describe('POST /admin/api/session — the right password', () => {
@@ -95,6 +102,68 @@ describe('POST /admin/api/session — the wrong password', () => {
     configurePassword('   ')
 
     expect((await login({ password: '   ' })).status).toBe(401)
+  })
+})
+
+describe('POST /admin/api/session is not an oracle for whether it is configured', () => {
+  // The finding a fresh-context review made, and the reason the body is validated
+  // before the secret is consulted. With the secret checked first, a malformed body
+  // answered 400/413 on a configured deployment and 401 on an unconfigured one — so
+  // one unauthenticated request revealed whether CHARCHA_DASHBOARD_PASSWORD was set,
+  // which is to say whether anyone was watching. The assertion above only covered a
+  // *well-formed* attempt, and read as coverage of a property that did not hold.
+
+  const brokenBodies: [string, unknown][] = [
+    ['malformed JSON', '{not json'],
+    ['no password field', { user: 'maya' }],
+    ['a numeric password', { password: 12_345 }],
+    ['a body past the cap', { password: 'x'.repeat(70_000) }],
+    ['an empty body', ''],
+  ]
+
+  it.each(brokenBodies)('answers a %s identically either way', async (_label, body) => {
+    configurePassword(TEST_PASSWORD)
+    const configured = await login(body)
+    configurePassword(undefined)
+    const unconfigured = await login(body)
+
+    expect(unconfigured.status).toBe(configured.status)
+    expect(await unconfigured.text()).toBe(await configured.text())
+  })
+})
+
+describe('the admin surface answers one error shape, including where no route runs', () => {
+  // The 404 and the 500 are handled by src/index.ts rather than by any route, so
+  // without an admin branch there they were the only two admin responses *not* in
+  // the {error:{code,message}} shape — and they are the two a dashboard client is
+  // most likely to meet. A client branching on error.code would throw parsing them.
+
+  it('answers an unknown admin path as JSON, not plain text', async () => {
+    const response = await exports.default.fetch(`${origin}/admin/api/nope`)
+
+    expect(response.status).toBe(404)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    expect(await response.json()).toEqual({
+      error: { code: 'NOT_FOUND', message: 'There is nothing at that address.' },
+    })
+  })
+
+  it('answers a rejected preflight as JSON too', async () => {
+    const response = await exports.default.fetch(`${origin}/admin/api/session`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example' },
+    })
+
+    expect(response.status).toBe(404)
+    expect(response.headers.get('access-control-allow-origin')).toBeNull()
+  })
+
+  it('still answers an unknown public path as plain text', async () => {
+    // The public routes' house style is unchanged; only /admin/api/ moves.
+    const response = await exports.default.fetch(`${origin}/nope`)
+
+    expect(response.status).toBe(404)
+    expect(await response.text()).toBe('Not found')
   })
 })
 

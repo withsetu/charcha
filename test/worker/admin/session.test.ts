@@ -5,7 +5,7 @@ import {
   SESSION_LIFETIME_SECONDS,
   clearedSessionCookie,
   issueSession,
-  readSessionCookie,
+  readSessionCookies,
   sessionCookie,
   verifySession,
 } from '../../../src/admin/session'
@@ -145,6 +145,30 @@ describe('a token that is a valid one with something added', () => {
     const { token } = await issueSession(secret, t0)
 
     expect(await verifySession(`${token}.`, secret, t0)).toBe(false)
+  })
+
+  it('is refused when only the final signature character is changed', async () => {
+    // base64 is not injective at the tail: 43 characters carry 258 bits for a
+    // 256-bit signature, so `atob` ignores two bits and four different final
+    // characters decode to identical bytes. A review found three other cookie values
+    // that verified against a valid token. No forgery — the bytes still have to be
+    // the right HMAC — but a verifier that accepts more strings than it issues has a
+    // token that cannot be used as an identity.
+    const { token } = await issueSession(secret, t0)
+    const [expiry, signature] = token.split('.') as [string, string]
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    const head = signature.slice(0, -1)
+    const last = signature.slice(-1)
+
+    const accepted: string[] = []
+    for (const candidate of alphabet) {
+      if (candidate === last) continue
+      if (await verifySession(`${expiry}.${head}${candidate}`, secret, t0)) {
+        accepted.push(candidate)
+      }
+    }
+
+    expect(accepted).toEqual([])
   })
 
   it('is refused when the signature is respelled in standard base64', async () => {
@@ -312,32 +336,62 @@ describe('reading the cookie off a request', () => {
   it('finds the session among other cookies', () => {
     const request = withCookie(`theme=dark; ${SESSION_COOKIE_NAME}=abc.def; lang=en`)
 
-    expect(readSessionCookie(request)).toBe('abc.def')
+    expect(readSessionCookies(request)).toEqual(['abc.def'])
   })
 
   it('finds it when it is the only one', () => {
-    expect(readSessionCookie(withCookie(`${SESSION_COOKIE_NAME}=abc.def`))).toBe('abc.def')
+    expect(readSessionCookies(withCookie(`${SESSION_COOKIE_NAME}=abc.def`))).toEqual(['abc.def'])
   })
 
-  it('is null when the request carries no cookies at all', () => {
-    expect(readSessionCookie(new Request('https://charcha.example/admin/api/queue'))).toBeNull()
+  it('is empty when the request carries no cookies at all', () => {
+    expect(readSessionCookies(new Request('https://charcha.example/admin/api/queue'))).toEqual([])
   })
 
-  it('is null when another cookie merely ends with the same name', () => {
-    expect(readSessionCookie(withCookie(`x__Secure-charcha_session=abc.def`))).toBeNull()
+  it('ignores a cookie that merely ends with the same name', () => {
+    expect(readSessionCookies(withCookie(`x__Secure-charcha_session=abc.def`))).toEqual([])
   })
 
-  it('is null when another cookie merely starts with the same name', () => {
-    expect(readSessionCookie(withCookie(`${SESSION_COOKIE_NAME}_old=abc.def`))).toBeNull()
+  it('ignores a cookie that merely starts with the same name', () => {
+    expect(readSessionCookies(withCookie(`${SESSION_COOKIE_NAME}_old=abc.def`))).toEqual([])
   })
 
-  it('is null when the value is empty', () => {
-    expect(readSessionCookie(withCookie(`${SESSION_COOKIE_NAME}=`))).toBeNull()
+  it('ignores an empty value', () => {
+    expect(readSessionCookies(withCookie(`${SESSION_COOKIE_NAME}=`))).toEqual([])
   })
 
-  it('is null for a Cookie header past the cap, before anything is split', () => {
-    const padding = `pad=${'x'.repeat(5000)}`
+  it('ignores a value past the token cap rather than spending an HMAC on it', () => {
+    expect(readSessionCookies(withCookie(`${SESSION_COOKIE_NAME}=${'x'.repeat(500)}`))).toEqual([])
+  })
+})
 
-    expect(readSessionCookie(withCookie(`${padding}; ${SESSION_COOKIE_NAME}=abc.def`))).toBeNull()
+describe('a jar carrying more than one session cookie', () => {
+  // The lockout a review found. A request may carry several cookies of one name:
+  // `__Secure-` constrains the Secure flag and the setting scheme and says nothing
+  // about `Domain`, so on a custom domain anything that can write a cookie on a
+  // sibling host can plant one. Taking only the first match would let that planted
+  // value sign the owner out of their own dashboard indefinitely.
+
+  it('returns every candidate, in the order the header lists them', () => {
+    const header = `${SESSION_COOKIE_NAME}=junk.one; ${SESSION_COOKIE_NAME}=real.two`
+
+    expect(readSessionCookies(withCookie(header))).toEqual(['junk.one', 'real.two'])
+  })
+
+  it('bounds how many it will hand back, because each one costs two HMACs', () => {
+    const header = Array.from({ length: 40 }, (_, i) => `${SESSION_COOKIE_NAME}=v${i}.x`).join('; ')
+
+    expect(readSessionCookies(withCookie(header)).length).toBeLessThanOrEqual(4)
+  })
+
+  it('still finds a real token behind a padded jar, rather than refusing the lot', () => {
+    // The first version of this capped the whole `Cookie` header at 4096 bytes.
+    // Browsers allow roughly that per *cookie* and over a hundred cookies per
+    // domain, so an ordinary custom-domain deployment with analytics cookies would
+    // have signed its owner out with a 401 and nothing to diagnose.
+    const padding = `pad=${'x'.repeat(6000)}`
+
+    expect(readSessionCookies(withCookie(`${padding}; ${SESSION_COOKIE_NAME}=abc.def`))).toEqual([
+      'abc.def',
+    ])
   })
 })
