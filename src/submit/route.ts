@@ -6,6 +6,7 @@
 
 import type { Context } from 'hono'
 import { readCappedText } from '../request-body'
+import { withFragmentHeaders } from '../response-headers'
 import { runSubmission } from './pipeline'
 import type { SubmitResult } from './pipeline'
 import type { SpamCheck } from './spam'
@@ -28,6 +29,13 @@ function unreadable(): Response {
  * The status code carries the taxonomy so the embed can branch without parsing a
  * body: 201 published, 202 accepted-and-pending, 400 the reader's input, 403 a
  * spam rejection. A failed submission never shares a status with a successful one.
+ *
+ * **It does not add the #98 headers, and a caller other than handleSubmit would
+ * therefore ship without them.** They are added once, around this function, for the
+ * reason #98 exists — a header spread at each of four returns is a header missing
+ * from the fifth. This is exported for the tests below it; the route is the only
+ * caller, and a second one should go through handleSubmit rather than around it.
+ * Enforced by test/worker/response-headers.test.ts.
  */
 export function renderResult(result: SubmitResult): Response {
   switch (result.outcome) {
@@ -57,6 +65,19 @@ export interface SubmitRouteConfig {
  * parsed as JSON — malformed JSON is a 400, never a 500.
  */
 export async function handleSubmit(
+  c: Context<{ Bindings: Env }>,
+  config: SubmitRouteConfig,
+): Promise<Response> {
+  // One wrap point rather than a spread at each return (#98). The 201 and 202
+  // bodies are the reader's own comment rendered back to them, so this response
+  // carries attacker-influenced HTML on this Worker's origin exactly as the read
+  // does. src/index.ts re-wraps the result with withCors, which copies headers
+  // rather than replacing them, so these survive it.
+  // Enforced by test/worker/response-headers.test.ts.
+  return withFragmentHeaders(await submitAnswer(c, config))
+}
+
+async function submitAnswer(
   c: Context<{ Bindings: Env }>,
   config: SubmitRouteConfig,
 ): Promise<Response> {
