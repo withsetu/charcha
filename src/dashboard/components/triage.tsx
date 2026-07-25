@@ -64,6 +64,26 @@ function tabName(view: ViewStatus, count: number | null): string {
 }
 
 /**
+ * The line above the queue: how much of it is on screen (#135).
+ *
+ * **The branch is on the two numbers rather than on `nextCursor`, and that is what keeps
+ * it honest between a decision starting and landing.** The row leaves the list
+ * optimistically while the count is still the server's previous answer, so for that
+ * moment `loaded` is one behind `total` — `Showing 49 of 50` says exactly that, where a
+ * cursor-driven branch would have claimed a flat "50 comments" over 49 visible rows.
+ *
+ * It still refuses to print a total it does not have. The #24 cap means the loaded count
+ * is not the queue's size, which is why the old wording avoided a bare number at all;
+ * `total === null` is intended to be the pre-answer case only, since `phase` is `ready`
+ * exactly when a page has arrived and every page carries counts.
+ * Enforced by test/dashboard/triage.test.tsx.
+ */
+function summaryLine(loaded: number, total: number | null): string {
+  if (total === null) return commentCount(loaded)
+  return loaded < total ? `Showing ${String(loaded)} of ${String(total)}` : commentCount(total)
+}
+
+/**
  * The failure reported when a promise this file started rejects.
  *
  * It should be unreachable: src/dashboard/api.ts is documented never to reject, so
@@ -425,27 +445,13 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
           {state.phase === 'ready' && loaded > 0 && (
             <>
               {/*
-                The line stays honest about what it knows, and it now knows more (#135).
-                `Showing 50 of 53` is the same care the old `50 loaded, and there are
-                more` was taking — the #24 cap means a bare "50" would be a number the
-                owner plans their afternoon around and it would be wrong — with the total
-                the counts supply. The condition is the two numbers rather than
-                `nextCursor`, so a decision still in flight reads `Showing 49 of 50`
-                instead of claiming a total that is one ahead of the rows on screen.
+                Deliberately not a live region. It changes on every decision, and the
+                decision is already announced — "49 of 53" read out after "Approved: Ada
+                Lovelace. Press Z to undo." is two sentences per keystroke, which is how
+                a moderator learns to turn the screen reader off. The wording itself is
+                summaryLine, above.
               */}
-              {/*
-                Not a live region. It changes on every decision, and the decision is
-                already announced — "49 of 53" read out after "Approved: Ada Lovelace.
-                Press Z to undo." is two sentences per keystroke, which is how a
-                moderator learns to turn the screen reader off.
-              */}
-              <p className="pb-2 text-sm text-muted-foreground">
-                {total === null
-                  ? commentCount(loaded)
-                  : loaded < total
-                    ? `Showing ${String(loaded)} of ${String(total)}`
-                    : commentCount(total)}
-              </p>
+              <p className="pb-2 text-sm text-muted-foreground">{summaryLine(loaded, total)}</p>
               <ul
                 role="list"
                 aria-label={`${VIEW_LABELS[state.view]} comments`}

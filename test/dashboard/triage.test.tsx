@@ -585,18 +585,9 @@ describe('the view tabs (#135)', () => {
   it('keeps the counts on screen through a view change', async () => {
     // Every tab is labelled with a number the whole time, so switching view does not
     // blank all three and refill them with what was true throughout.
-    stubFetch((call) =>
-      json(
-        200,
-        queuePage(
-          [],
-          null,
-          call.path.includes('status=spam')
-            ? { pending: 53, spam: 12, approved: 4 }
-            : { pending: 53, spam: 12, approved: 4 },
-        ),
-      ),
-    )
+    // One set of counts for both views, because that is what they are: the counts
+    // describe the whole database and do not depend on which queue was asked for.
+    stubFetch(() => json(200, queuePage([], null, { pending: 53, spam: 12, approved: 4 })))
     mount()
     await screen.findByText('Nothing waiting on you')
 

@@ -418,6 +418,15 @@ describe('the per-status counts (#135)', () => {
     expect(state.counts).toEqual({ pending: 5, spam: 8, approved: 11 })
   })
 
+  it('keeps the last known numbers when a reload fails', () => {
+    // They were true a moment ago and the tabs are still usable. Blanking them would
+    // take the badges away at the same moment the queue itself is replaced by an error,
+    // which reads as the whole surface having lost its data rather than one request.
+    const state = reduce(loaded([1, 2]), { type: 'load/failed', failure: FAILURE })
+    expect(state.phase).toBe('failed')
+    expect(state.counts).toEqual(SOME_COUNTS)
+  })
+
   it('is left alone by a decision that did not apply', () => {
     // Nothing moved, so nothing about the counts changed. Clearing them here would blank
     // the badges at the exact moment the owner is being told the queue is unchanged.

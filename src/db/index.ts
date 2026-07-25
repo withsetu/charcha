@@ -742,15 +742,21 @@ export const STATUS_COUNTS_SQL = `select status, count(*) as n
 export async function countCommentsByStatus(db: D1Database): Promise<StatusCounts> {
   const { results } = await db.prepare(STATUS_COUNTS_SQL).all<{ status: string; n: number }>()
 
-  const counts: StatusCounts = { pending: 0, approved: 0, spam: 0, deleted: 0 }
-  for (const row of results) {
-    // A status outside the four is dropped rather than added as a key. The column has
-    // a CHECK constraint (migrations/0001_initial.sql) so there should be none, and an
-    // unknown key reaching the dashboard as a fourth tab is a worse failure than a
-    // count that is missing one.
-    if (row.status in counts) counts[row.status as CommentStatus] = row.n
+  // **Read out by literal key rather than assigned in by the row's own.** The four keys
+  // are then the only keys this can produce, whatever came back — where a loop writing
+  // `counts[row.status]` would take its key from the database and needs a membership
+  // test to be safe, and the obvious `row.status in counts` is not one: `in` walks the
+  // prototype chain, so a row whose status were `constructor` or `toString` would pass
+  // it. The column's CHECK constraint (migrations/0001_initial.sql) means neither can
+  // occur — this is card rule 5's habit rather than a live hole — but the shape that
+  // cannot go wrong costs nothing over the shape that merely does not.
+  const byStatus = new Map(results.map((row) => [row.status, row.n]))
+  return {
+    pending: byStatus.get('pending') ?? 0,
+    approved: byStatus.get('approved') ?? 0,
+    spam: byStatus.get('spam') ?? 0,
+    deleted: byStatus.get('deleted') ?? 0,
   }
-  return counts
 }
 
 /**
