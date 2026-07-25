@@ -233,7 +233,9 @@ do, comments from it are refused &mdash; every deployment starts allowing only i
 address.</li>
 </ul>
 
-<p class="foot">This page is for whoever deployed this Worker. Readers never see it.</p>
+<p class="foot">Anyone with this address can see this page, so it deliberately says nothing
+about your comments or your configuration. Moderation is at <a href="/admin">/admin</a>,
+behind your password.</p>
 </main>
 </body>
 </html>
