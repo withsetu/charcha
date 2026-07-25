@@ -15,9 +15,19 @@
 // So the guard here is structural rather than character-level: every line of
 // commenter text is quote-prefixed, and Charcha's own framing is the only thing at
 // column 0. Nothing untrusted reaches the subject line at all.
+//
+// **And no absolute URL appears anywhere in the email.** The same rule applied to a
+// subtler case, found in review. `derivePageKey` deliberately drops the origin from a
+// thread's identity — "the origin is not identity", src/page-key.ts — so a submission
+// reporting `https://evil.example/notes/leaving` lands on the legitimate
+// `/notes/leaving` thread while carrying an attacker-chosen origin in `pageUrl`.
+// Printed at column 0 as the page to click, that is a phishing link in the owner's
+// inbox signed by the owner's own sending domain. The email names the page key, which
+// is a path on the owner's site and cannot carry a foreign origin;
+// `CommentCreatedEvent` has no `pageUrl` field at all, so there is nothing to print
+// by mistake.
 // Enforced by test/worker/notify/message.test.ts.
 
-import { MAX_URL_LENGTH } from '../page-key'
 import type { CommentCreatedEvent } from './index'
 
 /**
@@ -39,29 +49,31 @@ export const MAX_EXCERPT_LENGTH = 500
  */
 export const MAX_ONE_LINE_LENGTH = 120
 
-/**
- * The cap on the page URL line, which is the *same* cap the URL already passed in
- * src/page-key.ts rather than a shorter one.
- *
- * Deliberately not `MAX_ONE_LINE_LENGTH`. A truncated URL is a broken link, and
- * this line exists to be clicked — shortening it would trade a long line for a
- * useless one. The URL is Worker-derived (`derivePageKey` re-serialises it through
- * `new URL()`), so it is the least attacker-shaped of the three fields; it still
- * goes through `oneLine`, because "nothing untrusted reaches the email except
- * through `oneLine` or `quoteBlock`" is only a property if it has no exceptions.
- */
-export const MAX_URL_LINE_LENGTH = MAX_URL_LENGTH
-
 const QUOTE_PREFIX = '> '
 
 /**
- * C0 and C1 control characters, DEL, and the two Unicode line separators, minus
- * the ones a plain-text email legitimately contains. Tab and newline survive here;
+ * Everything that is invisible or that changes how visible text is arranged, minus
+ * what a plain-text email legitimately contains. Tab and newline survive here;
  * `oneLine` has already removed both by the time it calls this.
+ *
+ * In four groups, because they are four different problems:
+ *
+ *   - **C0 minus tab and newline.** U+0007 rings a terminal bell and U+001B begins an
+ *     ANSI escape. A site owner reading mail in a terminal client is the one reader
+ *     for whom a comment body is closer to executable than to text.
+ *   - **DEL and C1.** U+0085 is NEL, a line break to some renderers, and it is *not*
+ *     matched by JavaScript's `\s` — so it survives the whitespace collapse in
+ *     `oneLine` and this is the only thing that removes it.
+ *   - **The Unicode line separators** U+2028 and U+2029.
+ *   - **Bidi overrides and zero-width characters.** These cannot create a line, so
+ *     the structural quote-prefix guard does not stop them; they reorder or hide text
+ *     *within* a line, which is enough to make a `From:` line render as something
+ *     other than what is stored. This is the case a column-0 rule does not cover,
+ *     which is why the character filter exists alongside it rather than instead of it.
  */
 const CONTROL_CHARACTERS =
   // eslint-disable-next-line no-control-regex -- the control characters are the point of this expression
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029]/g
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g
 
 function truncate(text: string, maxLength: number): string {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`
@@ -77,7 +89,7 @@ function truncate(text: string, maxLength: number): string {
  * Enforced by test/worker/notify/message.test.ts.
  */
 export function oneLine(text: string, maxLength = MAX_ONE_LINE_LENGTH): string {
-  const flattened = text.replace(/\s+/g, ' ').replace(CONTROL_CHARACTERS, '').trim()
+  const flattened = text.replace(CONTROL_CHARACTERS, '').replace(/\s+/g, ' ').trim()
   return truncate(flattened, maxLength)
 }
 
@@ -137,7 +149,6 @@ export function buildOwnerNotification(event: CommentCreatedEvent, suppressed = 
     '',
     `Page: ${oneLine(event.pageKey)}`,
   ]
-  if (event.pageUrl !== null) lines.push(oneLine(event.pageUrl, MAX_URL_LINE_LENGTH))
   lines.push(`From: ${oneLine(event.authorName)}`, '', quoteBlock(event.body), '')
 
   if (suppressed > 0) {

@@ -73,6 +73,9 @@ describe('what the pipeline hands the notifier', () => {
     expect(events[0]?.authorName).toBe('Rahul Kanwar')
     expect(events[0]?.body).toBe(validRoot.body)
     expect(events[0]?.pageKey).toBe('/notes/leaving')
+    // No absolute URL: its origin is attacker-chosen. See src/notify/index.ts.
+    expect(events[0]).not.toHaveProperty('pageUrl')
+    expect(JSON.stringify(events)).not.toContain('maya.build')
     expect(events[0]?.status).toBe('pending')
     expect(events[0]?.commentId).toBeGreaterThan(0)
   })

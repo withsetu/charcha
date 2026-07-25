@@ -24,11 +24,24 @@
 // detail. Until then the address is stored and unused, which is the conservative
 // direction.
 //
-// **And nothing about the commenter travels to Resend.** Not their email, not their
-// IP. `CommentCreatedEvent` has no field for either, and src/notify/resend.ts sends
-// four keys and no more. Transmitting a reader's details to a third party is the
-// disclosure that makes spam layer 7 opt-in; a notifier that did it silently would
-// be worse than that layer, not better.
+// ## What reaches Resend, stated exactly
+//
+// Enabling this **does** transmit reader-authored content to a third party, and the
+// site owner owes their readers that disclosure — so it is written here precisely
+// rather than reassuringly:
+//
+//   - **Sent:** the commenter's display name and an excerpt of their comment body,
+//     inside the email, to Resend. Unavoidable — a notification with no content is
+//     one the owner must open the dashboard to understand, for every comment
+//     including the obvious spam.
+//   - **Not sent:** the commenter's email address, anything derived from their IP,
+//     and the absolute URL they reported. `CommentCreatedEvent` has no field for any
+//     of the three, and src/notify/resend.ts builds a four-key payload with no
+//     `reply_to`, `cc`, `bcc`, `headers` or `tags`.
+//
+// That split is the point. Spam layer 7 is opt-in and off by default because it
+// sends commenter IP, email *and* content; this sends the least of that set which
+// still does the job, and it is off by default for the same reason.
 //
 // Enforced by test/worker/notify/notifier.test.ts and
 // test/worker/notify/pipeline-seam.test.ts.
@@ -37,19 +50,31 @@ import type { CommentStatus } from '../db'
 // `announceOnce` lives under src/spam because that is where it was first needed, but
 // it is generic isolate-scoped observability and src/admin already reuses it from
 // two files. Its dedupe set is shared across callers, so the key is namespaced.
+// `announceOnce` lives under src/spam because that is where it was first needed, but
+// it is generic isolate-scoped observability and src/admin already reuses it from two
+// files. Its dedupe set is shared across callers, so the keys here are namespaced.
 import { announceOnce } from '../spam/log'
 import type { NotifyEnv } from './env'
 import { buildOwnerNotification } from './message'
 import { sendEmail } from './resend'
-import { NOTIFY_BURST, sendBudget } from './throttle'
+import { sendBudget } from './throttle'
 import type { SendBudget } from './throttle'
 
 /**
  * What the pipeline tells the notifier about a comment it just stored.
  *
- * **Deliberately missing `authorEmail` and any IP-derived value**, in the same
- * spirit as `RenderableComment` in src/db/index.ts: the field does not exist, so no
- * mistake downstream can put a reader's address in an outbound HTTP request.
+ * Three fields are **deliberately absent**, in the same spirit as
+ * `RenderableComment` in src/db/index.ts — the field does not exist, so no mistake
+ * downstream can send it:
+ *
+ *   - `authorEmail`, so a reader's address cannot reach a third party.
+ *   - any IP-derived value, for the same reason.
+ *   - `pageUrl`, because the origin in it is attacker-chosen. `derivePageKey` drops
+ *     the origin from a thread's identity, so a submission reporting
+ *     `https://evil.example/notes/leaving` lands on the real `/notes/leaving` thread;
+ *     carrying that URL into an email the owner's own domain signed would make this a
+ *     phishing relay. `pageKey` is enough to say which page. Found in review.
+ *
  * Enforced by test/worker/notify/pipeline-seam.test.ts.
  */
 export interface CommentCreatedEvent {
@@ -58,8 +83,8 @@ export interface CommentCreatedEvent {
   authorName: string
   /** Untrusted, unmoderated, and up to 10,000 characters. Quoted and capped. */
   body: string
+  /** Worker-derived path and query, never an absolute URL. See src/page-key.ts. */
   pageKey: string
-  pageUrl: string | null
   status: CommentStatus
 }
 
@@ -164,7 +189,6 @@ export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}
               event: 'notify_send',
               ok: false,
               reason: 'rate-limited',
-              burst: NOTIFY_BURST,
               commentId: event.commentId,
             }),
           )
@@ -184,12 +208,39 @@ export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}
           { apiKey, fetch: overrides.fetch, timeoutMs: overrides.timeoutMs },
         )
 
+        if (!outcome.ok) {
+          // The digest count goes back, because this email did not carry it. Without
+          // this, the suppressed comments vanish from every later email while the log
+          // claims they were covered. See SendBudget.restore.
+          //
+          // `+ 1` for the comment this send was *for*, which is now unreported too —
+          // restoring only the suppressed count would silently drop it, which is the
+          // same bug one comment smaller.
+          budget.restore(granted.suppressed + 1)
+
+          // A rejected key (401) or an unverified sending domain (403) is a *config*
+          // failure rather than a delivery failure: it will fail identically for every
+          // comment until the owner changes something, and it is the one thing they
+          // need told. Announced once per isolate on its own key, exactly as
+          // src/spam/turnstile.ts splits `invalid-input-secret` out from the codes an
+          // attacker can provoke — a shared key would let a transient 429 suppress the
+          // announcement that matters for the life of the isolate.
+          if (outcome.reason === 'http-401' || outcome.reason === 'http-403') {
+            announceOnce('notify-credential-rejected', {
+              event: 'notify_config',
+              enabled: true,
+              problem: `Resend rejected the request (${outcome.reason}): check RESEND_API_KEY, and that CHARCHA_NOTIFY_FROM is on a domain verified in that Resend account`,
+            })
+          }
+        }
+
         // Reported either way, and never re-thrown. #14 wants delivery failures
         // surfaced in the dashboard rather than swallowed; that needs somewhere to
         // store them, which is #128. Until then this is the record, and it carries
         // no comment body, no author name and no address — the same rule
         // src/spam/log.ts holds itself to, for the same reason: a log line is not
         // covered by the retention sweep and cannot be deleted from the dashboard.
+        // Enforced by test/worker/notify/notifier.test.ts.
         console[outcome.ok ? 'log' : 'error'](
           JSON.stringify({
             event: 'notify_send',

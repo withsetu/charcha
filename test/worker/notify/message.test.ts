@@ -8,11 +8,32 @@ import type { CommentCreatedEvent } from '../../../src/notify'
 import {
   MAX_EXCERPT_LENGTH,
   MAX_ONE_LINE_LENGTH,
-  MAX_URL_LINE_LENGTH,
   buildOwnerNotification,
   oneLine,
   quoteBlock,
 } from '../../../src/notify/message'
+
+/**
+ * One codepoint per class the sanitiser names: bell, ESC, DEL, NEL (C1, and NOT
+ * matched by JavaScript's \s, so only the character filter removes it), both Unicode
+ * line separators, a bidi override, a bidi isolate, and a zero-width space.
+ */
+const FORBIDDEN = [
+  '\u0007',
+  '\u001b',
+  '\u007f',
+  '\u0085',
+  '\u2028',
+  '\u2029',
+  '\u202e',
+  '\u2066',
+  '\u200b',
+]
+
+/** Whichever of FORBIDDEN survived into the email. */
+function survivors(text: string): string[] {
+  return [...text].filter((character) => FORBIDDEN.includes(character))
+}
 
 function eventFor(overrides: Partial<CommentCreatedEvent> = {}): CommentCreatedEvent {
   return {
@@ -20,7 +41,6 @@ function eventFor(overrides: Partial<CommentCreatedEvent> = {}): CommentCreatedE
     authorName: 'Rahul Kanwar',
     body: 'The part people underestimate is the export.',
     pageKey: '/notes/leaving',
-    pageUrl: 'https://maya.build/notes/leaving',
     status: 'pending',
     ...overrides,
   }
@@ -102,16 +122,14 @@ describe('the comment body in the email', () => {
     expect(text.length).toBeLessThan(MAX_EXCERPT_LENGTH * 2)
   })
 
-  it('normalises CRLF and strips control characters', () => {
-    const { text } = buildOwnerNotification(eventFor({ body: 'one\r\ntwo\u0000three\u001bfour' }))
+  it('normalises CRLF and strips every class of invisible character', () => {
+    const { text } = buildOwnerNotification(
+      eventFor({ body: `one\r\ntwo${FORBIDDEN.join('')}three` }),
+    )
 
-    const survivors = [...text].filter((character) => {
-      const code = character.charCodeAt(0)
-      return code < 32 && character !== '\n'
-    })
-    expect(survivors).toEqual([])
+    expect(survivors(text)).toEqual([])
     expect(text).toContain('> one')
-    expect(text).toContain('> twothreefour')
+    expect(text).toContain('> twothree')
   })
 
   it('collapses a wall of blank lines, which is how a body pushes text out of view', () => {
@@ -139,18 +157,35 @@ describe('the untrusted single-line fields', () => {
     const { text } = buildOwnerNotification(eventFor())
 
     expect(text).toContain('From: Rahul Kanwar')
-    expect(text).toContain('/notes/leaving')
-    expect(text).toContain('https://maya.build/notes/leaving')
+    expect(text).toContain('Page: /notes/leaving')
   })
 
-  it('does not shorten the page URL into a broken link', () => {
-    // A URL is the one field in this email that exists to be clicked, so it keeps
-    // the cap it already passed in src/page-key.ts rather than the single-line cap.
-    const long = `https://maya.build/notes/${'a'.repeat(MAX_ONE_LINE_LENGTH * 2)}`
-    const { text } = buildOwnerNotification(eventFor({ pageUrl: long }))
+  it('strips invisible characters from a single-line field too', () => {
+    // Not only from the quoted body. Without this an author name carrying an ANSI
+    // escape reaches an owner reading mail in a terminal client, and a bidi override
+    // makes the `From:` line render as something other than what is stored.
+    expect(oneLine(`a${FORBIDDEN.join('')}b`)).toBe('ab')
 
-    expect(text).toContain(long)
-    expect(long.length).toBeLessThanOrEqual(MAX_URL_LINE_LENGTH)
+    const { text } = buildOwnerNotification(
+      eventFor({ authorName: `Rahul${FORBIDDEN.join('')}Kanwar` }),
+    )
+    expect(survivors(text)).toEqual([])
+    expect(text).toContain('From: RahulKanwar')
+  })
+
+  it('does not leave a double space where an invisible character was removed', () => {
+    expect(oneLine('A \u0000 B')).toBe('A B')
+  })
+
+  it('carries no absolute URL at all, because the origin in one is attacker-chosen', () => {
+    // `derivePageKey` drops the origin from a thread key — "the origin is not
+    // identity", src/page-key.ts — so a submission reporting a foreign origin lands
+    // on the real thread. Printing it as the page to click would have the owner’s
+    // own sending domain sign a phishing link. The event has no field for it.
+    const { text } = buildOwnerNotification(eventFor())
+
+    expect(text).not.toMatch(/https?:/)
+    expect(text).toContain('Page: /notes/leaving')
   })
 })
 

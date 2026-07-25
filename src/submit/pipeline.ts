@@ -172,7 +172,7 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
   // spam flood the layers stopped costs zero emails and zero of the owner's Resend
   // quota — the cheapest flood control there is, and it comes free from where this
   // line sits. Enforced by test/worker/notify/pipeline-seam.test.ts.
-  notifyOwner(stored, key.pageKey, key.pageUrl, comment.authorName, deps)
+  notifyOwner(stored, key.pageKey, comment.authorName, deps)
 
   const html = renderSingle(stored, deps.strings)
   return stored.status === 'approved'
@@ -191,13 +191,19 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
  * comment is already committed by this point, so a notifier bug turning a stored
  * comment into a 500 would tell the reader their comment was lost when it was not.
  *
- * The commenter's email is deliberately not passed, and is not on the event type.
+ * Two things are deliberately not passed and have no field on the event type: the
+ * commenter's email, and `key.pageUrl` — whose origin is attacker-chosen, because
+ * `derivePageKey` drops the origin from a thread's identity. See src/notify/index.ts.
+ *
+ * `commentCreated` is called before `defer` receives its promise, so a throwing
+ * `defer` leaves that promise unattended. That is safe only because the contract says
+ * it cannot reject — the one place here that leans on the contract rather than
+ * checking it — and src/notify/index.ts makes it total with its own catch.
  * Enforced by test/worker/notify/pipeline-seam.test.ts.
  */
 function notifyOwner(
   stored: StoredComment,
   pageKey: string,
-  pageUrl: string | null,
   authorName: string,
   deps: SubmitDeps,
 ): void {
@@ -211,7 +217,6 @@ function notifyOwner(
         authorName,
         body: stored.body,
         pageKey,
-        pageUrl,
         status: stored.status,
       }),
     )

@@ -20,7 +20,6 @@ function eventFor(overrides: Partial<CommentCreatedEvent> = {}): CommentCreatedE
     authorName: 'Rahul Kanwar',
     body: 'The part people underestimate is the export.',
     pageKey: '/notes/leaving',
-    pageUrl: 'https://maya.build/notes/leaving',
     status: 'pending',
     ...overrides,
   }
@@ -180,6 +179,49 @@ describe('flood control — a spam burst must not become a mail flood', () => {
     expect(bodies.at(-1)?.subject).toBe('New comment awaiting moderation (+7 more)')
   })
 
+  it('does not lose the digest count when the email carrying it failed to send', async () => {
+    // `take` clears the counter and hands it over, so a send that then 429s — the
+    // failure src/notify/resend.ts calls the most likely one — would drop those
+    // comments from every later email while the log claimed they were covered. Found
+    // in review. The count owed back is the suppressed ones *plus* the comment this
+    // send was for, which is now unreported too.
+    const bodies: Record<string, unknown>[] = []
+    let failNext = true
+    const fetchImpl: typeof fetch = (_input, request) => {
+      const sent = typeof request?.body === 'string' ? request.body : '{}'
+      bodies.push(JSON.parse(sent) as Record<string, unknown>)
+      if (failNext) {
+        failNext = false
+        return Promise.resolve(new Response('nope', { status: 429 }))
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 'sent' }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }
+
+    const time = clock()
+    const budget = sendBudget({ capacity: 1, refillIntervalMs: 1_000 })
+    const notifier = createNotifier(CONFIGURED, { fetch: fetchImpl, budget, now: time.now })
+
+    // The first send fails. Nothing was suppressed before it, so it owes 1.
+    await notifier.commentCreated(eventFor({ commentId: 1 }))
+    expect(bodies).toHaveLength(1)
+
+    // Two more arrive while the bucket is empty.
+    await notifier.commentCreated(eventFor({ commentId: 2 }))
+    await notifier.commentCreated(eventFor({ commentId: 3 }))
+
+    // The next email must account for all three: the one whose send failed, and the
+    // two the empty bucket dropped.
+    time.advance(1_000)
+    await notifier.commentCreated(eventFor({ commentId: 4 }))
+
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1]?.subject).toBe('New comment awaiting moderation (+3 more)')
+  })
+
   it('refills over time, so a quiet site is never throttled', async () => {
     const { bodies, fetchImpl } = recorder()
     const time = clock()
@@ -195,6 +237,25 @@ describe('flood control — a spam burst must not become a mail flood', () => {
     }
 
     expect(bodies).toHaveLength(30)
+  })
+})
+
+describe('the budget shared by every request in an isolate', () => {
+  it('is the same budget across separately built notifiers', async () => {
+    // `createNotifier` runs on every submission, so a bucket owned by the returned
+    // object would be full on every request and would bound nothing — the inert-guard
+    // failure this project has shipped before (#65). Every other test here injects
+    // its own budget, so this is the only one that exercises the module-scope default
+    // and the only one that would notice it becoming per-instance.
+    const { bodies, fetchImpl } = recorder()
+
+    for (let i = 0; i < NOTIFY_BURST + 10; i += 1) {
+      await createNotifier(CONFIGURED, { fetch: fetchImpl }).commentCreated(
+        eventFor({ commentId: i }),
+      )
+    }
+
+    expect(bodies.length).toBeLessThanOrEqual(NOTIFY_BURST)
   })
 })
 
@@ -214,9 +275,66 @@ describe('the budget, on its own', () => {
   })
 
   it('does not refill when the clock goes backwards', () => {
-    const budget = sendBudget({ capacity: 1, refillIntervalMs: 1_000 })
+    // Capacity 3 rather than 1, deliberately. With capacity 1 the bucket is already
+    // empty by the backwards call, so `toBeNull()` held whether or not the refill was
+    // guarded, and the test proved nothing — found in review.
+    const budget = sendBudget({ capacity: 3, refillIntervalMs: 1_000 })
 
     expect(budget.take(10_000)).not.toBeNull()
+    // Still granted: a backwards clock must neither credit tokens nor destroy them.
+    expect(budget.take(0)).not.toBeNull()
+    expect(budget.take(0)).not.toBeNull()
     expect(budget.take(0)).toBeNull()
+
+    // And `lastRefillMs` survived the excursion, so refilling still works on time.
+    expect(budget.take(11_000)).not.toBeNull()
+  })
+
+  it('gives a suppressed count back when the send it was handed to failed', () => {
+    const budget = sendBudget({ capacity: 1, refillIntervalMs: 1_000 })
+
+    expect(budget.take(0)).toEqual({ suppressed: 0 })
+    expect(budget.take(0)).toBeNull()
+    expect(budget.take(0)).toBeNull()
+
+    // Two were suppressed; the next grant covers them.
+    const granted = budget.take(1_000)
+    expect(granted).toEqual({ suppressed: 2 })
+
+    // That send failed, so the count is owed to a later email rather than lost.
+    budget.restore(granted?.suppressed ?? 0)
+    expect(budget.take(2_000)).toEqual({ suppressed: 2 })
+  })
+})
+
+describe('what the log line says, and what it must never say', () => {
+  it('records a failed send without the comment body, the author name or an address', async () => {
+    // A log line is not covered by the `ip_hash` retention sweep (#19) and cannot be
+    // deleted from the dashboard, so it holds itself to the same rule src/spam/log.ts
+    // does. Asserted rather than asserted-in-a-comment.
+    const lines: string[] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '))
+    }
+    try {
+      await createNotifier(CONFIGURED, {
+        fetch: () => Promise.resolve(new Response('nope', { status: 500 })),
+        budget: sendBudget(),
+      }).commentCreated(
+        eventFor({ authorName: 'Rahul Kanwar', body: 'The part people underestimate' }),
+      )
+    } finally {
+      console.error = original
+    }
+
+    const logged = lines.join('\n')
+    expect(logged).toContain('notify_send')
+    expect(logged).toContain('http-500')
+    expect(logged).toContain('412')
+    expect(logged).not.toContain('Rahul')
+    expect(logged).not.toContain('underestimate')
+    expect(logged).not.toContain('maya@maya.build')
+    expect(logged).not.toContain(CONFIGURED.RESEND_API_KEY)
   })
 })
