@@ -896,6 +896,19 @@ export type DatabaseStatus = 'ready' | 'unmigrated' | 'unreachable'
  * Whether this deployment's D1 binding points at a database with Charcha's schema in
  * it, as one statement (#140).
  *
+ * **Nothing calls this today.** It was written for the status readout on `/`, and #145
+ * removed that readout — a public, unauthenticated address must not tell a stranger
+ * that a deployment is half-broken. It is kept rather than deleted because
+ * [#141](https://github.com/withsetu/charcha/issues/141) is the issue for finding it a
+ * caller: `/health` answers `ok` today on precisely the database this function exists
+ * to distinguish, which is the failure it was written for.
+ *
+ * **That is a candidate, not a decision.** `/health` is public and unauthenticated too,
+ * so adopting this there discloses the same "half-broken" fact #145 just took off `/`,
+ * and #141 reserves that call explicitly rather than treating it as a consequence of
+ * reusing the helper. Whoever closes #141 makes it; this comment must not be read as
+ * having made it for them.
+ *
  * **It asks `sqlite_master` for a table rather than running `select 1`, and that is
  * the whole point of it.** `select 1` proves the binding resolves and nothing else: a
  * Worker published against the database Cloudflare created and never migrated answers
@@ -903,13 +916,14 @@ export type DatabaseStatus = 'ready' | 'unmigrated' | 'unreachable'
  * the deploy button creates the database and leaves migrating it to the repository's
  * own `deploy` script, and `wrangler d1 migrations apply` exits non-zero with no
  * useful output when its token lacks D1 (workers-sdk#5077). "Migrated" and "reachable"
- * are therefore different questions, and a status page that could only answer the
- * second would report a green light on the exact failure it exists to catch.
+ * are therefore different questions, and a check that could only answer the second
+ * would report a green light on the exact failure it exists to catch.
  *
  * `comments` is the table it looks for because it is the one this project cannot
  * function without and the one migration 0001 creates. The query reads a row of
- * SQLite's own schema table and no application data at all, which is what keeps it
- * safe to run from a public, unauthenticated page.
+ * SQLite's own schema table and no application data at all — which bounds what a
+ * caller can leak to the reading of one word, and leaves the decision about whether
+ * even that word is public to whoever calls it.
  * Enforced by test/worker/db/database-status.test.ts.
  */
 export const DATABASE_STATUS_SQL = `select 1 as present

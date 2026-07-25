@@ -1,4 +1,8 @@
-// The check behind the status page at `/` (#140), and the reason it is not `select 1`.
+// The migration check written for the status readout on `/` (#140), and the reason it
+// is not `select 1`. That readout is gone — #145 took it off a public address — and the
+// check is kept for #141, which gives it to `/health`. These tests are what keep it
+// honest in the meantime, so that the endpoint adopting it inherits something proven
+// rather than something merely still compiling.
 
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
