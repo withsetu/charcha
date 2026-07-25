@@ -66,6 +66,7 @@ describe('the embed class-name contract', () => {
       'charcha-textarea',
       'charcha-hint',
       'charcha-error',
+      'charcha-turnstile',
       'charcha-actions',
       'charcha-submit',
     ])
@@ -261,6 +262,32 @@ describe('the composer is a real form', () => {
 
     const textarea = elements.find((element) => element.tag === 'textarea')
     expect(textarea?.attributes['aria-describedby']).toContain(error?.attributes['id'] ?? '')
+  })
+})
+
+describe('where the Turnstile widget goes', () => {
+  it('gives the composer a container of its own, inside the form', async () => {
+    // Inside the form and not beside it, so that a widget mounted as a reply carries
+    // its challenge with it — the composer is one live element that moves (#5).
+    const elements = await parseElements(composerMarkup('c1'))
+    expect(elements.some((element) => element.attributes['class'] === 'charcha-turnstile')).toBe(
+      true,
+    )
+  })
+
+  it('sits between the error and the Post button, where the reader is looking', () => {
+    // An interactive challenge appears here, immediately above the action it gates.
+    // Anywhere further up and a reader who has to click something never sees it.
+    const html = composerMarkup('c1')
+    expect(html.indexOf('charcha-turnstile')).toBeGreaterThan(html.indexOf('charcha-error'))
+    expect(html.indexOf('charcha-turnstile')).toBeLessThan(html.indexOf('charcha-actions'))
+  })
+
+  it('carries no sitekey of its own, because nothing owner-supplied reaches markup', () => {
+    // The sitekey is public, so this is not about secrecy. It is that markup.ts is
+    // entirely literal, and that is the property which lets mount.ts write it with
+    // innerHTML at all. The sitekey travels as a JS argument to turnstile.render.
+    expect(composerMarkup('c1')).not.toContain('sitekey')
   })
 })
 

@@ -30,6 +30,8 @@ import {
 } from './markup'
 import { stylesheet } from './styles'
 import { TOOLBAR_ITEMS, applyWrap } from './toolbar'
+import { TURNSTILE_ONLOAD_GLOBAL, createTurnstileGate, turnstileScriptUrl } from './turnstile'
+import type { TurnstileApi, TurnstileGate } from './turnstile'
 
 const LOADING = 'Loading comments…'
 const READ_FAILED = 'Comments could not be loaded.'
@@ -93,6 +95,13 @@ interface Widget {
    */
   openedAt: number
   submitting: boolean
+  /**
+   * The Turnstile widget's lifecycle, or null when the owner configured no sitekey.
+   *
+   * Null is the common case and costs nothing: with no sitekey, Cloudflare's script
+   * is never fetched and this widget behaves exactly as it did before #79.
+   */
+  turnstile: TurnstileGate | null
 }
 
 /* -------------------------------------------------------------------------- */
@@ -220,7 +229,12 @@ function clearWriteError(widget: Widget): void {
  * The markup inserted here is the Worker's answer to the POST: the same renderer,
  * the same escaping, the same output the page will show once it is approved.
  */
-function insertOwnComment(widget: Widget, html: string, pending: boolean): void {
+function insertOwnComment(
+  widget: Widget,
+  html: string,
+  pending: boolean,
+  parentId: number | null,
+): void {
   const comment = fragment(html).querySelector<HTMLElement>('.charcha-comment')
   if (comment === null) return
 
@@ -229,8 +243,10 @@ function insertOwnComment(widget: Widget, html: string, pending: boolean): void 
     header.appendChild(fragment(pendingBadgeMarkup()))
   }
 
-  if (widget.parentId !== null) {
-    const parent = widget.thread.querySelector(`#charcha-comment-${widget.parentId}`)
+  // The `parentId` the submission was built with, not whatever the widget's is now:
+  // the reader may have opened a different reply while the post was in flight.
+  if (parentId !== null) {
+    const parent = widget.thread.querySelector(`#charcha-comment-${parentId}`)
     if (parent !== null) {
       let replies = parent.querySelector(':scope > .charcha-replies')
       if (replies === null) {
@@ -272,9 +288,128 @@ function insertOwnComment(widget: Widget, html: string, pending: boolean): void 
  * injects an input under this exact name — the name is theirs, not ours, which is
  * why the form can be serialised without renaming anything.
  */
-function readTurnstileToken(): string | null {
-  const input = document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]')
+function readTurnstileToken(form: ParentNode): string | null {
+  // This widget's own form first, then the page. The document-wide search is what
+  // makes the arrangement that worked before #79 keep working — an owner who placed
+  // Cloudflare's widget themselves put it *outside* Charcha's form, because until
+  // now there was nowhere inside it to put one. The narrower search goes first so
+  // that on a page with two widgets, a Charcha-rendered input is never read by the
+  // other instance: a token sent twice is `timeout-or-duplicate`, which is a reject.
+  const input =
+    form.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]') ??
+    document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]')
   return input === null || input.value === '' ? null : input.value
+}
+
+/**
+ * Cloudflare's script, fetched at most once per page and only when a sitekey is set.
+ *
+ * It is the only third-party request Charcha ever makes from a reader's browser, so
+ * it is behind the owner's own configuration and nothing loads it speculatively
+ * (#79). A page with two widgets shares the one script and the one promise.
+ */
+let turnstileScript: Promise<TurnstileApi> | null = null
+
+function loadedTurnstile(): TurnstileApi | null {
+  return (window as unknown as { turnstile?: TurnstileApi }).turnstile ?? null
+}
+
+function loadTurnstile(): Promise<TurnstileApi> {
+  if (turnstileScript !== null) return turnstileScript
+
+  turnstileScript = new Promise<TurnstileApi>((resolve, reject) => {
+    // An owner who already placed Cloudflare's own script keeps it: `render` works
+    // the same whether or not the script was asked for explicit rendering, and
+    // loading a second copy is how two widgets end up fighting over one page.
+    const already = loadedTurnstile()
+    if (already !== null) {
+      resolve(already)
+      return
+    }
+
+    const host = window as unknown as Record<string, unknown>
+    // Both exits drop the global first, including the failure exit — otherwise the
+    // likeliest ending of all, a host CSP refusing the origin, is the one that
+    // leaves a name of ours on somebody else's page forever.
+    const done = (api: TurnstileApi): void => {
+      delete host[TURNSTILE_ONLOAD_GLOBAL]
+      resolve(api)
+    }
+    const failed = (reason: string): void => {
+      delete host[TURNSTILE_ONLOAD_GLOBAL]
+      reject(new Error(reason))
+    }
+
+    // Cloudflare's documented signal for an async script: api.js calls this once it
+    // is initialised. It has to exist before the script does.
+    host[TURNSTILE_ONLOAD_GLOBAL] = (): void => {
+      const api = loadedTurnstile()
+      if (api === null) failed('onload fired but defined no turnstile')
+      else done(api)
+    }
+
+    const script = document.createElement('script')
+    script.src = turnstileScriptUrl(TURNSTILE_ONLOAD_GLOBAL)
+    script.async = true
+    script.defer = true
+    // A backstop, so a build of api.js that stopped calling `onload` would cost a
+    // widget rather than leave the promise pending. It must **not** settle when the
+    // API is not there yet: doing so would delete the callback api.js is about to
+    // invoke and fail the load for a script that was working perfectly.
+    script.addEventListener('load', () => {
+      const api = loadedTurnstile()
+      if (api !== null) done(api)
+    })
+    // Fires for a network failure and for a host CSP that refuses the origin, which
+    // is the likeliest way this ends on a site careful enough to have one.
+    script.addEventListener('error', () => {
+      failed('script blocked or unreachable')
+    })
+    document.head.appendChild(script)
+  })
+
+  return turnstileScript
+}
+
+/**
+ * Starts the widget for one composer, if the owner configured a sitekey.
+ *
+ * The rejection is handled rather than logged and forgotten: a promise that only
+ * reaches the console leaves the gate waiting for a token that is never coming, and
+ * every submission would then sit through the full wait before posting anyway.
+ */
+function startTurnstile(widget: Widget, sitekey: string): TurnstileGate {
+  const container = requireElement<HTMLElement>(widget.form, '.charcha-turnstile')
+  const gate = createTurnstileGate({ container, sitekey })
+  loadTurnstile().then(
+    (api) => {
+      gate.start(api)
+    },
+    (error: unknown) => {
+      gate.giveUp(String(error))
+    },
+  )
+  return gate
+}
+
+/**
+ * The token this submission should carry, or null for none.
+ *
+ * **Nothing here gates anything.** When Turnstile is configured this waits, briefly,
+ * for a token that is on its way — which is the whole of #79's second half, because
+ * a token that arrives a moment after the reader pressed Post is a real comment
+ * refused as spam. When no token can be had it posts without one and lets the server
+ * decide: src/spam/turnstile.ts rejects a token-less submission when the owner set a
+ * secret and abstains entirely when they did not, so a half-configured deployment
+ * still takes comments rather than being bricked by the embed's own opinion. The
+ * gate's half of that is enforced by test/worker/embed/turnstile.test.ts; the branch
+ * below is wiring, and is covered by driving it rather than by a test.
+ */
+async function turnstileToken(widget: Widget): Promise<string | null> {
+  // No managed widget: the owner may still have placed one themselves, which is the
+  // transport-only arrangement that worked before #79 and still does.
+  if (widget.turnstile === null) return readTurnstileToken(widget.form)
+  return widget.turnstile.token()
 }
 
 async function submit(widget: Widget): Promise<void> {
@@ -286,22 +421,36 @@ async function submit(widget: Widget): Promise<void> {
   widget.submit.textContent = POSTING
   clearWriteError(widget)
 
+  // Everything the submission is made of, read in the same tick the reader pressed
+  // Post — because the token wait below is the first `await` this function has ever
+  // had, and the Reply listener stays live across it. Without the snapshot, a reader
+  // who clicks Reply while their own comment is in flight has `parentId` change
+  // underneath it, and a root comment silently becomes a reply to someone else.
+  const submission = {
+    body: widget.body.value,
+    authorName: widget.name.value,
+    authorEmail: widget.email.value,
+    parentId: widget.parentId,
+    pageUrl: location.href,
+    thread: widget.config.thread,
+    title: document.title,
+  }
+
   try {
+    // Before the POST, not inside it: a token that is seconds from arriving is worth
+    // waiting for. The elapsed duration is measured after the wait, which can only
+    // make `t` larger and so can only help against layer 2's floor.
+    const token = await turnstileToken(widget)
+
     const response = await fetch(submitUrl(widget.config.api), {
       method: 'POST',
       credentials: 'omit',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(
         submissionBody({
-          body: widget.body.value,
-          authorName: widget.name.value,
-          authorEmail: widget.email.value,
-          parentId: widget.parentId,
-          pageUrl: location.href,
-          thread: widget.config.thread,
-          title: document.title,
+          ...submission,
           elapsedMs: performance.now() - widget.openedAt,
-          turnstileToken: readTurnstileToken(),
+          turnstileToken: token,
         }),
       ),
     })
@@ -311,7 +460,7 @@ async function submit(widget: Widget): Promise<void> {
     // failure — so the embed never has to guess what happened from prose.
     if (response.status === 201 || response.status === 202) {
       const pending = response.status === 202
-      insertOwnComment(widget, await response.text(), pending)
+      insertOwnComment(widget, await response.text(), pending, submission.parentId)
       // The body clears; the name and the email do not, so a reader posting twice
       // does not type them twice. Nothing is written anywhere — close the tab and
       // it is gone (card rule 8).
@@ -484,6 +633,14 @@ export function mountWidget(element: HTMLElement, config: EmbedConfig, index: nu
     parentId: null,
     openedAt: performance.now(),
     submitting: false,
+    turnstile: null,
+  }
+
+  // Started before the comments are fetched, so the challenge is running while the
+  // reader is still reading the thread. A token minted then is already waiting by
+  // the time they have written anything.
+  if (config.turnstileSitekey !== null) {
+    widget.turnstile = startTurnstile(widget, config.turnstileSitekey)
   }
 
   wire(widget)

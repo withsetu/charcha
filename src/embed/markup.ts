@@ -49,6 +49,7 @@ export const EMBED_CLASS_NAMES = [
   'charcha-textarea',
   'charcha-hint',
   'charcha-error',
+  'charcha-turnstile',
   'charcha-actions',
   'charcha-submit',
 ] as const
@@ -158,6 +159,12 @@ export function composerMarkup(prefix: string): string {
     // Hidden until there is something to say. An empty alert region announced on
     // load is noise, and an always-present empty node reads as a rendering bug.
     `<p class="charcha-error" id="${id.error}" role="alert" hidden></p>` +
+    // Where Cloudflare's widget is rendered, when the owner configured one (#79).
+    // Always present and almost always empty: it costs one element, and building it
+    // conditionally would put a second markup path in the file whose whole value is
+    // that it has none. It is inside the form so that it travels with the composer
+    // when the composer moves under a comment to become a reply.
+    `<div class="charcha-turnstile"></div>` +
     `<div class="charcha-actions">` +
     `<button type="submit" class="charcha-submit">Post comment</button>` +
     `</div>` +

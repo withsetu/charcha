@@ -182,6 +182,11 @@ function base(): string {
 .charcha-submit{padding:.55em 1.1em;border-color:currentColor;font-size:1em;font-weight:600}
 .charcha-submit[disabled]{cursor:default;opacity:.6}
 
+/* Styled on the iframe rather than on the container, so that the space exists only
+   when there is a widget to occupy it. With appearance:interaction-only the common
+   case is a container holding nothing a reader can see, and a permanent margin there
+   would be a gap in every composer on every page. */
+.charcha-turnstile iframe{margin-top:var(--cc-pad);max-width:100%}
 .charcha-error{margin:var(--cc-pad) 0 0;padding-inline-start:var(--cc-pad);border-inline-start:3px solid currentColor;font-weight:600}
 .charcha-actions{display:flex;justify-content:flex-end;margin-top:var(--cc-pad)}
 `.trim()

@@ -17,7 +17,10 @@ readers in order to comment.
   login.
 - **No cookies, ever** — nothing is stored in the reader's browser at all, so a site
   using Charcha has nothing new to disclose. Not a default that can be switched:
-  anything that appears to need reader-side storage needs a different design.
+  anything that appears to need reader-side storage needs a different design. The one
+  thing that can put a third party in the page is Cloudflare Turnstile, which is off
+  until you configure it and is [documented plainly](docs/theming.md#turnstile) when
+  you do.
 - **Invisible on the page** — the widget inherits the host site's typography and
   colours, including dark mode.
 - **Spam defence that runs locally** — layered heuristics and an on-device
@@ -31,7 +34,7 @@ readers in order to comment.
 <script src="https://your-worker.example.workers.dev/embed.js" defer></script>
 ```
 
-That is the whole integration. `embed.js` is under 6 KB gzipped, ships no framework
+That is the whole integration. `embed.js` is under 7 KB gzipped, ships no framework
 and no Markdown parser, and is served as a static asset so it costs your deployment
 nothing against the Cloudflare request budget. [Theming](docs/theming.md) covers the
 attributes, the class names and the three styling modes.
