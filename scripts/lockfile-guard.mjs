@@ -100,6 +100,38 @@ async function exists(path) {
 }
 
 /**
+ * Reads `package.json`'s `packageManager`, keeping "the file did not parse" and
+ * "the field is not there" as two different answers rather than one `null` (#75).
+ *
+ * `unreadable` is the failure text when the file could not be read, parsed, or
+ * indexed for the field, and `null` otherwise — so the caller can tell an
+ * unanswerable question from an answer of "no field", and say which.
+ *
+ * The top-level type check is the third route to the same misdiagnosis, and the
+ * one `JSON.parse` does not raise for us: reading `.packageManager` off a string
+ * or a number yields `undefined`, which would make a structurally broken file
+ * look like a repository that merely forgot the field.
+ *
+ * @param {string} cwd
+ * @returns {Promise<{ declared: string | null, unreadable: string | null }>}
+ */
+async function readDeclaredPackageManager(cwd) {
+  let contents
+  try {
+    contents = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8'))
+  } catch (error) {
+    return { declared: null, unreadable: error instanceof Error ? error.message : String(error) }
+  }
+
+  if (typeof contents !== 'object' || contents === null || Array.isArray(contents)) {
+    const kind = contents === null ? 'null' : Array.isArray(contents) ? 'an array' : typeof contents
+    return { declared: null, unreadable: `its top level is ${kind}, not an object` }
+  }
+
+  return { declared: contents.packageManager ?? null, unreadable: null }
+}
+
+/**
  * @param {{ cwd?: string }} options
  * @returns {Promise<{ ok: boolean, violations: Array<{ status: string, message: string }> }>}
  */
@@ -154,21 +186,32 @@ export async function checkLockfiles({ cwd = process.cwd() } = {}) {
   // lockfile has to stay readable by it. That last part is asserted below
   // against SUPPORTED_PNPM_MAJORS, not merely described here.
   // Source: https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
-  let declared = null
-  try {
-    declared = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')).packageManager ?? null
-  } catch (error) {
-    violations.push({
-      status: 'unreadable-package-json',
-      message: `package.json could not be read: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    })
-  }
-
+  //
+  // `unreadable` is a state of its own rather than `declared = null`, and that is
+  // #75. Collapsed onto the same sentinel, a file that did not parse was
+  // indistinguishable from one that parsed and simply has no `packageManager`, so
+  // the chain below added a second, unfounded violation saying the field was
+  // absent — which is *unknown*, not false, and the count then reported one
+  // problem as two. Somebody hits this after a bad merge conflict, reads "has no
+  // `packageManager` field", and goes looking for a field that is sitting right
+  // there. A guard that misdescribes what it caught is worse than one that says
+  // less, so nothing about the pin is claimed from a file that did not parse.
+  //
+  // The chain is one `else if` ladder for the same reason: the four states are
+  // mutually exclusive, and exactly one of them is reported.
+  // Enforced by test/node/lockfile-guard.test.ts.
+  const { declared, unreadable } = await readDeclaredPackageManager(cwd)
   const pin = declared === null ? null : PNPM_PIN.exec(declared)
 
-  if (declared === null) {
+  if (unreadable !== null) {
+    violations.push({
+      status: 'unreadable-package-json',
+      message:
+        `package.json could not be read, so whether it pins a pnpm version is unknown rather ` +
+        `than absent — fix the file itself before reading anything else here. The failure was: ` +
+        `${unreadable}`,
+    })
+  } else if (declared === null) {
     violations.push({
       status: 'no-package-manager',
       message:
