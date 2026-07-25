@@ -70,6 +70,49 @@ describe('the styling mode', () => {
   })
 })
 
+describe('how the widget learns that Turnstile is configured', () => {
+  it('is off unless the owner named a sitekey, so the third-party script never loads', () => {
+    // Cloudflare's script is a third-party script on somebody else's page, which is
+    // the thing Charcha otherwise avoids entirely. Nothing speculative (#79).
+    const result = readConfig(attrs({}), 'https://c.example/embed.js')
+    expect(result.ok && result.config.turnstileSitekey).toBe(null)
+  })
+
+  it('takes the sitekey from the owner’s own attribute', () => {
+    const result = readConfig(
+      attrs({ 'data-turnstile-sitekey': ' 0x4AAAAAAADnPIDROrmt1Wwj ' }),
+      'https://c.example/embed.js',
+    )
+    expect(result.ok && result.config.turnstileSitekey).toBe('0x4AAAAAAADnPIDROrmt1Wwj')
+  })
+
+  it('treats a blank attribute as not configured', () => {
+    const result = readConfig(
+      attrs({ 'data-turnstile-sitekey': '   ' }),
+      'https://c.example/embed.js',
+    )
+    expect(result.ok && result.config.turnstileSitekey).toBe(null)
+  })
+
+  it('refuses an absurd value rather than handing it to a third party', () => {
+    const result = readConfig(
+      attrs({ 'data-turnstile-sitekey': 'x'.repeat(200) }),
+      'https://c.example/embed.js',
+    )
+    expect(result.ok && result.config.turnstileSitekey).toBe(null)
+  })
+
+  it('does not stop the widget loading when the sitekey is unusable', () => {
+    // Comments are the point; the spam layer is configuration. A bad attribute must
+    // leave a working conversation, not a blank space where one was.
+    const result = readConfig(
+      attrs({ 'data-turnstile-sitekey': 'x'.repeat(200) }),
+      'https://c.example/embed.js',
+    )
+    expect(result.ok).toBe(true)
+  })
+})
+
 describe('the thread override', () => {
   it('is absent by default, so the page address is identity', () => {
     const result = readConfig(attrs({}), 'https://c.example/embed.js')

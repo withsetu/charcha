@@ -26,10 +26,44 @@ from there.
 | `data-thread` | the mount element | Pins the conversation to a slug of your choosing instead of the page's path. Use it when the same conversation appears at more than one address, or when your CDN rewrites paths |
 | `data-api` | the mount element | The deployment address, if it is not where `embed.js` was served from |
 | `data-charcha` | any element | An alternative to `id="charcha"`, for pages that mount more than one widget |
+| `data-turnstile-sitekey` | the mount element | Your [Turnstile](https://developers.cloudflare.com/turnstile/) sitekey. Set it **only** if you also set `TURNSTILE_SECRET_KEY` on the Worker — see below |
 
 `embed.js` is served as a **static asset**, so fetching it costs your deployment nothing
 against the Cloudflare request budget — only the comment read does. It is
-[under 6 KB gzipped](https://github.com/withsetu/charcha/issues/5) and enforced at 10 KB.
+[under 7 KB gzipped](https://github.com/withsetu/charcha/issues/5) and enforced at 10 KB.
+
+## Turnstile
+
+Turnstile is optional and off. With no `TURNSTILE_SECRET_KEY` on the Worker, Charcha
+never checks a token and never makes the call; with no `data-turnstile-sitekey` on the
+page, Cloudflare's script is never fetched. Nothing loads speculatively.
+
+**Set both or neither.** They are two halves of one switch, and setting only the secret
+refuses every comment on the site: the Worker requires a token that nothing on the page
+is producing. The sitekey is public by design — it appears in the page HTML of every
+site that uses Turnstile — so putting it in an attribute discloses nothing.
+
+When it is on, Charcha renders the widget inside its own composer, in
+`interaction-only` mode: most readers never see it, and one who is challenged sees it
+appear directly above the Post button. Tokens are valid for
+[300 seconds and can be used once](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/),
+so the widget refreshes before a comment is posted and again after — a form left open
+for an hour still posts.
+
+**Charcha itself stores nothing in the reader's browser**, with or without this turned
+on — no cookie, no `localStorage`, no `sessionStorage`. That is a claim about Charcha,
+and it is the only one we are in a position to make: Cloudflare's widget is a
+third-party script running in an iframe on `challenges.cloudflare.com`, and what it
+does there is covered by the
+[Turnstile Privacy Addendum](https://www.cloudflare.com/turnstile-privacy-policy/),
+which you should read before turning this on.
+
+One part of it is worth naming because it would land on **your** domain rather than
+Cloudflare's: Turnstile's **pre-clearance** issues a `cf_clearance` cookie.
+[Every widget has it off by default](https://developers.cloudflare.com/turnstile/get-started/pre-clearance/)
+and you would have to switch it on yourself in the Cloudflare dashboard. Charcha's
+no-cookies promise cannot cover a cookie you asked Cloudflare to set. Leave it off, or
+disclose it.
 
 Your deployment must be told which origins may use it, or the browser will refuse every
 response ([#57](https://github.com/withsetu/charcha/issues/57)).

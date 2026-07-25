@@ -18,6 +18,26 @@ export interface EmbedConfig {
   /** The owner's `data-thread` override, or null. Validated by the Worker, not here. */
   thread: string | null
   styles: StylesMode
+  /**
+   * The Turnstile sitekey, or null when the owner has not configured Turnstile (#79).
+   *
+   * **This attribute is how the embed learns Turnstile is on**, and the alternatives
+   * were both worse. A separate config fetch costs a second Worker request on every
+   * page view, and Worker requests — not D1 — are what bound a site on the free tier
+   * (100k/day, the capacity note on #5), so it would halve the ceiling. A flag on the
+   * read response costs nothing extra but puts spam configuration inside the rendered
+   * comment HTML, which is the one payload this project keeps single-purpose: the
+   * v1.1 server-rendering paths emit that same HTML into pages with no embed on them
+   * at all (#1). The attribute costs nothing, is readable before the first network
+   * call, and leaks nothing — a sitekey is public by design and appears in the page
+   * on every Turnstile site there is.
+   *
+   * The price is that the owner sets two things — `TURNSTILE_SECRET_KEY` on the
+   * Worker and this attribute — and setting only the first refuses every comment.
+   * Emitting the snippet with this filled in is #16's, and this is the contract it
+   * fills.
+   */
+  turnstileSitekey: string | null
 }
 
 export type ConfigResult = { ok: true; config: EmbedConfig } | { ok: false; message: string }
@@ -67,6 +87,31 @@ function readStyles(value: string | null): StylesMode {
 }
 
 /**
+ * A bound, not a format check.
+ *
+ * Cloudflare owns what a sitekey looks like, and a second, weaker copy of their rule
+ * here is a thing that drifts — the same reason `data-thread` is passed through for
+ * the Worker to validate. The cap only stops an absurd attribute being handed on
+ * verbatim to a third party's script.
+ * Enforced by test/worker/embed/config.test.ts.
+ */
+const MAX_SITEKEY_LENGTH = 128
+
+function readSitekey(value: string | null): string | null {
+  const sitekey = (value ?? '').trim()
+  if (sitekey === '') return null
+  if (sitekey.length > MAX_SITEKEY_LENGTH) {
+    // Said out loud, because the consequence is out of all proportion to the typo:
+    // with a secret configured on the Worker, a sitekey the embed will not use means
+    // every comment on the site is refused. The server half announces its own
+    // version of this misconfiguration (src/spam/turnstile.ts); this is the other end.
+    console.warn('charcha: data-turnstile-sitekey is too long to be a sitekey; ignoring it')
+    return null
+  }
+  return sitekey
+}
+
+/**
  * Reads the widget's configuration off the mount element.
  *
  * `attribute` is the element's own `getAttribute`, and `scriptSrc` is the `src` of
@@ -96,6 +141,7 @@ export function readConfig(
       api: base,
       thread: thread === '' ? null : thread,
       styles: readStyles(attribute('data-styles')),
+      turnstileSitekey: readSitekey(attribute('data-turnstile-sitekey')),
     },
   }
 }
