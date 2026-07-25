@@ -17,6 +17,7 @@
 import type {
   ApiFailure,
   DecisionStatus,
+  QueueCounts,
   QueuePage,
   QueuedComment,
   SettableStatus,
@@ -85,6 +86,20 @@ export interface QueueState {
    */
   phase: 'loading' | 'ready' | 'failed'
   comments: readonly QueuedComment[]
+  /**
+   * How many comments each view holds, or null before anybody has said (#135).
+   *
+   * **Null and zero are different states and the tabs render them differently**: null
+   * shows no count, `0` shows one. Collapsing them would make a queue nobody has
+   * answered for yet look like a queue that has been cleared — the same confusion
+   * `phase` exists to prevent one level up.
+   *
+   * It is not per-view state. It describes the whole database, so it outlives a view
+   * change, and it is never derived from `comments.length` — the page is capped at 50
+   * (#24) and the count is what the tabs are claiming.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
+  counts: QueueCounts | null
   /** The comment the keyboard is on. An id, not an index, so paging cannot move it. */
   currentId: number | null
   nextCursor: string | null
@@ -115,6 +130,7 @@ export function initialState(view: ViewStatus = 'pending'): QueueState {
     view,
     phase: 'loading',
     comments: [],
+    counts: null,
     currentId: null,
     nextCursor: null,
     more: 'idle',
@@ -140,11 +156,14 @@ export type QueueAction =
   | { type: 'move'; delta: 1 | -1 }
   | { type: 'focus'; id: number }
   | { type: 'decide/start'; id: number; status: DecisionStatus }
-  /** `at` is the caller's clock: the reducer has none, so the undo window is testable. */
-  | { type: 'decide/ok'; id: number; at: number }
+  /**
+   * `at` is the caller's clock: the reducer has none, so the undo window is testable.
+   * `counts` is the server's recount, which the reducer stores and never adjusts.
+   */
+  | { type: 'decide/ok'; id: number; at: number; counts: QueueCounts }
   | { type: 'decide/failed'; id: number; failure: ApiFailure }
   | { type: 'undo/start' }
-  | { type: 'undo/ok' }
+  | { type: 'undo/ok'; counts: QueueCounts }
   | { type: 'undo/failed'; failure: ApiFailure }
   | { type: 'undo/expire' }
   | { type: 'dismiss' }
@@ -264,8 +283,11 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
     case 'view':
       // A view change is a new queue, and everything about the old one goes with it —
       // including a pending undo, which names a row that is no longer on screen.
-      // `helpOpen` survives because the sheet is about the surface, not the queue.
-      return { ...initialState(action.view), helpOpen: state.helpOpen }
+      // `helpOpen` survives because the sheet is about the surface, not the queue, and
+      // `counts` survives because they are the whole database's numbers: dropping them
+      // would blank all three tab badges on every switch and then refill them with the
+      // values that were true throughout.
+      return { ...initialState(action.view), helpOpen: state.helpOpen, counts: state.counts }
 
     case 'load/start':
       return { ...state, phase: 'loading', loadFailure: null, moreFailure: null }
@@ -275,6 +297,7 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
         ...state,
         phase: 'ready',
         comments: action.page.comments,
+        counts: action.page.counts,
         currentId: action.page.comments[0]?.id ?? null,
         nextCursor: action.page.nextCursor,
         loadFailure: null,
@@ -300,6 +323,7 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
         ...state,
         more: 'idle',
         comments,
+        counts: action.page.counts,
         // The current row is named by id, so appending cannot move it. It is only set
         // here when there was nothing to be on.
         currentId: state.currentId ?? comments[0]?.id ?? null,
@@ -350,6 +374,10 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       if (entry === undefined) return state
       return {
         ...state,
+        // The server's recount, stored rather than adjusted: the decision cascades to
+        // the replies under the comment, so `pending - 1` would be wrong by however
+        // many there were. See handleCommentStatus in src/admin/route.ts.
+        counts: action.counts,
         inFlight: state.inFlight.filter((candidate) => candidate.comment.id !== action.id),
         undo: {
           comment: entry.comment,
@@ -407,6 +435,7 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       return {
         ...state,
         comments,
+        counts: action.counts,
         currentId: restores ? offer.comment.id : state.currentId,
         undo: null,
         ...say(state, `Undone: the comment by ${offer.comment.authorName} is ${offer.from} again.`),

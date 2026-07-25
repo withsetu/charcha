@@ -59,12 +59,14 @@ interface QueueBody {
     spamReason: string | null
   }[]
   nextCursor: string | null
+  counts: Record<string, number>
 }
 
 interface DecisionBody {
   id: number
   status: string
   moderatedAt: number
+  counts: Record<string, number>
 }
 
 async function statusOf(id: number): Promise<string | undefined> {
@@ -169,6 +171,99 @@ describe('GET /admin/api/queue — the triage view', () => {
 
   it('is never cached', async () => {
     expect((await get('/admin/api/queue')).headers.get('cache-control')).toBe('no-store')
+  })
+})
+
+describe('the per-status counts (#135)', () => {
+  // The tabs used to render `Pending 1` where the `1` was a keyboard shortcut. These
+  // are the numbers that replaced it, so they have to be the database's answer rather
+  // than the length of the page that happens to be loaded.
+
+  it('rides along with the queue, so the tabs cost no second request', async () => {
+    const ids = await seed(4)
+    await moderate(ids[0] as number, { status: 'approved' })
+    await moderate(ids[1] as number, { status: 'spam' })
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.counts).toEqual({ pending: 2, spam: 1, approved: 1 })
+  })
+
+  it('counts the whole status, not the page that was asked for', async () => {
+    // The failure this rules out is the obvious one: a client deriving `Pending 53`
+    // from `comments.length` and being told 2 because it asked for two.
+    await seed(5)
+
+    const body = await (await get('/admin/api/queue?limit=2')).json<QueueBody>()
+
+    expect(body.comments).toHaveLength(2)
+    expect(body.counts.pending).toBe(5)
+  })
+
+  it('is zero rather than absent for a status nothing is in', async () => {
+    // `group by` returns no row for an empty status, and a missing key renders as
+    // `undefined` in a tab. An empty queue is a success state (#13) and needs a value
+    // to say so with.
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.counts).toEqual({ pending: 0, spam: 0, approved: 0 })
+  })
+
+  it('sends the three the dashboard has views for and no fourth', async () => {
+    // `deleted` is counted by the same statement and deliberately not sent: there is no
+    // deleted view, so it would be a number with no reader — and the dashboard's
+    // `QueueCounts` is keyed by `ViewStatus`, which is what makes a missing view
+    // impossible rather than merely unlikely.
+    const [id] = await seed(1)
+    await moderate(id as number, { status: 'deleted' })
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(Object.keys(body.counts).sort()).toEqual(['approved', 'pending', 'spam'])
+  })
+
+  it('comes back from a decision too, so a badge cannot go stale', async () => {
+    const ids = await seed(3)
+
+    const body = await (
+      await moderate(ids[0] as number, { status: 'approved' })
+    ).json<DecisionBody>()
+
+    expect(body.counts).toEqual({ pending: 2, spam: 0, approved: 1 })
+  })
+
+  it('counts the replies a decision cascaded over, which no client-side tally could', async () => {
+    // **The reason the decision recomputes instead of the dashboard adding and
+    // subtracting one.** setCommentStatus hides the replies under a comment as well as
+    // the comment, so marking one root spam moves four here. A client keeping its own
+    // tally would be wrong by three, and nothing on screen would reveal it.
+    const [root] = await seed(1)
+    await moderate(root as number, { status: 'approved' })
+    for (let index = 0; index < 3; index++) {
+      await insertComment(db, {
+        threadId,
+        parentId: root,
+        authorName: `Replier ${String(index)}`,
+        body: `reply ${String(index)}`,
+        bodyHash: `r${String(index)}`,
+        now: t0 + 100 + index,
+      })
+    }
+
+    const body = await (await moderate(root as number, { status: 'spam' })).json<DecisionBody>()
+
+    expect(body.counts).toEqual({ pending: 0, spam: 4, approved: 0 })
+  })
+
+  it('tells an unauthenticated caller nothing about how much is unmoderated', async () => {
+    // A public comment count is an information leak about unpublished content, so the
+    // count lives behind the same door as everything else under /admin/api.
+    await seed(7)
+
+    const response = await exports.default.fetch(`${origin}/admin/api/queue`)
+
+    expect(response.status).toBe(401)
+    expect(await response.text()).not.toContain('7')
   })
 })
 

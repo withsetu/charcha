@@ -9,7 +9,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest'
 
 import { Triage } from '../../src/dashboard/components/triage'
-import { apiError, comment, json, queuePage, stubFetch, unhandled, type FetchStub } from './harness'
+import {
+  apiError,
+  comment,
+  decision,
+  json,
+  queuePage,
+  stubFetch,
+  unhandled,
+  type FetchStub,
+} from './harness'
 
 function noop() {
   return
@@ -157,7 +166,7 @@ describe('a row', () => {
   it('decides from its buttons too, because the mouse is the fallback', async () => {
     const stub = stubFetch((call) =>
       call.method === 'POST'
-        ? json(200, { id: 1, status: 'approved', moderatedAt: 1 })
+        ? json(200, decision(1, 'approved'))
         : json(200, queuePage([comment({ id: 1 })])),
     )
     mount()
@@ -197,7 +206,7 @@ describe('a decision that fails', () => {
       attempts += 1
       return attempts === 1
         ? apiError(503, 'UNAVAILABLE', 'Something went wrong. Try again.')
-        : json(200, { id: 1, status: 'spam', moderatedAt: 1 })
+        : json(200, decision(1, 'spam'))
     })
     mount()
     await screen.findByText('Author 1')
@@ -242,7 +251,7 @@ describe('a decision that fails', () => {
       attempts += 1
       return attempts === 1
         ? apiError(503, 'UNAVAILABLE', 'Something went wrong. Try again.')
-        : json(200, { id: 2, status: 'approved', moderatedAt: 1 })
+        : json(200, decision(2, 'approved'))
     })
     mount()
     await screen.findByText('Author 1')
@@ -265,7 +274,7 @@ describe('the undo window', () => {
   it('offers an undo after a decision, and takes the comment back on Z', async () => {
     const stub = stubFetch((call) =>
       call.method === 'POST'
-        ? json(200, { id: 1, status: 'spam', moderatedAt: 1 })
+        ? json(200, decision(1, 'spam'))
         : json(200, queuePage([comment({ id: 1, authorName: 'Ada' })])),
     )
     mount()
@@ -289,7 +298,7 @@ describe('the undo window', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     stubFetch((call) =>
       call.method === 'POST'
-        ? json(200, { id: 1, status: 'spam', moderatedAt: 1 })
+        ? json(200, decision(1, 'spam'))
         : json(200, queuePage([comment({ id: 1 })])),
     )
     mount()
@@ -310,7 +319,7 @@ describe('the undo window', () => {
         return json(200, queuePage([comment({ id: 1, authorName: 'Ada' })]))
       posts += 1
       return posts === 1
-        ? json(200, { id: 1, status: 'spam', moderatedAt: 1 })
+        ? json(200, decision(1, 'spam'))
         : apiError(503, 'UNAVAILABLE', 'Something went wrong. Try again.')
     })
     mount()
@@ -328,15 +337,17 @@ describe('the undo window', () => {
 
 describe('paging past the cap', () => {
   it('loads the next page from the button and keeps the current row', async () => {
+    const FOUR = { pending: 4, spam: 0, approved: 0 }
     const stub = stubFetch((call) =>
       call.path.includes('cursor=')
-        ? json(200, queuePage([comment({ id: 3 }), comment({ id: 4 })]))
-        : json(200, queuePage([comment({ id: 1 }), comment({ id: 2 })], '1699999998.2')),
+        ? json(200, queuePage([comment({ id: 3 }), comment({ id: 4 })], null, FOUR))
+        : json(200, queuePage([comment({ id: 1 }), comment({ id: 2 })], '1699999998.2', FOUR)),
     )
     mount()
     await screen.findByText('Author 1')
-    // Honest about what it knows: 2 is the loaded count, not the total.
-    expect(screen.getByText('2 loaded, and there are more')).toBeTruthy()
+    // Honest about what it knows, and it now knows the total (#135): two of the four are
+    // on screen, and the other two are a page away.
+    expect(screen.getByText('Showing 2 of 4')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
     await screen.findByText('Author 4')
@@ -348,8 +359,15 @@ describe('paging past the cap', () => {
   it('fetches the next page from the keyboard, on reaching the last loaded row', async () => {
     const stub = stubFetch((call) =>
       call.path.includes('cursor=')
-        ? json(200, queuePage([comment({ id: 3 })]))
-        : json(200, queuePage([comment({ id: 1 }), comment({ id: 2 })], '1699999998.2')),
+        ? json(200, queuePage([comment({ id: 3 })], null, { pending: 3, spam: 0, approved: 0 }))
+        : json(
+            200,
+            queuePage([comment({ id: 1 }), comment({ id: 2 })], '1699999998.2', {
+              pending: 3,
+              spam: 0,
+              approved: 0,
+            }),
+          ),
     )
     mount()
     await screen.findByText('Author 1')
@@ -423,6 +441,207 @@ describe('switching view', () => {
       .filter((tab) => tab.getAttribute('aria-selected') === 'true')
     expect(selected).toHaveLength(1)
     expect(selected[0]?.textContent).toContain('Pending')
+  })
+})
+
+describe('the view tabs (#135)', () => {
+  // The defect: the tabs read `Pending 1  Spam 2  Approved 3`, where the digits were
+  // keyboard shortcuts and every convention in every inbox says a number beside a queue
+  // name is how many things are in it.
+
+  /**
+   * Asserts the tabs' **computed** accessible names — what a screen reader would say —
+   * rather than their `aria-label` attributes.
+   *
+   * The distinction is the whole point of the assertion and a review of an earlier draft
+   * of this file caught it: reading the attribute passes for any tab that has one, and
+   * an attribute-reading test cannot tell "Pending, 53 comments" from the ambiguous
+   * "Pending 53" the trigger's own text content computes to. Testing Library's `name`
+   * option runs the accessible-name algorithm, so `aria-hidden` on the keycap and the
+   * exactness of the string are both really checked.
+   */
+  function expectTabNames(names: readonly string[]): void {
+    for (const name of names) {
+      expect(screen.getByRole('tab', { name })).toBeTruthy()
+    }
+    // No fourth tab quietly carrying one of the names instead.
+    expect(screen.getAllByRole('tab')).toHaveLength(names.length)
+  }
+
+  it('says how many comments each view holds', async () => {
+    stubFetch(() =>
+      json(200, queuePage([comment({ id: 1 })], null, { pending: 53, spam: 12, approved: 104 })),
+    )
+    mount()
+    await screen.findByText('Author 1')
+
+    const tabs = screen.getAllByRole('tab')
+    expect(within(tabs[0] as HTMLElement).getByText('53')).toBeTruthy()
+    expect(within(tabs[1] as HTMLElement).getByText('12')).toBeTruthy()
+    expect(within(tabs[2] as HTMLElement).getByText('104')).toBeTruthy()
+  })
+
+  it('reads the count out as a count, not as a bare number', async () => {
+    // The accessible name is the whole of the fix for a screen-reader user: "Pending 53"
+    // is exactly as ambiguous read aloud as it was on screen.
+    stubFetch(() =>
+      json(200, queuePage([comment({ id: 1 })], null, { pending: 53, spam: 12, approved: 1 })),
+    )
+    mount()
+    await screen.findByText('Author 1')
+
+    expectTabNames(['Pending, 53 comments', 'Spam, 12 comments', 'Approved, 1 comment'])
+    // And the ambiguous reading is gone: "Pending 53" is what the trigger's text content
+    // computes to on its own, and it is exactly as unclear read aloud as on screen.
+    expect(screen.queryByRole('tab', { name: 'Pending 53' })).toBeNull()
+  })
+
+  it('names the view alone until the first answer arrives', () => {
+    // Unknown is not zero. Before the server has said, a tab claiming `0` would be
+    // asserting an empty queue on no evidence.
+    stubFetch(() => new Promise<Response>(() => {}))
+    mount()
+
+    expectTabNames(['Pending', 'Spam', 'Approved'])
+    expect(
+      screen.getByRole('tab', { name: 'Pending' }).querySelector('[data-slot="tab-count"]'),
+    ).toBeNull()
+  })
+
+  it('shows a zero, because an empty queue is a state worth stating', async () => {
+    stubFetch(() => json(200, queuePage([], null, { pending: 0, spam: 3, approved: 0 })))
+    mount()
+    await screen.findByText('Nothing waiting on you')
+
+    expectTabNames(['Pending, 0 comments', 'Spam, 3 comments', 'Approved, 0 comments'])
+    expect(within(screen.getAllByRole('tab')[0] as HTMLElement).getByText('0')).toBeTruthy()
+  })
+
+  it('dresses the shortcut as a key, so it cannot be read as a count', async () => {
+    // The cause of the bug was one `<kbd>` with two stylings. There is now one, from the
+    // registry, and this asserts the tabs use it rather than a copy of the old text.
+    stubFetch(() => json(200, queuePage([], null, { pending: 0, spam: 0, approved: 0 })))
+    mount()
+    await screen.findByText('Nothing waiting on you')
+
+    const keys = screen.getAllByRole('tab').map((tab) => tab.querySelector('[data-slot="kbd"]'))
+    expect(keys.map((key) => key?.textContent)).toEqual(['1', '2', '3'])
+    for (const key of keys) {
+      expect(key?.getAttribute('aria-hidden')).toBe('true')
+      // The keycap treatment itself: a bordered, filled cap of a fixed size. The
+      // ornament is the whole signal that this digit is a key and the other one is not.
+      expect(key?.className).toContain('border')
+      expect(key?.className).toContain('bg-muted')
+    }
+  })
+
+  it('leaves no <kbd> in the app styled any other way, which is the point of the fix', async () => {
+    // **The guard on the cause rather than on the symptom.** The bug was not the tabs
+    // specifically; it was that `<kbd>` had two treatments and the wrong one was in the
+    // slot a count belongs in. Every keycap on this surface now comes from
+    // src/dashboard/ui/kbd.tsx, so any hand-rolled one anywhere — a tab, the header
+    // button, the sheet, or something added later — fails here.
+    stubFetch(() => json(200, queuePage([comment({ id: 1 })])))
+    mount()
+    await screen.findByText('Author 1')
+    fireEvent.keyDown(document.body, { key: '?' })
+    await screen.findByRole('dialog')
+
+    const keys = [...document.querySelectorAll('kbd')]
+    // The tabs' three, the header button's `?`, and one per row of the sheet.
+    expect(keys.length).toBeGreaterThan(4)
+    for (const key of keys) {
+      expect(key.getAttribute('data-slot')).toBe('kbd')
+    }
+  })
+
+  it('follows a decision, including the replies it cascaded over', async () => {
+    // A badge that does not move after an approval is the same class of lie as a
+    // shortcut hint that reads as a count. The server recounts, so this is four moving
+    // at once — one comment and the three replies under it.
+    stubFetch((call) =>
+      call.method === 'POST'
+        ? json(200, decision(1, 'spam', { pending: 49, spam: 4, approved: 0 }))
+        : json(
+            200,
+            queuePage([comment({ id: 1 }), comment({ id: 2 })], null, {
+              pending: 53,
+              spam: 0,
+              approved: 0,
+            }),
+          ),
+    )
+    mount()
+    await screen.findByText('Author 1')
+    expect(screen.getByRole('tab', { name: 'Pending, 53 comments' })).toBeTruthy()
+
+    fireEvent.keyDown(document.body, { key: 's' })
+
+    await waitFor(() => {
+      expectTabNames(['Pending, 49 comments', 'Spam, 4 comments', 'Approved, 0 comments'])
+    })
+  })
+
+  it('keeps the counts on screen through a view change', async () => {
+    // Every tab is labelled with a number the whole time, so switching view does not
+    // blank all three and refill them with what was true throughout.
+    // One set of counts for both views, because that is what they are: the counts
+    // describe the whole database and do not depend on which queue was asked for.
+    stubFetch(() => json(200, queuePage([], null, { pending: 53, spam: 12, approved: 4 })))
+    mount()
+    await screen.findByText('Nothing waiting on you')
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Spam/ }))
+    // Asserted while the new queue is still loading: this is the moment the counts would
+    // have been dropped.
+    expectTabNames(['Pending, 53 comments', 'Spam, 12 comments', 'Approved, 4 comments'])
+    await screen.findByText('No spam held')
+  })
+})
+
+describe('the summary line (#135)', () => {
+  it('says how much of the queue is on screen when there is more', async () => {
+    stubFetch(() =>
+      json(
+        200,
+        queuePage([comment({ id: 1 }), comment({ id: 2 })], '1699999998.2', {
+          pending: 53,
+          spam: 0,
+          approved: 0,
+        }),
+      ),
+    )
+    mount()
+    await screen.findByText('Author 1')
+
+    // The old phrasing — "2 loaded, and there are more" — was honest and unreadable.
+    // This is the same honesty with the total the tabs now know.
+    expect(screen.getByText('Showing 2 of 53')).toBeTruthy()
+  })
+
+  it('states the total plainly once everything is loaded', async () => {
+    stubFetch(() =>
+      json(
+        200,
+        queuePage([comment({ id: 1 }), comment({ id: 2 })], null, {
+          pending: 2,
+          spam: 0,
+          approved: 0,
+        }),
+      ),
+    )
+    mount()
+    await screen.findByText('Author 1')
+
+    expect(screen.getByText('2 comments')).toBeTruthy()
+  })
+
+  it('counts a single comment in the singular', async () => {
+    stubFetch(() => json(200, queuePage([comment({ id: 1 })])))
+    mount()
+    await screen.findByText('Author 1')
+
+    expect(screen.getByText('1 comment')).toBeTruthy()
   })
 })
 

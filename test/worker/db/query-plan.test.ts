@@ -8,6 +8,7 @@ import {
   PAGE_COMMENTS_SQL,
   PURGE_IP_HASH_SQL,
   REPLY_TARGET_SQL,
+  STATUS_COUNTS_SQL,
 } from '../../../src/db'
 
 const db = env.DB
@@ -126,6 +127,35 @@ describe('the moderation queue read, past the first page', () => {
     const plan = await planOf(MODERATION_QUEUE_PAGE_SQL, ...PAGE_BINDINGS)
 
     expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
+  })
+})
+
+describe('the per-status counts', () => {
+  // **The one read in this file whose plan is allowed to say SCAN, and the comment is
+  // here because `not.toMatch(/\bSCAN\b/)` is the idiom everywhere else.** An exact
+  // count of a status cannot seek: every row of that status is part of the answer. So
+  // the guarantee `comments_by_status` buys is a different one, and it is the whole
+  // reason this statement is grouped rather than three counts — the scan is over index
+  // entries and never over the table.
+
+  it('counts from the index alone, never touching a comment row', async () => {
+    const plan = await planOf(STATUS_COUNTS_SQL)
+
+    // COVERING is the load-bearing word. Without it SQLite would seek back into
+    // `comments` for each entry, and every one of those rows carries up to 10,000
+    // characters of body — a tab strip's three numbers would then cost a full read of
+    // the table, on every queue load and every decision.
+    expect(plan).toMatch(/USING COVERING INDEX comments_by_status/)
+  })
+
+  it('groups in the index’s own order rather than buffering the table', async () => {
+    const plan = await planOf(STATUS_COUNTS_SQL)
+
+    // comments_by_status leads on `status`, so the groups arrive already adjacent and
+    // the count is a running total. A temp B-tree would mean SQLite collecting every
+    // row of the table in memory first to sort it into groups — inside a 128 MB isolate,
+    // on the busiest site on the account.
+    expect(plan).not.toMatch(/USE TEMP B-TREE FOR GROUP BY/)
   })
 })
 

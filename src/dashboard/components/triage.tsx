@@ -28,6 +28,7 @@ import {
 } from '../queue'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Button } from '../ui/button'
+import { Kbd } from '../ui/kbd'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { CommentCard } from './comment-card'
 import { MessageBar } from './message-bar'
@@ -38,6 +39,48 @@ const VIEW_LABELS: Record<ViewStatus, string> = {
   pending: 'Pending',
   spam: 'Spam',
   approved: 'Approved',
+}
+
+/** `53 comments`, or `1 comment`. Both places that count comments say it this way. */
+function commentCount(n: number): string {
+  return `${String(n)} ${n === 1 ? 'comment' : 'comments'}`
+}
+
+/**
+ * A tab's accessible name (#135).
+ *
+ * The count is spelled out here rather than left to the trigger's text content, which
+ * would compute to "Pending 53" — exactly as ambiguous read aloud as the bug was on
+ * screen. The visible label is still a prefix of this, so a voice-control user asking
+ * for "Pending" is asking for something that matches (WCAG 2.5.3).
+ *
+ * A null count is a count nobody has answered for yet, and the name says only the view:
+ * an accessible name claiming "0 comments" before the first response asserts an empty
+ * queue on no evidence.
+ * Enforced by test/dashboard/triage.test.tsx.
+ */
+function tabName(view: ViewStatus, count: number | null): string {
+  return count === null ? VIEW_LABELS[view] : `${VIEW_LABELS[view]}, ${commentCount(count)}`
+}
+
+/**
+ * The line above the queue: how much of it is on screen (#135).
+ *
+ * **The branch is on the two numbers rather than on `nextCursor`, and that is what keeps
+ * it honest between a decision starting and landing.** The row leaves the list
+ * optimistically while the count is still the server's previous answer, so for that
+ * moment `loaded` is one behind `total` — `Showing 49 of 50` says exactly that, where a
+ * cursor-driven branch would have claimed a flat "50 comments" over 49 visible rows.
+ *
+ * It still refuses to print a total it does not have. The #24 cap means the loaded count
+ * is not the queue's size, which is why the old wording avoided a bare number at all;
+ * `total === null` is intended to be the pre-answer case only, since `phase` is `ready`
+ * exactly when a page has arrived and every page carries counts.
+ * Enforced by test/dashboard/triage.test.tsx.
+ */
+function summaryLine(loaded: number, total: number | null): string {
+  if (total === null) return commentCount(loaded)
+  return loaded < total ? `Showing ${String(loaded)} of ${String(total)}` : commentCount(total)
 }
 
 /**
@@ -179,7 +222,7 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
             expiredCheck(result)
             return
           }
-          dispatch({ type: 'decide/ok', id, at: Date.now() })
+          dispatch({ type: 'decide/ok', id, at: Date.now(), counts: result.value.counts })
         },
         () => {
           dispatch({ type: 'decide/failed', id, failure: DASHBOARD_BUG })
@@ -204,7 +247,7 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
           expiredCheck(result)
           return
         }
-        dispatch({ type: 'undo/ok' })
+        dispatch({ type: 'undo/ok', counts: result.value.counts })
       },
       () => {
         dispatch({ type: 'undo/failed', failure: DASHBOARD_BUG })
@@ -314,7 +357,10 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
     }
   }, [loadMore, runDecision, runUndo])
 
-  const total = state.comments.length
+  // How many rows are on screen, which is not how many are in the queue: the read is
+  // capped at 50 (#24), and the total comes from the counts the server sends (#135).
+  const loaded = state.comments.length
+  const total = state.counts?.[state.view] ?? null
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-10">
@@ -330,9 +376,7 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
           >
             <KeyboardIcon aria-hidden="true" />
             Shortcuts
-            <kbd aria-hidden="true" className="ml-1 text-[0.65rem] opacity-70">
-              ?
-            </kbd>
+            <Kbd aria-hidden="true">?</Kbd>
           </Button>
           <Button variant="ghost" size="sm" onClick={onSignOut}>
             <LogOutIcon aria-hidden="true" />
@@ -348,14 +392,38 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
         }}
       >
         <TabsList aria-label="Which comments to show">
-          {VIEW_STATUSES.map((view, index) => (
-            <TabsTrigger key={view} value={view}>
-              {VIEW_LABELS[view]}
-              <kbd aria-hidden="true" className="ml-1 text-[0.65rem] opacity-60">
-                {index + 1}
-              </kbd>
-            </TabsTrigger>
-          ))}
+          {VIEW_STATUSES.map((view, index) => {
+            // The number beside a queue's name is how many comments are in it, which is
+            // what every inbox has taught everyone to read it as — and what #135 was: the
+            // shortcut hint sat in that slot with no keycap on it. The count is plain
+            // text and the shortcut wears the whole of the ornament, so the two cannot be
+            // read as the same kind of thing.
+            //
+            // Plain text rather than a `Badge`, for a reason specific to this theme:
+            // `--secondary` and `--muted` are the same value in src/dashboard/styles.css,
+            // so a secondary badge has no contrast at all against the `bg-muted` an
+            // inactive tab shows — and an outline badge would give the count the same
+            // bordered-chip shape as the keycap beside it.
+            const count = state.counts?.[view] ?? null
+            return (
+              <TabsTrigger key={view} value={view} aria-label={tabName(view, count)}>
+                {VIEW_LABELS[view]}
+                {count !== null && (
+                  // `tabular-nums` so a count changing under the owner's cursor does not
+                  // shift the keycap beside it.
+                  <span data-slot="tab-count" className="tabular-nums">
+                    {count}
+                  </span>
+                )}
+                {/*
+                  Hidden from assistive technology on purpose: it is a reminder for the
+                  eye, the accessible name above already says what the tab is, and the
+                  shortcut sheet is the accessible route to the bindings.
+                */}
+                <Kbd aria-hidden="true">{index + 1}</Kbd>
+              </TabsTrigger>
+            )
+          })}
         </TabsList>
 
         <TabsContent value={state.view} className="mt-4">
@@ -370,28 +438,20 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
             />
           )}
 
-          {state.phase === 'ready' && total === 0 && (
+          {state.phase === 'ready' && loaded === 0 && (
             <QueueEmpty ref={emptyState} view={state.view} />
           )}
 
-          {state.phase === 'ready' && total > 0 && (
+          {state.phase === 'ready' && loaded > 0 && (
             <>
               {/*
-                The count is honest about what it knows. `nextCursor` non-null means
-                the #24 cap was reached, so "50" would be a number the owner would
-                plan their afternoon around and it would be wrong.
+                Deliberately not a live region. It changes on every decision, and the
+                decision is already announced — "49 of 53" read out after "Approved: Ada
+                Lovelace. Press Z to undo." is two sentences per keystroke, which is how
+                a moderator learns to turn the screen reader off. The wording itself is
+                summaryLine, above.
               */}
-              {/*
-                Not a live region. It changes on every decision, and the decision is
-                already announced — "49 loaded, and there are more" read out after
-                "Approved: Ada Lovelace. Press Z to undo." is two sentences per
-                keystroke, which is how a moderator learns to turn the screen reader off.
-              */}
-              <p className="pb-2 text-sm text-muted-foreground">
-                {state.nextCursor === null
-                  ? `${String(total)} ${total === 1 ? 'comment' : 'comments'}`
-                  : `${String(total)} loaded, and there are more`}
-              </p>
+              <p className="pb-2 text-sm text-muted-foreground">{summaryLine(loaded, total)}</p>
               <ul
                 role="list"
                 aria-label={`${VIEW_LABELS[state.view]} comments`}
@@ -403,7 +463,7 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
                     comment={comment}
                     current={comment.id === state.currentId}
                     position={index + 1}
-                    total={total}
+                    total={loaded}
                     now={now}
                     busy={isDeciding(state, comment.id)}
                     onFocus={(id) => {
@@ -420,8 +480,8 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
                   <AlertTitle>Could not load the next page</AlertTitle>
                   <AlertDescription>
                     <p>
-                      {state.moreFailure.message} The {String(total)} comments above are still yours
-                      to act on.
+                      {state.moreFailure.message} The {String(loaded)} comments above are still
+                      yours to act on.
                     </p>
                   </AlertDescription>
                 </Alert>

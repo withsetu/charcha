@@ -13,6 +13,7 @@
 
 import { SHORTCUTS } from '../keys'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import { Kbd } from '../ui/kbd'
 
 export function ShortcutSheet({
   open,
@@ -35,9 +36,14 @@ export function ShortcutSheet({
           {SHORTCUTS.map((shortcut) => (
             <div key={shortcut.keys} className="col-span-2 grid grid-cols-subgrid items-baseline">
               <dt>
-                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs whitespace-pre">
-                  {shortcut.keys}
-                </kbd>
+                {/*
+                  `whitespace-pre` because a few rows name alternatives — `J  or  ↓`,
+                  `1  2  3` — and HTML would collapse the double spaces that separate
+                  them. Everything else about the keycap is the shared treatment in
+                  src/dashboard/ui/kbd.tsx, which is the fix for #135: this used to be
+                  the only place a `<kbd>` looked like a key.
+                */}
+                <Kbd className="whitespace-pre">{shortcut.keys}</Kbd>
               </dt>
               <dd className="text-muted-foreground">{shortcut.description}</dd>
             </div>

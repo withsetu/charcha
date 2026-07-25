@@ -22,6 +22,7 @@ import type { ActionFailure, Announcement, UndoOffer } from '../queue'
 import { ATTEMPTED, DECIDED, UNDO_WINDOW_MS } from '../queue'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Button } from '../ui/button'
+import { Kbd } from '../ui/kbd'
 
 export interface MessageBarProps {
   undo: UndoOffer | null
@@ -88,9 +89,7 @@ export function MessageBar({
                   <Button variant="ghost" size="sm" onClick={onDismiss}>
                     <XIcon aria-hidden="true" />
                     Dismiss
-                    <kbd aria-hidden="true" className="ml-1 text-[0.65rem] opacity-70">
-                      Esc
-                    </kbd>
+                    <Kbd aria-hidden="true">Esc</Kbd>
                   </Button>
                 </div>
               </AlertDescription>
@@ -107,9 +106,7 @@ export function MessageBar({
                   <Button variant="outline" size="sm" disabled={undo.running} onClick={onUndo}>
                     <UndoIcon aria-hidden="true" />
                     {undo.running ? 'Undoing…' : 'Undo'}
-                    <kbd aria-hidden="true" className="ml-1 text-[0.65rem] opacity-70">
-                      Z
-                    </kbd>
+                    <Kbd aria-hidden="true">Z</Kbd>
                   </Button>
                 </div>
                 {/*
