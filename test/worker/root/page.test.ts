@@ -31,6 +31,29 @@ describe('the page Cloudflare sends a deployer to', () => {
     expect(response.headers.get('content-type')).toMatch(/text\/html/)
   })
 
+  // Deliberately public, and pinned here so that adding auth means deleting a test
+  // and reading why. The page exists to greet a deployer in the seconds after a
+  // deploy, before any password has been used — a login in front of it would defeat
+  // #140 entirely. The consequence is that everything on it is world-readable, which
+  // is the constraint the rest of this file enforces, and which the page now says
+  // out loud rather than claiming the opposite (#143).
+  it('is readable with no session, because that is the point of it', async () => {
+    const response = await get()
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('set-cookie')).toBeNull()
+  })
+
+  // The claim it used to make was that readers never see it. They can: it is this
+  // origin's front door. A page that misdescribes its own audience invites the next
+  // person to put something on it that should not be public (#143, #107).
+  it('does not tell the reader it is private', async () => {
+    const html = await (await get()).text()
+
+    expect(html).not.toMatch(/readers never see/i)
+    expect(html).toMatch(/anyone with this address can see this page/i)
+  })
+
   it('says the Worker is running, in those words', async () => {
     expect(await (await get()).text()).toContain('Charcha is running')
   })
