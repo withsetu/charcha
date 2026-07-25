@@ -195,6 +195,16 @@ appears. Background on
 Tests run inside the Workers runtime via `@cloudflare/vitest-pool-workers`, against
 the same bindings the deployed Worker gets.
 
+Set your local secrets in a `.dev.vars` file — it is gitignored, and it is the only
+way to give `wrangler dev` a `CHARCHA_DASHBOARD_PASSWORD` to sign in to the dashboard
+with. Having one does **not** put `pnpm check` into a failing state: both `pnpm types`
+and `pnpm types:check` pass `--env-file /dev/null`, so type generation reads the
+Wrangler config and nothing else. Without that flag, `wrangler types` folds the keys of
+your `.dev.vars` into the generated `Env`, `types:check` reports the committed types as
+stale when nothing about them is, and regenerating writes your own secret names into
+`src/worker-configuration.d.ts` as though they were part of the binding contract
+([#132](https://github.com/withsetu/charcha/issues/132)).
+
 ## Troubleshooting a deploy
 
 **Visiting the Worker URL used to answer `Not found`.** It does not any more — `/` says
