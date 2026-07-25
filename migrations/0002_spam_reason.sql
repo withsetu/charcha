@@ -1,0 +1,23 @@
+-- Why a comment was held. Designed on issue #70.
+--
+-- #8's layers have three outcomes and use `review` for every judgement they are
+-- not certain about — Turnstile unreachable, no timing field, a link-heavy body.
+-- Each carries a reason, and until this column existed the pipeline computed it,
+-- logged it, and dropped it: a held comment and a clean one were byte-identical
+-- rows, both `pending`, and the human gate was being asked to decide without
+-- being told why it was asked.
+--
+-- Nullable, and null is the common case: it is set only when the verdict was
+-- `review`, so an allowed comment stores nothing and the column costs a spam-free
+-- site nothing but the NULL.
+--
+-- The length cap is not decoration. One reason reaching here is
+-- `turnstile: <error-codes joined>`, and `error-codes` is a JSON array from
+-- siteverify — a response from outside this Worker, of no bounded length. Card
+-- rule 5 is size caps everywhere, including on input that arrives from a
+-- third party rather than from a commenter. src/db/index.ts truncates to the same
+-- bound before binding; this CHECK is what holds for a caller that did not, the
+-- importer (#15) included.
+-- Enforced by test/worker/db/spam-reason.test.ts.
+ALTER TABLE comments ADD COLUMN spam_reason TEXT
+  CHECK (spam_reason IS NULL OR length(spam_reason) BETWEEN 1 AND 200);

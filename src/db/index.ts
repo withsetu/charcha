@@ -42,6 +42,16 @@ export interface StoredComment extends RenderableComment {
 export interface QueuedComment extends StoredComment {
   pageKey: string
   pageTitle: string | null
+  /**
+   * Why a spam layer held this comment, or null when none did (#70).
+   *
+   * On QueuedComment and not on RenderableComment, deliberately: it is triage
+   * metadata for the moderator, and the page read does not select the column, so
+   * no template mistake downstream can put a layer's internal reason token in
+   * front of a reader.
+   * Enforced by test/worker/db/spam-reason.test.ts.
+   */
+  spamReason: string | null
 }
 
 export interface NewComment {
@@ -62,6 +72,17 @@ export interface NewComment {
    * Enforced by test/worker/db/comments.test.ts.
    */
   byOwner?: boolean
+  /**
+   * Why a spam layer held this comment, when one did (#70) — `runLayers` has
+   * already prefixed it with the layer's name. Absent, empty or blank stores
+   * null, because an empty string in this column reads as "held for a reason
+   * nobody recorded" and there is no such state.
+   *
+   * Truncated to MAX_SPAM_REASON_LENGTH before it is bound. See that constant
+   * for why a reason is untrusted input despite never coming from a commenter.
+   * Enforced by test/worker/db/spam-reason.test.ts.
+   */
+  spamReason?: string | null
   now: number
 }
 
@@ -90,6 +111,7 @@ interface CommentRow {
 interface QueuedCommentRow extends CommentRow {
   page_key: string
   page_title: string | null
+  spam_reason: string | null
 }
 
 const RENDERABLE_COLUMNS = 'id, parent_id, depth, author_name, body, by_owner, created_at'
@@ -200,6 +222,36 @@ export async function getOrCreateThread(
 }
 
 /**
+ * The longest `spam_reason` this will store, matching the CHECK in
+ * migrations/0002_spam_reason.sql.
+ *
+ * A reason looks like `turnstile: invalid-input-response`, so 200 characters is
+ * far past anything a layer produces — and that generosity is exactly why the cap
+ * has to exist rather than be assumed. One reason is built by joining siteverify's
+ * `error-codes`, which is a JSON array in a response from outside this Worker: a
+ * third party, or anything that can impersonate one, chooses its length. Card rule
+ * 5 does not stop at the commenter.
+ * Enforced by test/worker/db/spam-reason.test.ts.
+ */
+export const MAX_SPAM_REASON_LENGTH = 200
+
+/**
+ * The reason as the column will hold it: null when there is none, truncated when
+ * it is too long.
+ *
+ * Truncated rather than rejected, and that direction is the design. The reason is
+ * diagnostic; the comment is the reader's. Failing the insert would mean a
+ * third-party response longer than expected costs a real person their comment,
+ * which is a far worse outcome than a triage badge that ends mid-word.
+ * Enforced by test/worker/db/spam-reason.test.ts.
+ */
+function storableSpamReason(reason: string | null | undefined): string | null {
+  const trimmed = reason?.trim()
+  if (trimmed === undefined || trimmed === '') return null
+  return trimmed.slice(0, MAX_SPAM_REASON_LENGTH)
+}
+
+/**
  * Stores a comment. `depth` is derived in SQL from whether there is a parent, and
  * the comments_depth_guard trigger rejects a reply to a reply — so the two-level
  * rule holds even for a caller that never checked.
@@ -209,9 +261,9 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
     .prepare(
       `insert into comments (
          thread_id, parent_id, depth, author_name, author_email, body, body_hash,
-         status, by_owner, ip_hash, created_at
+         status, by_owner, ip_hash, spam_reason, created_at
        )
-       values (?1, ?2, case when ?2 is null then 0 else 1 end, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+       values (?1, ?2, case when ?2 is null then 0 else 1 end, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
        returning id, thread_id, parent_id, depth, author_name, body, by_owner, status,
                  created_at, moderated_at`,
     )
@@ -225,6 +277,7 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
       input.byOwner === true ? 'approved' : 'pending',
       input.byOwner === true ? 1 : 0,
       input.ipHash ?? null,
+      storableSpamReason(input.spamReason),
       input.now,
     )
     .first<CommentRow>()
@@ -336,6 +389,22 @@ export async function isReplyTarget(
 }
 
 /**
+ * There is no comment with that id to moderate.
+ *
+ * A named class rather than a bare Error, because the HTTP boundary has to turn
+ * exactly this into a 404 and everything else into a 500. A handler that decided by
+ * catching whatever setCommentStatus threw would report a D1 outage as "no such
+ * comment", which is the report that stops anyone investigating.
+ * Enforced by test/worker/admin/queue.test.ts.
+ */
+export class NoSuchCommentError extends Error {
+  constructor(readonly commentId: number) {
+    super(`no comment ${commentId} to moderate`)
+    this.name = 'NoSuchCommentError'
+  }
+}
+
+/**
  * Records a moderation decision, and refuses to pretend it moderated nothing.
  *
  * Hiding a comment hides the replies underneath it. Otherwise removing a spam
@@ -362,7 +431,7 @@ export async function setCommentStatus(
     .all<CommentRow>()
 
   const row = results.find((candidate) => candidate.id === commentId)
-  if (row === undefined) throw new Error(`no comment ${commentId} to moderate`)
+  if (row === undefined) throw new NoSuchCommentError(commentId)
   return toStored(row)
 }
 
@@ -413,44 +482,168 @@ function clampQueueLimit(limit: unknown): number {
   return Math.min(whole, MAX_QUEUE_LIMIT)
 }
 
+/** A position in one status's ordering: the row the next page starts after. */
+export interface QueueCursor {
+  createdAt: number
+  id: number
+}
+
 /**
- * The triage queue read, as a constant so that the query plan can be asserted
- * against the statement this project actually sends rather than against a copy of
- * it in a test.
- * Enforced by test/worker/db/query-plan.test.ts.
+ * The largest `created_at` a cursor may name, and the largest `id`.
+ *
+ * Ten digits of unix seconds runs to the year 2286, and fifteen digits of id is
+ * past anything D1 will hold — so both bounds are generous. They exist because
+ * the alternative to a bound is `Number()` on a caller-supplied string, and
+ * `Number('1e400')` is `Infinity`, which binds as a value SQLite compares in ways
+ * nobody reasoned about. A cursor arrives on a query string like any other
+ * parameter (card rule 5).
+ * Enforced by test/worker/db/queue-cursor.test.ts.
  */
-export const MODERATION_QUEUE_SQL = `select c.id, c.thread_id, c.parent_id, c.depth, c.author_name, c.body, c.by_owner,
-              c.status, c.created_at, c.moderated_at,
+const CURSOR_PATTERN = /^\d{1,10}\.\d{1,15}$/
+
+/**
+ * The wire form of a cursor: `<created_at>.<id>`.
+ *
+ * Not base64 and not signed, because it is not a capability and encoding it as
+ * one would say otherwise. It names a position in an ordering the caller is
+ * already authorised to read — `status` is a separate argument, so a cursor
+ * copied from one queue reads nothing extra in another.
+ * Enforced by test/worker/db/queue-cursor.test.ts.
+ */
+export function encodeQueueCursor(cursor: QueueCursor): string {
+  return `${cursor.createdAt}.${cursor.id}`
+}
+
+/**
+ * A cursor, or null when the value is not one.
+ *
+ * **Null must not be treated as "no cursor" by a caller who was given a value.**
+ * This is the one place the queue's read parameters reject rather than clamp, and
+ * that asymmetry with clampQueueLimit is deliberate: a page size out of range has
+ * a safe nearest value, and a cursor does not. Silently dropping one makes every
+ * "next page" request return page one, so a paging UI loops over the first page
+ * forever while the oldest comments — the ones this exists to reach — stay
+ * unreachable, with nothing anywhere reporting a fault. The HTTP boundary turns
+ * this null into a 400.
+ * Enforced by test/worker/db/queue-cursor.test.ts and test/worker/admin/queue.test.ts.
+ */
+export function parseQueueCursor(value: unknown): QueueCursor | null {
+  if (typeof value !== 'string' || !CURSOR_PATTERN.test(value)) return null
+
+  const [createdAt, id] = value.split('.').map(Number) as [number, number]
+  if (!Number.isSafeInteger(createdAt) || !Number.isSafeInteger(id)) return null
+  if (id < 1) return null
+  return { createdAt, id }
+}
+
+const QUEUE_COLUMNS = `c.id, c.thread_id, c.parent_id, c.depth, c.author_name, c.body, c.by_owner,
+              c.status, c.created_at, c.moderated_at, c.spam_reason,
               t.page_key, t.title as page_title
          from comments c
-         join threads t on t.id = c.thread_id
-        where c.status = ?1
-        order by c.created_at desc, c.id desc
+         join threads t on t.id = c.thread_id`
+
+const QUEUE_ORDER = `order by c.created_at desc, c.id desc
         limit ?2`
+
+/**
+ * The first page of the triage queue, as a constant so that the query plan can be
+ * asserted against the statement this project actually sends rather than against
+ * a copy of it in a test.
+ * Enforced by test/worker/db/query-plan.test.ts.
+ */
+export const MODERATION_QUEUE_SQL = `select ${QUEUE_COLUMNS}
+        where c.status = ?1
+        ${QUEUE_ORDER}`
+
+/**
+ * Every page after the first (#33).
+ *
+ * **A second constant rather than one statement with an `and (?3 is null or …)`
+ * disjunct, and that is the point of writing it twice.** A null-guarded predicate
+ * is opaque to the planner: it cannot know at prepare time whether the range
+ * applies, so it plans for the general case and `comments_by_status` stops being
+ * seeked — the whole status is read and the cursor becomes a filter rather than a
+ * seek, which is the cost keyset paging exists to avoid. Two statements also mean
+ * two plans, and test/worker/db/query-plan.test.ts asserts both; one statement
+ * would leave the paging plan — the one a long queue actually spends its rows on
+ * — untested whichever way the binding went.
+ *
+ * The comparison is a row value, `(created_at, id) < (?3, ?4)`, not
+ * `created_at < ?3`: unix seconds collide, and a bulk import (#15) lands hundreds
+ * of comments on one of them. A cursor on the timestamp alone would skip every
+ * row sharing the boundary second or repeat them forever.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/queue-cursor.test.ts.
+ */
+export const MODERATION_QUEUE_PAGE_SQL = `select ${QUEUE_COLUMNS}
+        where c.status = ?1
+          and (c.created_at, c.id) < (?3, ?4)
+        ${QUEUE_ORDER}`
+
+/** One bounded page of the triage queue, and where the next one starts. */
+export interface QueuePage {
+  comments: QueuedComment[]
+  /**
+   * The cursor to pass back for the next page, or null when this is the last.
+   *
+   * Part of the result rather than something the caller derives from the last
+   * row, for the same reason PageComments carries `truncated`: only this read can
+   * tell a page that is exactly full from a page with more behind it, and a
+   * caller left to guess puts a dead "next" button on the end of the queue.
+   * Enforced by test/worker/db/queue-cursor.test.ts.
+   */
+  nextCursor: string | null
+}
+
+export interface QueueOptions {
+  /** Clamped, never rejected — see clampQueueLimit. */
+  limit?: unknown
+  /** Rejected, never clamped — see parseQueueCursor. */
+  cursor?: QueueCursor | null
+}
 
 /**
  * The triage queue: one status across every thread, newest first, one bounded page.
  *
  * The page size is clamped here rather than in the handler that happens to be in
  * front of it, so the bound holds for every caller — the dashboard, the importer,
- * and whatever calls this next — instead of for whichever one remembered.
- * Enforced by test/worker/db/queue-limit.test.ts.
+ * and whatever calls this next — instead of for whichever one remembered. It is
+ * one statement whether or not there is a cursor, so the queue costs the same
+ * against the 50-query invocation budget on page one and on page forty.
+ *
+ * It asks for one row past the page so that "exactly full" and "there is more"
+ * are different answers, and returns at most the page either way — the same shape
+ * listPageComments uses for `truncated`.
+ * Enforced by test/worker/db/queue-limit.test.ts and test/worker/db/queue-cursor.test.ts.
  */
 export async function listModerationQueue(
   db: D1Database,
   status: CommentStatus,
-  limit?: unknown,
-): Promise<QueuedComment[]> {
-  const { results } = await db
-    .prepare(MODERATION_QUEUE_SQL)
-    .bind(status, clampQueueLimit(limit))
-    .all<QueuedCommentRow>()
+  options: QueueOptions = {},
+): Promise<QueuePage> {
+  const limit = clampQueueLimit(options.limit)
+  const cursor = options.cursor ?? null
 
-  return results.map((row) => ({
-    ...toStored(row),
-    pageKey: row.page_key,
-    pageTitle: row.page_title,
-  }))
+  const statement =
+    cursor === null
+      ? db.prepare(MODERATION_QUEUE_SQL).bind(status, limit + 1)
+      : db.prepare(MODERATION_QUEUE_PAGE_SQL).bind(status, limit + 1, cursor.createdAt, cursor.id)
+
+  const { results } = await statement.all<QueuedCommentRow>()
+  const page = results.slice(0, limit)
+  const last = page.at(-1)
+
+  return {
+    comments: page.map((row) => ({
+      ...toStored(row),
+      pageKey: row.page_key,
+      pageTitle: row.page_title,
+      spamReason: row.spam_reason,
+    })),
+    nextCursor:
+      results.length > limit && last !== undefined
+        ? encodeQueueCursor({ createdAt: last.created_at, id: last.id })
+        : null,
+  }
 }
 
 /**

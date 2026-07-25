@@ -108,6 +108,42 @@ describe('runSubmission — a comment held for review', () => {
     const stored = await db.prepare('select status from comments').first<{ status: string }>()
     expect(stored?.status).toBe('pending')
   })
+
+  // #70. Before this, `review` and `allow` produced byte-identical rows and the
+  // moderator could not tell a comment held because Turnstile was down from one
+  // that arrived clean.
+  it('records why it was held, so the human gate is told what it is being asked', async () => {
+    await runSubmission(
+      validRoot,
+      deps(verdict({ action: 'review', reason: 'turnstile: unreachable' })),
+    )
+
+    const stored = await db
+      .prepare('select spam_reason from comments')
+      .first<{ spam_reason: string | null }>()
+    expect(stored?.spam_reason).toBe('turnstile: unreachable')
+  })
+
+  it('records no reason for a comment no layer doubted', async () => {
+    await runSubmission(validRoot, deps())
+
+    const stored = await db
+      .prepare('select spam_reason from comments')
+      .first<{ spam_reason: string | null }>()
+    expect(stored?.spam_reason).toBeNull()
+  })
+
+  it('costs the same one insert it always did, so the query budget is unchanged', async () => {
+    // #70 adds a column, not a statement. A second write here would be a second
+    // row written per comment against the 100k/day budget.
+    const before = await countComments()
+    await runSubmission(
+      validRoot,
+      deps(verdict({ action: 'review', reason: 'content: many-links' })),
+    )
+
+    expect(await countComments()).toBe(before + 1)
+  })
 })
 
 describe('runSubmission — the spam seam gets what #8 needs', () => {

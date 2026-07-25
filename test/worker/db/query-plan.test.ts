@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import {
   MAX_PAGE_COMMENTS,
+  MODERATION_QUEUE_PAGE_SQL,
   MODERATION_QUEUE_SQL,
   PAGE_COMMENTS_SQL,
   PURGE_IP_HASH_SQL,
@@ -83,6 +84,46 @@ describe('the moderation queue read', () => {
     // sharing one timestamp. A whole-clause sort is the failure this rules out: it
     // would mean every row of that status is read before the limit is applied, so
     // the clamp would bound what comes back and nothing about what it cost.
+    expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
+  })
+})
+
+describe('the moderation queue read, past the first page', () => {
+  // The whole argument for a keyset cursor over `offset N` (#33) is that the
+  // deepest page should not be the most expensive one. That property lives
+  // entirely in this plan: if the cursor is a filter rather than a seek, page
+  // forty reads every row of the status before returning twenty, and the paging
+  // costs more than the `offset` it replaced. This is the plan a long queue
+  // actually spends its row reads on, and it is why MODERATION_QUEUE_PAGE_SQL is
+  // a second statement rather than a null-guarded disjunct in the first.
+  const PAGE_BINDINGS = ['pending', 50, 1_753_300_000, 4_000] as const
+
+  it('seeks the status on an index rather than scanning the comments table', async () => {
+    const plan = await planOf(MODERATION_QUEUE_PAGE_SQL, ...PAGE_BINDINGS)
+
+    expect(plan).toMatch(/SEARCH c USING INDEX comments_by_status/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('resolves each comment thread without scanning threads either', async () => {
+    const plan = await planOf(MODERATION_QUEUE_PAGE_SQL, ...PAGE_BINDINGS)
+
+    expect(plan).toMatch(/SEARCH t USING INTEGER PRIMARY KEY/)
+  })
+
+  it('starts at the cursor rather than reading up to it', async () => {
+    const plan = await planOf(MODERATION_QUEUE_PAGE_SQL, ...PAGE_BINDINGS)
+
+    // Two constrained columns, not one: the seek uses `status = ?` *and* the
+    // `created_at` half of the row-value comparison. One column would mean the
+    // whole status is read and the cursor filtered afterwards, which is the
+    // failure mode this statement exists to avoid.
+    expect(plan).toMatch(/comments_by_status \(status=\? AND created_at<\?\)/)
+  })
+
+  it('takes the newest rows from the index rather than sorting the whole status', async () => {
+    const plan = await planOf(MODERATION_QUEUE_PAGE_SQL, ...PAGE_BINDINGS)
+
     expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
   })
 })

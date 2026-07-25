@@ -490,7 +490,7 @@ describe('listModerationQueue', () => {
     })
     await setCommentStatus(db, approved.id, 'approved', t0 + 300)
 
-    const queue = await listModerationQueue(db, 'pending', 50)
+    const { comments: queue } = await listModerationQueue(db, 'pending', { limit: 50 })
 
     expect(queue.map((comment) => comment.id)).toEqual([newer.id, older.id])
     expect(queue[0]?.pageKey).toBe('/b')
