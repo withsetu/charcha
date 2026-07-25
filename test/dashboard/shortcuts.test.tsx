@@ -22,7 +22,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { Triage } from '../../src/dashboard/components/triage'
-import { comment, json, queuePage, stubFetch, unhandled, type FetchStub } from './harness'
+import { comment, decision, json, queuePage, stubFetch, unhandled, type FetchStub } from './harness'
 
 function noop() {
   return
@@ -34,7 +34,7 @@ async function mountQueue(): Promise<FetchStub> {
       return json(200, queuePage([comment({ id: 1 }), comment({ id: 2 }), comment({ id: 3 })]))
     }
     if (/^\/admin\/api\/comments\/\d+\/status$/.test(call.path)) {
-      return json(200, { id: 1, status: 'spam', moderatedAt: 1 })
+      return json(200, decision(1, 'spam'))
     }
     return unhandled(call)
   })

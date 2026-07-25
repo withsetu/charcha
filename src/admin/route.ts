@@ -11,8 +11,14 @@
 
 import type { Context } from 'hono'
 import { z } from 'zod'
-import { NoSuchCommentError, listModerationQueue, parseQueueCursor, setCommentStatus } from '../db'
-import type { CommentStatus, QueueCursor } from '../db'
+import {
+  NoSuchCommentError,
+  countCommentsByStatus,
+  listModerationQueue,
+  parseQueueCursor,
+  setCommentStatus,
+} from '../db'
+import type { CommentStatus, QueueCursor, StatusCounts } from '../db'
 import { readCappedText } from '../request-body'
 import {
   adminJson,
@@ -90,6 +96,21 @@ async function readJson(
   } catch {
     return { ok: false, response: badRequest('That request could not be read.') }
   }
+}
+
+/**
+ * The counts the dashboard's tab strip shows (#135), which are the three statuses it
+ * has views for.
+ *
+ * `deleted` is counted by the same statement and deliberately not sent: there is no
+ * deleted view, so it would be a number with no reader. Narrowing here rather than in
+ * the data layer keeps `countCommentsByStatus` the honest shape of `group by status`,
+ * and it is what lets the dashboard key `QueueCounts` by `ViewStatus` — so a view
+ * without a count does not typecheck instead of merely being unlikely.
+ * Enforced by test/worker/admin/queue.test.ts.
+ */
+function viewCounts(counts: StatusCounts) {
+  return { pending: counts.pending, spam: counts.spam, approved: counts.approved }
 }
 
 /**
@@ -222,7 +243,12 @@ export async function handleSession(
  * "next page" return page one, so the UI would loop over the first page forever
  * while the oldest comments stayed unreachable.
  *
- * One D1 query, whichever page is asked for.
+ * **Two D1 queries, whichever page is asked for** — the page and the per-status counts
+ * (#135). Two rather than one because the tab strip claims a number for every view and
+ * a request per view would make the query count grow with the UI; two rather than a
+ * separate endpoint because the counts change on exactly the events the queue does, and
+ * a second round trip is a second thing to fail while the first has already rendered.
+ * Constant either way, which is what the 50-query invocation budget asks for.
  * Enforced by test/worker/admin/queue.test.ts.
  */
 export async function handleQueue(
@@ -258,7 +284,8 @@ export async function handleQueue(
     limit: url.searchParams.get('limit') ?? undefined,
     cursor,
   })
-  return adminJson(page)
+  const counts = await countCommentsByStatus(c.env.DB)
+  return adminJson({ ...page, counts: viewCounts(counts) })
 }
 
 /**
@@ -303,7 +330,18 @@ export async function handleCommentStatus(
 
   try {
     const comment = await setCommentStatus(c.env.DB, id, parsed.data.status, now)
-    return adminJson({ id: comment.id, status: comment.status, moderatedAt: comment.moderatedAt })
+    // Recounted rather than adjusted by one (#135). A decision on a comment with
+    // replies moves all of them — setCommentStatus cascades — so the change is not
+    // always one, and a dashboard keeping its own tally would be wrong by however many
+    // replies there were, with nothing on screen to reveal it. One more query, and the
+    // count is the database's answer rather than the client's arithmetic.
+    const counts = await countCommentsByStatus(c.env.DB)
+    return adminJson({
+      id: comment.id,
+      status: comment.status,
+      moderatedAt: comment.moderatedAt,
+      counts: viewCounts(counts),
+    })
   } catch (error) {
     // Only this one, by class. Catching everything would report a D1 outage as "no
     // such comment", which is the report that stops anyone investigating.

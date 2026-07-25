@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import type { ApiFailure, QueuedComment } from '../../src/dashboard/api'
+import type { ApiFailure, QueueCounts, QueuedComment } from '../../src/dashboard/api'
 import type { QueueState } from '../../src/dashboard/queue'
 import {
   currentComment,
@@ -33,10 +33,17 @@ function comment(id: number, overrides: Partial<QueuedComment> = {}): QueuedComm
 
 const FAILURE: ApiFailure = { code: 'UNAVAILABLE', message: 'Something went wrong.', status: 500 }
 
+function counts(pending: number, spam = 0, approved = 0): QueueCounts {
+  return { pending, spam, approved }
+}
+
+/** The counts every case that is not about counts uses, so the numbers stand out. */
+const SOME_COUNTS = counts(9, 8, 7)
+
 function loaded(ids: number[], nextCursor: string | null = null): QueueState {
   return reduce(initialState('pending'), {
     type: 'load/ok',
-    page: { comments: ids.map((id) => comment(id)), nextCursor },
+    page: { comments: ids.map((id) => comment(id)), nextCursor, counts: SOME_COUNTS },
   })
 }
 
@@ -51,7 +58,7 @@ describe('the three first-page states', () => {
   it('an empty answer is ready-and-empty, which is not loading', () => {
     const state = reduce(initialState(), {
       type: 'load/ok',
-      page: { comments: [], nextCursor: null },
+      page: { comments: [], nextCursor: null, counts: SOME_COUNTS },
     })
     expect(state.phase).toBe('ready')
     expect(state.comments).toEqual([])
@@ -187,7 +194,7 @@ describe('a decision that does not apply', () => {
 
   it('announces a success politely, so it does not interrupt', () => {
     let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS })
     expect(state.announcement?.urgency).toBe('polite')
     expect(state.announcement?.text).toContain('Approved')
     expect(state.announcement?.text).toContain('Z to undo')
@@ -196,10 +203,10 @@ describe('a decision that does not apply', () => {
   it('gives two identical sentences two sequence numbers, or the second is never read', () => {
     let state = loaded([1, 2])
     state = reduce(state, { type: 'decide/start', id: 1, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS })
     const first = state.announcement
     state = reduce(state, { type: 'decide/start', id: 2, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 2, at: 2_000 })
+    state = reduce(state, { type: 'decide/ok', id: 2, at: 2_000, counts: SOME_COUNTS })
     expect(state.announcement?.seq).toBeGreaterThan(first?.seq ?? 0)
   })
 })
@@ -207,16 +214,16 @@ describe('a decision that does not apply', () => {
 describe('undo', () => {
   it('is offered after a decision lands, with the clock the caller passed', () => {
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 12_345 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 12_345, counts: SOME_COUNTS })
     expect(state.undo).toMatchObject({ from: 'pending', to: 'spam', offeredAt: 12_345 })
     expect(state.undo?.comment.id).toBe(1)
   })
 
   it('restores the row at the index it left, not at the top', () => {
     let state = reduce(loaded([1, 2, 3]), { type: 'decide/start', id: 2, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 2, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 2, at: 1, counts: SOME_COUNTS })
     state = reduce(state, { type: 'undo/start' })
-    state = reduce(state, { type: 'undo/ok' })
+    state = reduce(state, { type: 'undo/ok', counts: SOME_COUNTS })
     expect(state.comments.map((c) => c.id)).toEqual([1, 2, 3])
     expect(state.currentId).toBe(2)
     expect(state.undo).toBeNull()
@@ -227,10 +234,10 @@ describe('undo', () => {
     // comment back to spam, and this is the field the request is built from.
     let state = reduce(initialState('spam'), {
       type: 'load/ok',
-      page: { comments: [comment(7, { status: 'spam' })], nextCursor: null },
+      page: { comments: [comment(7, { status: 'spam' })], nextCursor: null, counts: SOME_COUNTS },
     })
     state = reduce(state, { type: 'decide/start', id: 7, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 7, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 7, at: 1, counts: SOME_COUNTS })
     expect(state.undo?.from).toBe('spam')
   })
 
@@ -243,14 +250,18 @@ describe('undo', () => {
     // comment in the approved list, where the owner would read it as published.
     let state = reduce(initialState('approved'), {
       type: 'load/ok',
-      page: { comments: [comment(7, { status: 'pending' })], nextCursor: null },
+      page: {
+        comments: [comment(7, { status: 'pending' })],
+        nextCursor: null,
+        counts: SOME_COUNTS,
+      },
     })
     state = reduce(state, { type: 'decide/start', id: 7, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 7, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 7, at: 1, counts: SOME_COUNTS })
     expect(state.undo?.from).toBe('pending')
 
     state = reduce(state, { type: 'undo/start' })
-    state = reduce(state, { type: 'undo/ok' })
+    state = reduce(state, { type: 'undo/ok', counts: SOME_COUNTS })
     expect(state.comments).toEqual([])
     // The announcement is then the whole of the feedback, which is why it names the
     // status the comment went back to rather than only saying "undone".
@@ -259,7 +270,7 @@ describe('undo', () => {
 
   it('reports a failed undo rather than pretending the row is back', () => {
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
     state = reduce(state, { type: 'undo/start' })
     state = reduce(state, { type: 'undo/failed', failure: FAILURE })
     expect(state.comments.map((c) => c.id)).toEqual([2])
@@ -269,7 +280,7 @@ describe('undo', () => {
 
   it('expires, and an expiry mid-request does not cancel the request', () => {
     let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
     const running = reduce(state, { type: 'undo/start' })
     expect(reduce(running, { type: 'undo/expire' })).toBe(running)
     expect(reduce(state, { type: 'undo/expire' }).undo).toBeNull()
@@ -279,7 +290,7 @@ describe('undo', () => {
     // `Z` means "take back what I just did". Two offers would make it ambiguous which.
     let state = loaded([1, 2])
     state = reduce(state, { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
     state = reduce(state, { type: 'decide/start', id: 2, status: 'approved' })
     expect(state.undo).toBeNull()
   })
@@ -292,7 +303,7 @@ describe('paging past the cap', () => {
     state = reduce(state, { type: 'more/start' })
     state = reduce(state, {
       type: 'more/ok',
-      page: { comments: [comment(3), comment(4)], nextCursor: null },
+      page: { comments: [comment(3), comment(4)], nextCursor: null, counts: SOME_COUNTS },
     })
     expect(state.comments.map((c) => c.id)).toEqual([1, 2, 3, 4])
     expect(state.currentId).toBe(2)
@@ -344,7 +355,7 @@ describe('paging past the cap', () => {
 describe('switching view', () => {
   it('starts a new queue and drops everything about the old one', () => {
     let state = reduce(loaded([1, 2], '1.2'), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1 })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
     state = reduce(state, { type: 'view', view: 'spam' })
     expect(state.view).toBe('spam')
     expect(state.phase).toBe('loading')
@@ -361,6 +372,68 @@ describe('switching view', () => {
       view: 'spam',
     })
     expect(state.helpOpen).toBe(true)
+  })
+})
+
+describe('the per-status counts (#135)', () => {
+  it('is unknown rather than zero before the first answer', () => {
+    // The distinction the tabs depend on: `null` is "nobody has said yet" and renders no
+    // badge, `0` is "this queue is empty" and renders one. Collapsing them would make an
+    // unanswered request look like a cleared queue, which is the same lie as the loading
+    // state looking like the empty one.
+    expect(initialState().counts).toBeNull()
+  })
+
+  it('takes them from the page the server sent', () => {
+    const state = reduce(initialState(), {
+      type: 'load/ok',
+      page: { comments: [comment(1)], nextCursor: null, counts: counts(53, 12, 104) },
+    })
+    expect(state.counts).toEqual({ pending: 53, spam: 12, approved: 104 })
+  })
+
+  it('survives a view change, because they describe the database and not this queue', () => {
+    // Everything else about the old queue goes. If the counts went with it, switching
+    // tabs would blank all three badges and then repopulate them — and the numbers were
+    // still true the whole time.
+    const state = reduce(loaded([1, 2]), { type: 'view', view: 'spam' })
+    expect(state.comments).toEqual([])
+    expect(state.counts).toEqual(SOME_COUNTS)
+  })
+
+  it('follows a decision, from the server rather than by arithmetic', () => {
+    // Not `pending - 1`. The decision cascades to the replies under the comment, so the
+    // change is not always one — see src/admin/route.ts and
+    // test/worker/admin/queue.test.ts. The reducer takes the recount and does no sums.
+    let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'approved' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: counts(4, 8, 12) })
+    expect(state.counts).toEqual({ pending: 4, spam: 8, approved: 12 })
+  })
+
+  it('follows an undo the same way', () => {
+    let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'approved' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: counts(4, 8, 12) })
+    state = reduce(state, { type: 'undo/start' })
+    state = reduce(state, { type: 'undo/ok', counts: counts(5, 8, 11) })
+    expect(state.counts).toEqual({ pending: 5, spam: 8, approved: 11 })
+  })
+
+  it('is left alone by a decision that did not apply', () => {
+    // Nothing moved, so nothing about the counts changed. Clearing them here would blank
+    // the badges at the exact moment the owner is being told the queue is unchanged.
+    let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'decide/failed', id: 1, failure: FAILURE })
+    expect(state.counts).toEqual(SOME_COUNTS)
+  })
+
+  it('refreshes on the next page, and never adds it to the total', () => {
+    let state = loaded([1, 2], '1699999998.2')
+    state = reduce(state, { type: 'more/start' })
+    state = reduce(state, {
+      type: 'more/ok',
+      page: { comments: [comment(3)], nextCursor: null, counts: counts(3, 8, 7) },
+    })
+    expect(state.counts).toEqual({ pending: 3, spam: 8, approved: 7 })
   })
 })
 

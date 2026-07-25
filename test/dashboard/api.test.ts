@@ -92,12 +92,21 @@ describe('the endpoints', () => {
   })
 
   it('posts one decision per comment', async () => {
-    stubFetch(() => answer(200, { id: 12, status: 'spam', moderatedAt: 5 }))
+    const body = {
+      id: 12,
+      status: 'spam',
+      moderatedAt: 5,
+      // The counts as they are after the decision (#135). Asserted here because this
+      // client is transparent by design: it hands the body up untouched, and the tabs
+      // read their numbers straight out of it.
+      counts: { pending: 4, spam: 9, approved: 2 },
+    }
+    stubFetch(() => answer(200, body))
     const result = await decide(12, 'spam')
     expect(calls[0]?.url).toBe('/admin/api/comments/12/status')
     expect(calls[0]?.init.method).toBe('POST')
     expect(calls[0]?.init.body).toBe(JSON.stringify({ status: 'spam' }))
-    expect(result).toEqual({ ok: true, value: { id: 12, status: 'spam', moderatedAt: 5 } })
+    expect(result).toEqual({ ok: true, value: body })
   })
 
   it('accepts the 204 that signing out answers, without trying to read a body', async () => {

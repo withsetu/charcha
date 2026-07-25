@@ -8,7 +8,7 @@
 import { cleanup, configure } from '@testing-library/react'
 import { afterEach, expect, vi } from 'vitest'
 
-import type { QueuedComment } from '../../src/dashboard/api'
+import type { QueueCounts, QueuedComment } from '../../src/dashboard/api'
 
 // Testing Library's default `findBy`/`waitFor` budget is one second, which is plenty on
 // its own and not plenty when this project's whole suite runs — 66 files across five
@@ -121,8 +121,39 @@ export function comment(overrides: Partial<QueuedComment> = {}): QueuedComment {
   }
 }
 
-export function queuePage(comments: QueuedComment[], nextCursor: string | null = null) {
-  return { comments, nextCursor }
+/**
+ * A queue page, with counts that agree with it unless a test says otherwise (#135).
+ *
+ * The default is `pending: comments.length` because a page with no cursor *is* the whole
+ * queue, so the honest total is what is on it — which keeps every test that is not about
+ * counts free of numbers it does not care about. A page that hands back a cursor gets one
+ * more than it holds, which is the least it can honestly claim; a test that cares how
+ * many more says so.
+ */
+export function queuePage(
+  comments: QueuedComment[],
+  nextCursor: string | null = null,
+  counts: QueueCounts = {
+    pending: comments.length + (nextCursor === null ? 0 : 1),
+    spam: 0,
+    approved: 0,
+  },
+) {
+  return { comments, nextCursor, counts }
+}
+
+/**
+ * The decision endpoint's answer, which carries the counts as they are afterwards.
+ *
+ * Defaulted to zeroes: most tests are about the row leaving the list rather than about
+ * the badge, and a decision that clears the only comment does leave the queue empty.
+ */
+export function decision(
+  id: number,
+  status: string,
+  counts: QueueCounts = { pending: 0, spam: 0, approved: 0 },
+) {
+  return { id, status, moderatedAt: 1, counts }
 }
 
 /** The rows currently on screen, by their accessible name's author. */

@@ -15,6 +15,7 @@ import type { DecisionStatus, QueuedComment } from '../api'
 import { formatAge, formatExact, isoInstant, pageLabel } from '../format'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Kbd } from '../ui/kbd'
 import { cn } from '../ui/utils'
 import { CommentBody } from './comment-body'
 
@@ -160,12 +161,7 @@ export function CommentCard({
             >
               <decision.icon aria-hidden="true" />
               {decision.label}
-              <kbd
-                aria-hidden="true"
-                className="ml-1 rounded border border-current/25 px-1 text-[0.65rem] opacity-70"
-              >
-                {decision.key}
-              </kbd>
+              <Kbd aria-hidden="true">{decision.key}</Kbd>
             </Button>
           ))}
         </div>

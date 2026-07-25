@@ -93,9 +93,30 @@ export interface QueuedComment {
   spamReason: string | null
 }
 
+/**
+ * How many comments are in each view, whatever page is loaded (#135).
+ *
+ * Keyed by `ViewStatus` rather than declared as an interface, so a view without a count
+ * does not typecheck: the tab strip maps over `VIEW_STATUSES`, and this is what makes
+ * `counts[view]` a number at every one of them instead of possibly `undefined`.
+ *
+ * `deleted` is deliberately absent. The endpoint counts it — it is one `group by` — and
+ * does not send it, because there is no deleted view and it would be a number with no
+ * reader. See viewCounts in src/admin/route.ts.
+ */
+export type QueueCounts = Record<ViewStatus, number>
+
 export interface QueuePage {
   comments: QueuedComment[]
   nextCursor: string | null
+  /**
+   * The whole queue's size per view, which is not `comments.length`.
+   *
+   * It rides along with the page rather than coming from an endpoint of its own: the
+   * counts change on exactly the events the queue does, and a second request would be a
+   * second thing to fail after the first had already rendered.
+   */
+  counts: QueueCounts
 }
 
 export interface SessionState {
@@ -107,6 +128,15 @@ export interface DecisionResult {
   id: number
   status: string
   moderatedAt: number | null
+  /**
+   * The counts as they are *after* this decision (#135).
+   *
+   * Recomputed by the server rather than adjusted here by one, because the decision
+   * cascades to the replies under the comment — so the change is not always one, and a
+   * tally kept in the client would be wrong by however many replies there were.
+   * Enforced by test/worker/admin/queue.test.ts.
+   */
+  counts: QueueCounts
 }
 
 /** A whole sentence for each failure that never reached a handler. */

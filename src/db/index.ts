@@ -702,6 +702,57 @@ export async function listModerationQueue(
   }
 }
 
+/** How many comments sit in each status. Every status is present, zero included. */
+export type StatusCounts = Record<CommentStatus, number>
+
+/**
+ * The per-status counts, as one grouped statement (#135).
+ *
+ * **One statement for every status rather than one per status, and that is the whole
+ * design of it.** The dashboard's tab strip needs three numbers and the query count has
+ * to stay independent of how many it needs — CLAUDE.md's rule is a constant query
+ * count, not a low one, because the 50-query invocation budget is a ceiling that throws
+ * rather than a slope that slows down.
+ *
+ * A constant so the plan can be asserted against the statement this project actually
+ * sends rather than a copy of it in a test. The plan it is allowed to have is narrower
+ * than "does not scan": an exact count of a status cannot seek, because every row of
+ * that status is part of the answer. What `comments_by_status` buys is that the scan
+ * reads *index entries and never the table*, which is what keeps a count off the rows
+ * carrying up to 10,000 characters of body each.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/status-counts.test.ts.
+ */
+export const STATUS_COUNTS_SQL = `select status, count(*) as n
+       from comments
+      group by status`
+
+/**
+ * How many comments are in each status, right now.
+ *
+ * Zero-filled for all four, because `group by` returns no row for a status nothing is
+ * in — and a caller handed an object missing a key renders `undefined` where it meant
+ * to render a number. An empty queue is a state worth showing, so it needs a value.
+ *
+ * It is a read of the whole table, and that is inherent rather than an oversight: an
+ * exact count has to visit every row of the status it counts. The bound is that it
+ * visits index entries rather than rows — see STATUS_COUNTS_SQL. #136 records the size
+ * at which even that stops being affordable, and what would replace it.
+ * Enforced by test/worker/db/status-counts.test.ts.
+ */
+export async function countCommentsByStatus(db: D1Database): Promise<StatusCounts> {
+  const { results } = await db.prepare(STATUS_COUNTS_SQL).all<{ status: string; n: number }>()
+
+  const counts: StatusCounts = { pending: 0, approved: 0, spam: 0, deleted: 0 }
+  for (const row of results) {
+    // A status outside the four is dropped rather than added as a key. The column has
+    // a CHECK constraint (migrations/0001_initial.sql) so there should be none, and an
+    // unknown key reaching the dashboard as a fourth tab is a worse failure than a
+    // count that is missing one.
+    if (row.status in counts) counts[row.status as CommentStatus] = row.n
+  }
+  return counts
+}
+
 /**
  * The retention window for `ip_hash`, in days, when the owner has set none.
  *
