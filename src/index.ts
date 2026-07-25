@@ -24,7 +24,7 @@ import {
 } from './cors'
 import { PREVIEW_PATH, handlePreview } from './preview/route'
 import { handleRead } from './read/route'
-import { handleRoot } from './root/route'
+import { ROOT_PAGE, ROOT_PAGE_HEADERS } from './root/page'
 import { createSpamCheck } from './spam'
 import { handleSubmit } from './submit/route'
 
@@ -148,13 +148,13 @@ app.get('/admin/', dashboardDocument)
 // The address Cloudflare hands the deployer on the deploy-success screen (#140).
 //
 // Until this route existed, clicking that link answered `Not found` — so a healthy
-// deployment's first words to its owner were that the deploy had failed. What it says
-// instead is deliberately narrow: the Worker is up, whether the database has been
-// migrated, the embed snippet with this deployment's own origin already in it, and
-// where the dashboard is. It is public and unauthenticated, so it discloses no comment
-// count, no thread, and no configuration — see src/root/page.ts.
+// deployment's first words to its owner were that the deploy had failed. Saying the
+// Worker is up is the whole of its job: it is public and unauthenticated, so it
+// reports no database state, no comment count, no configuration and not even the
+// address of the dashboard (#145). A constant, therefore, reading no binding and
+// interpolating nothing from the request — see src/root/page.ts.
 // Enforced by test/worker/root/page.test.ts.
-app.get('/', (c) => handleRoot(c))
+app.get('/', (c) => c.body(ROOT_PAGE, 200, ROOT_PAGE_HEADERS))
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a

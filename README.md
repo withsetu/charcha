@@ -93,16 +93,30 @@ the deploy instead of publishing a Worker that queries an empty database.
 
 ## After it deploys
 
-Open the Worker URL Cloudflare gives you. `/` is a status page: it says whether the
-Worker is running and whether its database was migrated, and it prints the snippet
-below with your own deployment's address already filled in. It is public, so it shows
-nothing about your comments or your configuration.
+Open the Worker URL Cloudflare gives you. `/` answers with a short page saying Charcha
+is running. That is the whole of what it says, and it is deliberate: the address is
+public and unauthenticated, so it reports no database state, no configuration, no
+comment counts and not even where your dashboard is. A page that told a passing scanner
+that your deployment was half-broken and where its login was would be doing the
+scanner's work for it. Everything you actually need is here instead, in a README that
+is not published per deployment.
 
-Then do two things in the dashboard at `/admin`:
+Then three things, none of which take long:
 
-1. Sign in with `CHARCHA_DASHBOARD_PASSWORD`.
-2. Open **Allowed origins** and add your site's address — `https://example.com`, scheme
-   included, no trailing path.
+1. **Sign in to the dashboard**, at `/admin` on the same address —
+   `https://your-worker.example.workers.dev/admin`. The password is
+   `CHARCHA_DASHBOARD_PASSWORD`.
+2. **Open Allowed origins** and add your site's address — `https://example.com`, scheme
+   included, no trailing path. Until you do, comments from your site are refused; a
+   fresh deployment starts out allowing only its own address.
+3. **Paste [the snippet](#adding-it-to-a-page) into your page**, with your Worker's
+   address in place of the example one.
+
+If you want to check the deployment from a script rather than a browser, `/health`
+answers JSON. It currently reports `ok` on a database that exists but was never
+migrated, which is the failure most worth catching —
+[#141](https://github.com/withsetu/charcha/issues/141) is fixing that; until it lands,
+the check that actually settles it is the migration step in your build log.
 
 ### Allowed origins, and why a comment can be refused
 
@@ -131,8 +145,9 @@ setting — but your site is a different address, so it has to be added.
 <script src="https://your-worker.example.workers.dev/embed.js" defer></script>
 ```
 
-That is the whole integration — and the status page at `/` prints it with your address
-in place of the example one. `embed.js` is under 7 KB gzipped, ships no framework
+That is the whole integration. Replace the example address with your own Worker's —
+the one Cloudflare gave you, the same one you signed in to `/admin` on.
+`embed.js` is under 7 KB gzipped, ships no framework
 and no Markdown parser, and is served as a static asset so it costs your deployment
 nothing against the Cloudflare request budget. [Theming](docs/theming.md) covers the
 attributes, the class names and the three styling modes.
@@ -182,9 +197,10 @@ the same bindings the deployed Worker gets.
 
 ## Troubleshooting a deploy
 
-**Visiting the Worker URL used to answer `Not found`.** It does not any more — `/` is
-the status page described [above](#after-it-deploys). If you are on a version that
-predates it, the deployment was almost certainly fine: check `/health` and `/admin`.
+**Visiting the Worker URL used to answer `Not found`.** It does not any more — `/` says
+Charcha is running, and nothing further, for the reasons
+[above](#after-it-deploys). If you are on a version that predates it, the deployment was
+almost certainly fine: check `/health` and `/admin`.
 
 **Every comment is refused with `That origin is not allowed to comment on this site.`**
 Your site's address is not in **Allowed origins**. Add it in the dashboard at `/admin`
