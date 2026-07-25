@@ -14,10 +14,13 @@
 // all — not even to say it is fine.
 //
 // **And it runs no script.** `ROOT_PAGE_HEADERS` sets `default-src 'none'` with no
-// script directive, which src/cors.ts leans on: a same-origin request is accepted
-// without an allowlist entry precisely because the only two documents on this Worker's
-// origin are this page and the dashboard shell, and neither can execute injected
-// script. Adding one here would widen that.
+// script directive, and src/cors.ts leans on that: a same-origin request is accepted
+// without an allowlist entry, so a document this project serves on its own origin must
+// not be able to execute anything injected into it. Adding a script directive here
+// would widen that grant. See resolveOrigin for what the claim does and does not cover
+// — it is about this project's own responses, not about every page that might share the
+// origin on a path-scoped route.
+// Enforced by test/worker/root/page.test.ts.
 //
 // A string and a header record, never a `Response` — the same split as
 // src/dashboard/document.ts, so the render stays pure and testable and the route owns

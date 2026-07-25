@@ -111,25 +111,34 @@ export async function handleWriteSettings(c: AdminContext): Promise<Response> {
   const body = bodySchema.safeParse(read.value)
   if (!body.success) return badRequest('Send allowedOrigins as a list of addresses.')
 
-  const entries = body.data.allowedOrigins.map((entry) => entry.trim()).filter((e) => e !== '')
-
-  if (entries.length > MAX_ALLOWED_ORIGINS) {
-    return badRequest(
-      `That is more than ${String(MAX_ALLOWED_ORIGINS)} addresses. One site is usually an apex, a www and a staging host.`,
-    )
-  }
-
+  // **Counted after canonicalising and de-duplicating, not before.** `https://a.example`
+  // and `https://a.example/` are one origin, and an owner who pasted a list with a
+  // repeat in it should not be told they are over a limit they are not over. The bound
+  // that matters is on what gets stored, and this is what gets stored.
+  //
+  // The loop is still bounded before the cap is checked, because `readAdminJson` bounds
+  // the body first: at MAX_BODY_BYTES there is no list long enough for the per-entry
+  // work here to be worth anything to an attacker — and the caller is authenticated.
   const origins: string[] = []
-  for (const entry of entries) {
-    const origin = normaliseOrigin(entry)
+  for (const entry of body.data.allowedOrigins) {
+    const trimmed = entry.trim()
+    if (trimmed === '') continue
+
+    const origin = normaliseOrigin(trimmed)
     // Named in the message. "One of these is wrong" on a list of twenty is a message
     // that makes the owner check twenty of them.
     if (origin === null) {
       return badRequest(
-        `“${entry}” is not an address a browser sends. It needs the scheme: https://example.com`,
+        `“${trimmed}” is not an address a browser sends. It needs the scheme: https://example.com`,
       )
     }
     if (!origins.includes(origin)) origins.push(origin)
+  }
+
+  if (origins.length > MAX_ALLOWED_ORIGINS) {
+    return badRequest(
+      `That is more than ${String(MAX_ALLOWED_ORIGINS)} addresses. One site is usually an apex, a www and a staging host.`,
+    )
   }
 
   const value = origins.join(SEPARATOR)

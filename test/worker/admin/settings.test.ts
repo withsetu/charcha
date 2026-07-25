@@ -207,6 +207,18 @@ describe('writing the setting', () => {
     expect(await storedValue()).toBeNull()
   })
 
+  it('counts the cap after de-duplicating, not before', async () => {
+    // `https://a.example` and `https://a.example/` are one origin. An owner who pasted
+    // a list with a repeat in it should not be told they are over a limit they are not
+    // over — the bound that matters is on what gets stored.
+    const many = Array.from({ length: MAX_ALLOWED_ORIGINS }, (_, i) => `https://s${i}.example`)
+
+    const response = await write({ allowedOrigins: [...many, 'https://s0.example/'] }, { origin })
+
+    expect(response.status).toBe(200)
+    expect(await readAllowedOrigins(db)).toHaveLength(MAX_ALLOWED_ORIGINS)
+  })
+
   it('stores exactly the cap, so the boundary is usable rather than one short', async () => {
     const many = Array.from({ length: MAX_ALLOWED_ORIGINS }, (_, i) => `https://s${i}.example`)
 

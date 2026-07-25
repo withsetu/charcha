@@ -234,10 +234,18 @@ describe('an origin that only claims to be this deployment', () => {
   })
 
   it('is refused when a forwarding header claims the request arrived somewhere else', async () => {
-    // The self-origin comes from `request.url`, which Cloudflare builds from the
-    // request line and the Host the edge resolved — never from a header a caller
-    // chose. If it were read from one, this pair would let any page name itself
-    // same-origin.
+    // The self-origin comes from `request.url` and from no header. This is the guard
+    // against a future `x-forwarded-host` (or `x-forwarded-proto`, or `:authority`)
+    // being read instead: reading one would make this pair same-origin, and any page
+    // could then name itself so. Kill-shot confirmed on the PR for #57 — teaching
+    // `selfOrigin` to prefer `x-forwarded-host` fails exactly this test.
+    //
+    // **`Host` is deliberately not in this list, and saying so is the point.** It is a
+    // forbidden header name, so the `Request` constructor drops it and an assertion
+    // including it would be inert — it would read like a kill-shot against Host-header
+    // trust while testing nothing. The real protection against that is not a test at
+    // all: no browser lets a page set `Host`, and a client that can set it can omit
+    // `Origin` and was never subject to CORS.
     const decision = await resolveOrigin(
       db,
       new Request(`${DEPLOYMENT}/comments`, {
@@ -245,7 +253,7 @@ describe('an origin that only claims to be this deployment', () => {
         headers: {
           origin: 'https://evil.example',
           'x-forwarded-host': 'evil.example',
-          host: 'evil.example',
+          'x-forwarded-proto': 'https',
         },
       }),
     )

@@ -253,20 +253,40 @@ export function selfOrigin(request: Request): string | null {
  *
  *   - **It is not what CORS refuses.** The harm this file exists to stop is *another*
  *     site's page posting into this deployment's queue from a reader's browser. A page
- *     whose origin is this Worker's is a page this Worker served, and there are only
- *     two: `/` and `/admin`. Every other HTML this project emits carries
+ *     whose origin is this Worker's is a page the *owner* is responsible for. Of the
+ *     documents this project itself serves there are exactly two, `/` and `/admin`, and
+ *     neither can run injected script: `/admin` is `script-src 'self'` with no inline
+ *     and no nonce, and `/` is `default-src 'none'` with no script directive at all
+ *     (test/worker/root/page.test.ts and test/worker/dashboard/document.test.ts assert
+ *     both). Every other HTML this project emits carries
  *     `Content-Security-Policy: … sandbox`, which forces the document into an opaque
  *     origin, so a browser navigated to `GET /comments` is not on this origin at all
- *     (src/response-headers.ts). Neither of the two documents can run injected script:
- *     `/admin` is `script-src 'self'` with no inline and no nonce, and `/` is
- *     `default-src 'none'` with no script directive at all.
- *   - **It cannot be widened by anybody.** `selfOrigin` reads `request.url`, so the
- *     comparison is "did this request's own address match its own `Origin`" — a
- *     browser sets both from the same URL and a page cannot set either. Reaching this
- *     Worker under a hostname the owner did not route to it is not something an
- *     attacker can arrange: Cloudflare refuses a cross-account CNAME outright (Error
- *     1014, https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1014,
- *     checked 2026-07-25).
+ *     (src/response-headers.ts).
+ *
+ *     **That is a claim about this project's own responses and not about the origin.**
+ *     On `*.workers.dev` or a Custom Domain the Worker owns the whole origin and the two
+ *     coincide. On a *path-scoped* Worker Route — `example.com/comments*`, with the
+ *     owner's site on the same host — they do not: `selfOrigin` is then
+ *     `https://example.com`, and every page of that site is same-origin. The trust is
+ *     still not misplaced, because that is the owner's own site and it is the origin they
+ *     would list here anyway; but the ceiling is "an XSS on the owner's own pages could
+ *     post a comment", which is a thing such an XSS could already do by driving the
+ *     embed's form. Worth knowing before anyone reads the two-document sentence as a
+ *     property of the origin. Found by review, not by a test — nothing here can detect
+ *     the deployment's routing shape.
+ *   - **It cannot be widened by a *page*.** `selfOrigin` reads `request.url`, so the
+ *     comparison is "did this request's own address match its own `Origin`" — a browser
+ *     sets both from the same URL, `Origin` is a forbidden header name and `Host` is one
+ *     too, so no page can set either. That is the whole of what this check needs, because
+ *     both of its consumers are browser-only: anything that is not a browser omits
+ *     `Origin` and was never subject to CORS.
+ *
+ *     Reaching this Worker under a hostname the owner never routed to it would need a
+ *     route in the owner's own Cloudflare zone, and Cloudflare separately refuses a
+ *     cross-account CNAME by default (Error 1014,
+ *     https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1014,
+ *     checked 2026-07-25 — that page is about cross-account CNAMEs specifically, and is
+ *     cited for that and not as a statement about `request.url`).
  *   - **It is per-request and remembers nothing**, which is why it is derived here
  *     rather than seeded into `settings` on first contact. A stored seed taken from the
  *     same header would be the strictly worse trade: if the hostname were ever wrong
