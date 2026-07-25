@@ -8,6 +8,21 @@
 # 2026-07-25). So a name added here becomes a field in the one-click deploy form;
 # a name left out has to be found and set by hand afterwards.
 #
+# The text shown beside each field is `cloudflare.bindings.<NAME>.description` in
+# package.json, same page. Both halves are asserted rather than remembered:
+# `pnpm check:deploy` fails if a secret src/ reads is missing from this file, if a
+# name here has no description, or if a name here is read by nothing.
+#
+# **Leave every value empty.** The deploy form pre-fills from this file, so a
+# committed value becomes the default credential on every deployment that accepts
+# it — which for the password below would be a published one. `check:deploy` fails
+# on a non-empty value for that reason.
+#
+# One of the three is required. The other two turn a defence layer off when they
+# are absent rather than failing: an unconfigured deployment still takes comments,
+# because the alternative is a site whose comment form is broken by a secret its
+# owner never knew about.
+#
 # Never commit `.dev.vars`.
 
 # The moderation dashboard's password (#12). Sign in at /admin with this and

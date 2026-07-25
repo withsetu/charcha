@@ -90,6 +90,13 @@ jobs:
       - name: Actions are SHA-pinned
         run: pnpm check:actions
 
+      # The one-click deploy is the path nobody here can run, so the parts of it
+      # that are repository state are the parts that get asserted. This job lists
+      # its steps individually rather than running `pnpm check`, which means a new
+      # gate added to that script is not in CI until it is added here too.
+      - name: One-click deploy config
+        run: pnpm check:deploy
+
       # Two thresholds, not one: the production tree blocks at `low` because it
       # is what every self-deployer runs, and the dev tree blocks at `high`
       # because a gate that fires on a low-severity transitive dev advisory is a

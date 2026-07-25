@@ -6,6 +6,17 @@
 // Times are unix seconds and always passed in, never read from the clock here —
 // the caller owns "now" so tests can own it too.
 
+// RenderableComment is the renderer's type and is imported rather than declared
+// here (#94). The dependency runs this way round because the renderer is the
+// general half — D1 is one source of rows and the v1.1 build-time path is another
+// — and because a shape owned here would drag Cloudflare's ambient types into
+// every program that renders, which is what kept the embed's DOM tests from
+// building their fixtures out of the real renderer.
+//
+// Deliberately not re-exported: one type, one import path, or the next reader
+// declares a second one here and the two drift.
+import type { RenderableComment } from '../render'
+
 export type CommentStatus = 'pending' | 'approved' | 'spam' | 'deleted'
 
 export interface Thread {
@@ -15,22 +26,6 @@ export interface Thread {
   title: string | null
   createdAt: number
   updatedAt: number
-}
-
-/**
- * A comment as the renderer receives it. Deliberately missing `authorEmail` and
- * `ipHash`: the read that produces it does not select those columns, so no
- * template mistake downstream can leak either one.
- * Enforced by test/worker/db/comments.test.ts.
- */
-export interface RenderableComment {
-  id: number
-  parentId: number | null
-  depth: number
-  authorName: string
-  body: string
-  byOwner: boolean
-  createdAt: number
 }
 
 export interface StoredComment extends RenderableComment {
