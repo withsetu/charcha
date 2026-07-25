@@ -6,14 +6,36 @@
 // reads the clock, the network or a global: the same rows render to the same
 // string everywhere, so the output is cacheable and snapshot-testable.
 //
-// Its input is RenderableComment, which the data layer builds without ever
-// selecting author_email or ip_hash. Neither is available to be leaked here.
+// Its input is RenderableComment, declared below rather than imported from the
+// data layer. The renderer is the general half of that pair — D1 is one source of
+// rows, and the v1.1 build-time path takes them from a site generator instead — so
+// the shape belongs to the consumer and src/db conforms to it. That direction is
+// also what makes this module importable from a program without Cloudflare's
+// ambient types, which is how test/dom/embed/mount.test.ts builds its fixtures out
+// of the real renderer instead of beside it (#94).
 
-import type { RenderableComment } from '../db'
 import { escapeHtml } from './escape'
 import { renderMarkdown } from './markdown'
 import type { CommentStrings } from './strings'
 import { ENGLISH_STRINGS } from './strings'
+
+/**
+ * A comment as the renderer receives it — the whole of what a caller supplies.
+ *
+ * There is no `authorEmail` and no `ipHash`, and the absence is the guard: a
+ * field this type does not carry is a field no template mistake below can put on
+ * a page. The data layer holds the other end, selecting neither column on the
+ * read that fills this — test/worker/db/comments.test.ts is what enforces that.
+ */
+export interface RenderableComment {
+  id: number
+  parentId: number | null
+  depth: number
+  authorName: string
+  body: string
+  byOwner: boolean
+  createdAt: number
+}
 
 /**
  * Every class name this renderer emits.

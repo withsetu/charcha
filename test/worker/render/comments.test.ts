@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { RenderableComment } from '../../../src/db'
-import type { CommentStrings } from '../../../src/render'
+import type { CommentStrings, RenderableComment } from '../../../src/render'
 import { COMMENT_CLASS_NAMES, ENGLISH_STRINGS, renderComments } from '../../../src/render'
 import { attributeNames, parseElements, tagNames } from './parse'
 
