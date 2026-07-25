@@ -14,6 +14,8 @@
 // either about a credential or is one owner's private view of unpublished comments.
 // Enforced by test/worker/admin/route.test.ts.
 
+import { readCappedText } from '../request-body'
+
 const JSON_TYPE = 'application/json; charset=utf-8'
 
 /** The machine-readable half of an error. Stable — the dashboard branches on it. */
@@ -92,3 +94,35 @@ export const tooManyRequests = () =>
 
 export const unavailable = () =>
   adminError('UNAVAILABLE', 'The dashboard is not available on this deployment.', 503)
+
+/**
+ * Reads a JSON body, bounded and never as a 500.
+ *
+ * Shares src/request-body.ts with the two public POSTs rather than carrying its own
+ * number, for the reason that module gives: a second endpoint with its own looser cap
+ * looks reasonable in isolation and is a way to spend the first one's budget.
+ *
+ * "Too large" keeps its own answer rather than collapsing into "unreadable". The size
+ * guard's 413 is the one message that tells a client something it can act on — send
+ * less — and folding it into a 400 would have the dashboard report a 70 KB paste as
+ * malformed JSON.
+ *
+ * It sits here, with the shapes it answers in, rather than beside whichever handler
+ * needed it first: every state-changing route on this surface reads a bounded JSON
+ * body the same way, and the second copy of that is where the caps drift apart.
+ * Enforced by test/worker/admin/route.test.ts and test/worker/admin/settings.test.ts.
+ */
+export async function readAdminJson(
+  request: Request,
+): Promise<{ ok: true; value: unknown } | { ok: false; response: Response }> {
+  // readCappedText fails for one reason only — the body was over the cap — so the 413
+  // is exact rather than a catch-all, and it is re-answered in this surface's JSON
+  // shape rather than the public routes' plain text.
+  const read = await readCappedText(request)
+  if (!read.ok) return { ok: false, response: tooLarge() }
+  try {
+    return { ok: true, value: JSON.parse(read.text) }
+  } catch {
+    return { ok: false, response: badRequest('That request could not be read.') }
+  }
+}

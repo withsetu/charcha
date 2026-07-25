@@ -12,6 +12,7 @@ import {
   handleQueue,
   handleSession,
 } from './admin/route'
+import { SETTINGS_PATH, handleReadSettings, handleWriteSettings } from './admin/settings'
 import { DASHBOARD_HEADERS, DASHBOARD_HTML } from './dashboard/document'
 import { getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
 import {
@@ -23,6 +24,7 @@ import {
 } from './cors'
 import { PREVIEW_PATH, handlePreview } from './preview/route'
 import { handleRead } from './read/route'
+import { handleRoot } from './root/route'
 import { createSpamCheck } from './spam'
 import { handleSubmit } from './submit/route'
 
@@ -110,6 +112,13 @@ app.get(SESSION_PATH, (c) => handleSession(c))
 app.get(QUEUE_PATH, (c) => handleQueue(c))
 app.post(COMMENT_STATUS_PATH, (c) => handleCommentStatus(c))
 
+// The origin allowlist (#57). It is on this surface and not on a public one for the
+// reason the whole file is: this setting decides which pages the public write endpoint
+// trusts, so an allowlist a stranger could widen would be worse than no allowlist.
+// Enforced by test/worker/admin/settings.test.ts.
+app.get(SETTINGS_PATH, (c) => handleReadSettings(c))
+app.put(SETTINGS_PATH, (c) => handleWriteSettings(c))
+
 // The dashboard itself (#13): the HTML shell the React app boots from.
 //
 // Two exact paths, and never `/admin/*`. Two separate things protect the API from
@@ -135,6 +144,17 @@ const dashboardDocument = (c: Context<{ Bindings: Env }>) =>
 
 app.get('/admin', dashboardDocument)
 app.get('/admin/', dashboardDocument)
+
+// The address Cloudflare hands the deployer on the deploy-success screen (#140).
+//
+// Until this route existed, clicking that link answered `Not found` — so a healthy
+// deployment's first words to its owner were that the deploy had failed. What it says
+// instead is deliberately narrow: the Worker is up, whether the database has been
+// migrated, the embed snippet with this deployment's own origin already in it, and
+// where the dashboard is. It is public and unauthenticated, so it discloses no comment
+// count, no thread, and no configuration — see src/root/page.ts.
+// Enforced by test/worker/root/page.test.ts.
+app.get('/', (c) => handleRoot(c))
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a
