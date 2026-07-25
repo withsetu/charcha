@@ -1,6 +1,7 @@
 import { env, exports } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { MAX_BODY_BYTES, renderResult } from '../../../src/submit/route'
+import { MAX_BODY_BYTES } from '../../../src/request-body'
+import { renderResult } from '../../../src/submit/route'
 
 const db = env.DB
 const origin = 'https://charcha.example'

@@ -7,6 +7,7 @@ import {
   unlistedOriginResponse,
   withCors,
 } from './cors'
+import { PREVIEW_PATH, handlePreview } from './preview/route'
 import { handleRead } from './read/route'
 import { createSpamCheck } from './spam'
 import { handleSubmit } from './submit/route'
@@ -58,6 +59,18 @@ app.get('/comments', (c) => handleRead(c, { significantParams: SIGNIFICANT_PARAM
 // checks the origin on the real request. See src/cors.ts.
 // Enforced by test/worker/read/route.test.ts.
 app.options('/comments', async (c) => {
+  const decision = await resolveOrigin(c.env.DB, c.req.raw)
+  return preflightResponse(decision.allowedOrigin)
+})
+
+// The composer's Preview tab (#78): Markdown in, the published comment's own HTML
+// out, writing nothing. POST because it carries a body, and POST-only because a
+// previewer reachable by a URL would put attacker-chosen HTML on this Worker's
+// origin behind a link. Its preflight is registered too — the embed's plain-text
+// body is never preflighted, but a browser that asks must not meet a 404.
+// Enforced by test/worker/preview/route.test.ts.
+app.post(PREVIEW_PATH, (c) => handlePreview(c))
+app.options(PREVIEW_PATH, async (c) => {
   const decision = await resolveOrigin(c.env.DB, c.req.raw)
   return preflightResponse(decision.allowedOrigin)
 })
