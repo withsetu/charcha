@@ -1,4 +1,14 @@
 import { Hono } from 'hono'
+import {
+  COMMENT_STATUS_PATH,
+  QUEUE_PATH,
+  SESSION_PATH,
+  handleCommentStatus,
+  handleLogin,
+  handleLogout,
+  handleQueue,
+  handleSession,
+} from './admin/route'
 import { getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
 import {
   isUnlistedBrowserOrigin,
@@ -74,6 +84,27 @@ app.options(PREVIEW_PATH, async (c) => {
   const decision = await resolveOrigin(c.env.DB, c.req.raw)
   return preflightResponse(decision.allowedOrigin)
 })
+
+// The moderation dashboard's API (#12). Everything under /admin/api is the owner's
+// authenticated surface, and it is the half of this Worker that lets a stored
+// comment ever be judged — before these routes existed, setCommentStatus had no
+// caller and Charcha was a one-way write.
+//
+// **No `app.options` here, and no CORS headers anywhere in src/admin.** That is the
+// policy rather than an omission: there is no legitimate cross-origin caller for a
+// moderation queue, so a preflight is answered with the 404 that stops a browser
+// from ever sending the real request. The reader-facing routes above need CORS
+// because the embed lives on another origin; the dashboard is served from this one.
+//
+// The session cookie these set is scoped `Path=/admin`, which is what keeps card
+// rule 8 true: the browser never attaches it to the /comments requests registered
+// above. See src/admin/session.ts.
+// Enforced by test/worker/admin/route.test.ts and test/worker/admin/cookie-scope.test.ts.
+app.post(SESSION_PATH, (c) => handleLogin(c))
+app.delete(SESSION_PATH, (c) => handleLogout(c))
+app.get(SESSION_PATH, (c) => handleSession(c))
+app.get(QUEUE_PATH, (c) => handleQueue(c))
+app.post(COMMENT_STATUS_PATH, (c) => handleCommentStatus(c))
 
 // Liveness for the site owner and for deploy verification: it answers only if the
 // Worker is running *and* its D1 binding resolves to a database that will answer a

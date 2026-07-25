@@ -1,0 +1,37 @@
+# Charcha secrets. Copy to `.dev.vars` for local development (it is gitignored),
+# and set the real values with `wrangler secret put <NAME>` on a deployment.
+#
+# The Deploy to Cloudflare button reads this file and asks the deployer for each
+# value as it provisions the Worker — "Worker secrets can be defined in a
+# `.dev.vars.example` or `.env.example` file with a dotenv format"
+# (https://developers.cloudflare.com/workers/platform/deploy-buttons/, checked
+# 2026-07-25). So a name added here becomes a field in the one-click deploy form;
+# a name left out has to be found and set by hand afterwards.
+#
+# Never commit `.dev.vars`.
+
+# The moderation dashboard's password (#12). Sign in at /admin with this and
+# nothing else — there is no user table, no account to create, and no password
+# reset. Changing it here and redeploying is also how you sign every session out,
+# because sessions are signed with a key derived from this value rather than
+# stored.
+#
+# It is the single credential that can approve, hide and delete every comment on
+# the site. Use a generated one — `openssl rand -base64 24` — not a memorable one:
+# it is typed once into a password manager, never by hand.
+#
+# Leave it unset and the dashboard refuses every request, including the login.
+# That is deliberate: an unconfigured deployment is not an open one.
+CHARCHA_DASHBOARD_PASSWORD=
+
+# The HMAC key for `comments.ip_hash`, which is what makes the per-IP half of the
+# spam rate limit (#8, layer 4) real. Per deployment, and never derivable from the
+# database — it is the only thing between the stored hashes and a map of who
+# commented from where. Unset means no hash is stored at all, and the per-IP half
+# abstains; the per-thread half still runs.
+IP_HASH_SECRET=
+
+# The secret key of your Cloudflare Turnstile widget (#8, layer 3). Unset means
+# layer 3 abstains and comments are still accepted.
+# https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
+TURNSTILE_SECRET_KEY=

@@ -1,0 +1,302 @@
+// The authenticated endpoints. This is the file that finally calls
+// setCommentStatus — before it, a comment could be stored and never judged, and
+// Charcha was a one-way write.
+//
+// Every handler here is behind resolveIdentity except the login itself, which is a
+// public unauthenticated endpoint and inherits card rule 5 in full: it is
+// throttled, it compares in constant time, and no failure it returns distinguishes
+// one cause from another.
+// Enforced by test/worker/admin/route.test.ts, test/worker/admin/queue.test.ts and
+// test/worker/admin/cookie-scope.test.ts.
+
+import type { Context } from 'hono'
+import { z } from 'zod'
+import { NoSuchCommentError, listModerationQueue, parseQueueCursor, setCommentStatus } from '../db'
+import type { CommentStatus, QueueCursor } from '../db'
+import { readCappedText } from '../request-body'
+import { announceOnce } from '../spam/log'
+import {
+  adminJson,
+  adminNoContent,
+  badRequest,
+  forbidden,
+  notFound,
+  tooLarge,
+  tooManyRequests,
+  unauthorized,
+} from './api'
+import { adminAuthenticators, resolveIdentity } from './authenticate'
+import { isCrossOriginRequest } from './csrf'
+import type { AdminEnv } from './env'
+import { passwordMatches, usableDashboardPassword } from './password'
+import { clearedSessionCookie, issueSession, sessionCookie } from './session'
+import { loginThrottle } from './throttle'
+
+/** The routes, as constants, so src/index.ts and the tests name the same strings. */
+export const SESSION_PATH = '/admin/api/session'
+export const QUEUE_PATH = '/admin/api/queue'
+export const COMMENT_STATUS_PATH = '/admin/api/comments/:id/status'
+
+type AdminContext = Context<{ Bindings: Env }>
+
+export interface AdminRouteConfig {
+  /** Injectable for tests; defaults to the wall clock in unix seconds. */
+  now?: () => number
+}
+
+function clock(config: AdminRouteConfig): number {
+  return config.now ? config.now() : Math.floor(Date.now() / 1000)
+}
+
+const loginSchema = z.object({ password: z.string() })
+
+const statusSchema = z.object({
+  status: z.enum(['pending', 'approved', 'spam', 'deleted']),
+})
+
+/**
+ * The statuses the queue can be asked for. The same four the column allows — a
+ * status outside them is not a narrower query, it is a caller who guessed.
+ */
+const queueStatusSchema = z.enum(['pending', 'approved', 'spam', 'deleted'])
+
+/**
+ * Reads a JSON body, bounded and never as a 500.
+ *
+ * Shares src/request-body.ts with the two public POSTs rather than carrying its own
+ * number, for the reason that module gives: a second endpoint with its own looser
+ * cap looks reasonable in isolation and is a way to spend the first one's budget.
+ *
+ * "Too large" keeps its own answer rather than collapsing into "unreadable". The
+ * size guard's 413 is the one message that tells a client something it can act on —
+ * send less — and folding it into a 400 would have the dashboard report a 70 KB
+ * paste as malformed JSON.
+ */
+async function readJson(
+  request: Request,
+): Promise<{ ok: true; value: unknown } | { ok: false; response: Response }> {
+  // readCappedText fails for one reason only — the body was over the cap — so the
+  // 413 is exact rather than a catch-all, and it is re-answered in this surface's
+  // JSON shape rather than the public routes' plain text.
+  const read = await readCappedText(request)
+  if (!read.ok) return { ok: false, response: tooLarge() }
+  try {
+    return { ok: true, value: JSON.parse(read.text) }
+  } catch {
+    return { ok: false, response: badRequest('That request could not be read.') }
+  }
+}
+
+/**
+ * Whoever the request is, or a 401 response to return instead.
+ *
+ * Every authenticated handler starts here, and none of them re-derives the answer.
+ * A helper rather than Hono middleware because middleware is registered per route
+ * pattern and a route added later can simply not be covered by it — a mistake that
+ * would look like a working endpoint. This cannot be forgotten without the handler
+ * having no identity to use.
+ * Enforced by test/worker/admin/route.test.ts.
+ */
+async function authenticated(
+  c: AdminContext,
+  now: number,
+): Promise<{ ok: true; via: string } | { ok: false; response: Response }> {
+  const identity = await resolveIdentity(adminAuthenticators(c.env), c.req.raw, now)
+  return identity === null
+    ? { ok: false, response: unauthorized() }
+    : { ok: true, via: identity.via }
+}
+
+/**
+ * `POST /admin/api/session` — sign in.
+ *
+ * The order of the checks is the design, and it is cheapest-and-most-protective
+ * first, the same rule src/spam/index.ts follows:
+ *
+ *   1. the Origin check — one string comparison, no I/O, and it stops a
+ *      cross-site page before anything else runs
+ *   2. the throttle — the brute-force bound, and it must come before any hashing
+ *      so that a guesser cannot make this Worker do SHA-256 and HMAC work per
+ *      attempt
+ *   3. the configured secret — an unconfigured deployment refuses, and says so to
+ *      the log rather than to the caller
+ *   4. the body — bounded, then parsed, then validated
+ *   5. the comparison — constant time, on two digests
+ *
+ * A wrong password, an absent password field, a missing secret and a malformed
+ * body are four different situations and the caller is told apart only the ones it
+ * can fix without learning anything: 400 for a body that is not a login attempt,
+ * 401 for a login attempt that failed. "No password is configured" is never
+ * distinguishable from "that password is wrong".
+ * Enforced by test/worker/admin/route.test.ts.
+ */
+export async function handleLogin(
+  c: AdminContext,
+  config: AdminRouteConfig = {},
+): Promise<Response> {
+  if (isCrossOriginRequest(c.req.raw)) return forbidden()
+
+  const env: AdminEnv = c.env
+  if (!(await loginThrottle(env.LOGIN_RATE_LIMITER).allow(c.req.raw))) return tooManyRequests()
+
+  const secret = usableDashboardPassword(env.CHARCHA_DASHBOARD_PASSWORD)
+  if (secret === null) {
+    // The one place the "unconfigured" case is reported, and it is reported to the
+    // owner rather than to the caller. An owner who never set the secret, or set it
+    // in the wrong place, has no other way to learn why their own dashboard refuses
+    // them — and a 401 that said "not configured" would tell an attacker that
+    // guessing is pointless *and* that the deployment is unattended.
+    announceOnce('dashboard-password-unset', {
+      event: 'admin_config',
+      guard: 'dashboard-password',
+      enabled: false,
+      reason: 'CHARCHA_DASHBOARD_PASSWORD is unset or blank; every admin request is refused',
+    })
+    return unauthorized()
+  }
+
+  const body = await readJson(c.req.raw)
+  if (!body.ok) return body.response
+
+  const parsed = loginSchema.safeParse(body.value)
+  if (!parsed.success) return badRequest('A password is required.')
+
+  if (!(await passwordMatches(parsed.data.password, secret))) return unauthorized()
+
+  const { token, expiresAt } = await issueSession(secret, clock(config))
+  return adminJson({ authenticated: true, via: 'session', expiresAt }, 200, {
+    'set-cookie': sessionCookie(token),
+  })
+}
+
+/**
+ * `DELETE /admin/api/session` — sign out.
+ *
+ * Deliberately not behind authentication. The commonest reason to press sign-out is
+ * that the session has already expired, and an endpoint that required a valid
+ * session to clear a cookie would leave a stale cookie in place exactly when it
+ * matters. It changes nothing on the server — there is no session state to delete —
+ * so there is nothing an unauthenticated caller gains. The Origin check still runs,
+ * because a cross-site page signing the owner out is a nuisance worth refusing.
+ * Enforced by test/worker/admin/route.test.ts.
+ */
+export function handleLogout(c: AdminContext): Response {
+  if (isCrossOriginRequest(c.req.raw)) return forbidden()
+  return adminNoContent({ 'set-cookie': clearedSessionCookie() })
+}
+
+/**
+ * `GET /admin/api/session` — is this browser signed in, and by what.
+ *
+ * The dashboard's first call on load: it decides between the login form and the
+ * queue, and `via` is what will let it say "signed in with Cloudflare Access" once
+ * #108 exists without the client learning a second endpoint.
+ * Enforced by test/worker/admin/route.test.ts.
+ */
+export async function handleSession(
+  c: AdminContext,
+  config: AdminRouteConfig = {},
+): Promise<Response> {
+  const auth = await authenticated(c, clock(config))
+  if (!auth.ok) return auth.response
+  return adminJson({ authenticated: true, via: auth.via })
+}
+
+/**
+ * `GET /admin/api/queue?status=&limit=&cursor=` — one bounded page of triage.
+ *
+ * `limit` is clamped and `cursor` is rejected, and that asymmetry is deliberate —
+ * see clampQueueLimit and parseQueueCursor in src/db. A page size out of range has a
+ * safe nearest value; a cursor does not, and silently dropping one would make every
+ * "next page" return page one, so the UI would loop over the first page forever
+ * while the oldest comments stayed unreachable.
+ *
+ * One D1 query, whichever page is asked for.
+ * Enforced by test/worker/admin/queue.test.ts.
+ */
+export async function handleQueue(
+  c: AdminContext,
+  config: AdminRouteConfig = {},
+): Promise<Response> {
+  const auth = await authenticated(c, clock(config))
+  if (!auth.ok) return auth.response
+
+  const url = new URL(c.req.url)
+
+  // Defaulted, not optional-in-the-query: `pending` is the triage queue and is what
+  // a dashboard asking for no particular status means. An unrecognised value is a
+  // 400 rather than a silent fall back to `pending` — a caller that asked for
+  // `?status=aproved` and got the pending queue has been answered a question it did
+  // not ask, and would show it as though it were the one it did.
+  const statusParam = url.searchParams.get('status')
+  let status: CommentStatus = 'pending'
+  if (statusParam !== null) {
+    const parsed = queueStatusSchema.safeParse(statusParam)
+    if (!parsed.success) return badRequest('That is not a comment status.')
+    status = parsed.data
+  }
+
+  const cursorParam = url.searchParams.get('cursor')
+  let cursor: QueueCursor | null = null
+  if (cursorParam !== null) {
+    cursor = parseQueueCursor(cursorParam)
+    if (cursor === null) return badRequest('That page cursor is not valid.')
+  }
+
+  const page = await listModerationQueue(c.env.DB, status, {
+    limit: url.searchParams.get('limit') ?? undefined,
+    cursor,
+  })
+  return adminJson(page)
+}
+
+/**
+ * `POST /admin/api/comments/:id/status` — the moderation decision.
+ *
+ * The endpoint the whole of #12 exists to make possible: before it,
+ * setCommentStatus had no caller anywhere in src/ and no comment could ever be
+ * approved.
+ *
+ * POST rather than PATCH on the comment, because the thing being created is a
+ * decision rather than a field edit: hiding a comment also hides the replies under
+ * it (see setCommentStatus), so this is not a partial update of one row and should
+ * not read as one.
+ *
+ * One decision per request. A bulk endpoint is #109, and it is filed rather than
+ * built for a specific reason: setCommentStatus is one statement per comment, so the
+ * obvious loop passes every test at three comments and throws in production at
+ * fifty, where the 50-query invocation budget ends.
+ * Enforced by test/worker/admin/queue.test.ts.
+ */
+export async function handleCommentStatus(
+  c: AdminContext,
+  config: AdminRouteConfig = {},
+): Promise<Response> {
+  if (isCrossOriginRequest(c.req.raw)) return forbidden()
+
+  const now = clock(config)
+  const auth = await authenticated(c, now)
+  if (!auth.ok) return auth.response
+
+  // Checked before the database is asked, the same way isReplyTarget checks its id:
+  // an endpoint should not spend a query proving that `-1` is not a comment.
+  const idParam: string | undefined = c.req.param('id')
+  const id = idParam !== undefined && /^\d{1,15}$/.test(idParam) ? Number(idParam) : Number.NaN
+  if (!Number.isSafeInteger(id) || id < 1) return badRequest('That is not a comment id.')
+
+  const body = await readJson(c.req.raw)
+  if (!body.ok) return body.response
+
+  const parsed = statusSchema.safeParse(body.value)
+  if (!parsed.success) return badRequest('That is not a comment status.')
+
+  try {
+    const comment = await setCommentStatus(c.env.DB, id, parsed.data.status, now)
+    return adminJson({ id: comment.id, status: comment.status, moderatedAt: comment.moderatedAt })
+  } catch (error) {
+    // Only this one, by class. Catching everything would report a D1 outage as "no
+    // such comment", which is the report that stops anyone investigating.
+    if (error instanceof NoSuchCommentError) return notFound('There is no comment with that id.')
+    throw error
+  }
+}
