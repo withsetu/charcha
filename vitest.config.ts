@@ -15,6 +15,25 @@ export default defineConfig({
           cloudflareTest({
             main: './src/index.ts',
             wrangler: { configPath: './wrangler.jsonc' },
+            // **Off, and the whole worker suite depends on it.** wrangler.jsonc
+            // declares an `ai` binding for the spam classifier (#10), and Workers AI
+            // has no local simulation — "By default, bindings connect to local
+            // resource simulations (except for AI bindings, as AI models always run
+            // remotely)"
+            // (https://developers.cloudflare.com/workers/development-testing/,
+            // checked 2026-07-29). Left on, the pool opens a remote proxy session
+            // before a single test runs and every worker test file fails with
+            // "it's necessary to set a CLOUDFLARE_API_TOKEN environment variable" —
+            // not just the classifier's, all of them, because the failure is in
+            // starting the pool. CI has no such token and must never need one: a
+            // test run that reached the real binding would also spend real neurons
+            // on the owner's account on every push.
+            //
+            // So `env.AI` is not exercised in tests at all. src/spam/classifier.ts
+            // takes the binding as an argument for exactly this reason, and
+            // test/worker/spam/classifier.test.ts passes a stand-in and asserts that
+            // an absent or throwing binding abstains.
+            remoteBindings: false,
             miniflare: {
               bindings: { TEST_MIGRATIONS: migrations },
               // A second D1 database, declared here and not in wrangler.jsonc, so it

@@ -19,6 +19,8 @@ import {
   setCommentStatus,
 } from '../db'
 import type { CommentStatus, QueueCursor, StatusCounts } from '../db'
+import type { Embedder } from '../spam/embed'
+import { trainOnDecisionSafely } from '../spam/train'
 import {
   adminJson,
   adminNoContent,
@@ -52,6 +54,15 @@ type AdminContext = Context<{ Bindings: Env }>
 export interface AdminRouteConfig {
   /** Injectable for tests; defaults to the wall clock in unix seconds. */
   now?: () => number
+  /**
+   * The classifier's embedder, in place of the `AI` binding (#10).
+   *
+   * Injected by tests and by nothing in production, for the reason vitest.config.ts
+   * gives: Workers AI has no local simulation, so a test that reached the real
+   * binding would need account credentials and would spend the owner's neurons on
+   * every run.
+   */
+  embed?: Embedder
 }
 
 function clock(config: AdminRouteConfig): number {
@@ -282,6 +293,36 @@ export async function handleCommentStatus(
 
   try {
     const comment = await setCommentStatus(c.env.DB, id, parsed.data.status, now)
+
+    // The training signal (#10): this is the moment a human judged a comment, and
+    // the only moment anything in this project writes a label.
+    //
+    // **`id` is the comment the moderator acted on, and it is the only id passed.**
+    // The statement above also moved the replies underneath it — `setCommentStatus`
+    // cascades a spam or deleted decision — and nobody read those. They are #28's
+    // mislabelled rows, and they are disproportionately *good* comments, because
+    // somebody engaged enough to reply. They are excluded here by there being
+    // nothing to exclude: `comment.cascaded` is a count, not a list, so no reply id
+    // exists at this call site to hand over.
+    // Enforced by test/worker/spam/train.test.ts.
+    //
+    // **Awaited rather than deferred**, which costs this response an embedding call
+    // (~100-300 ms) on a request the dashboard has already answered optimistically
+    // (#133). The alternative is `waitUntil`, and it was not taken: training is the
+    // half of this feature with no user-visible symptom when it silently stops, so
+    // the version that reports its own outcome on the same request is worth more
+    // than the milliseconds. It cannot fail the decision — that is already
+    // committed, and `trainOnDecisionSafely` is total.
+    const trained = await trainOnDecisionSafely(id, parsed.data.status, {
+      db: c.env.DB,
+      ai: c.env.AI,
+      embed: config.embed,
+      now,
+    })
+    if (trained === 'failed' || trained === 'no-such-comment') {
+      console.log(JSON.stringify({ event: 'classifier_training', outcome: trained, id }))
+    }
+
     // Recounted rather than adjusted by one (#135). A decision on a comment with
     // replies moves all of them — setCommentStatus cascades — so the change is not
     // always one, and a dashboard keeping its own tally would be wrong by however many
