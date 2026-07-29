@@ -293,6 +293,11 @@ export async function handleCommentStatus(
       status: comment.status,
       moderatedAt: comment.moderatedAt,
       counts: viewCounts(counts),
+      // How many replies went with it (#133). Already computed by the statement above
+      // and previously dropped here — so the counts moved by four while the dashboard
+      // could only say one comment had been dealt with, and three replies left the site
+      // with nothing anywhere naming them. Costs no extra read.
+      cascaded: comment.cascaded,
     })
   } catch (error) {
     // Only this one, by class. Catching everything would report a D1 outage as "no

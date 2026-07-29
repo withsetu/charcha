@@ -391,6 +391,74 @@ describe('hiding a comment', () => {
     expect((await listPageComments(db, thread.pageKey)).comments).toEqual([])
   })
 
+  // `cascaded` is the number the dashboard puts in front of the moderator (#133), so
+  // it has to be the number of comments that actually left the queue rather than the
+  // number of rows the statement happened to touch.
+  it('reports how many replies went with it', async () => {
+    const { root } = await seedRootAndReply()
+
+    const decision = await setCommentStatus(db, root.id, 'spam', t0 + 30)
+
+    expect(decision.cascaded).toBe(1)
+  })
+
+  it('approving reports none, because approving does not cascade', async () => {
+    const { root } = await seedRootAndReply()
+
+    const decision = await setCommentStatus(db, root.id, 'pending', t0 + 30)
+
+    expect(decision.cascaded).toBe(0)
+  })
+
+  // **A reply already in the target status was not taken down by this decision.**
+  // Counting it would put a number on screen that the tab counts contradict: the
+  // dashboard recomputes the counts from the database (#138), so "and 2 replies" over
+  // a Pending badge that fell by two — the root and one reply — is the same
+  // self-contradiction #133 was filed about, one line further down the screen.
+  it('does not count a reply that was already spam', async () => {
+    const { thread, root, reply } = await seedRootAndReply()
+    const second = await insertComment(db, {
+      threadId: thread.id,
+      parentId: root.id,
+      authorName: 'Already spam',
+      body: 'caught on its own',
+      bodyHash: 'h3',
+      now: t0 + 15,
+    })
+    await setCommentStatus(db, second.id, 'spam', t0 + 25)
+
+    const decision = await setCommentStatus(db, root.id, 'spam', t0 + 30)
+
+    expect(decision.cascaded).toBe(1)
+    // And the write is narrowed too, not merely the count: the already-spam reply keeps
+    // the timestamp of the decision that actually moved it, so a moderation record does
+    // not gain a second, fictitious event — and the row write is not spent (#122).
+    const untouched = await db
+      .prepare('select moderated_at from comments where id = ?1')
+      .bind(second.id)
+      .first<{ moderated_at: number | null }>()
+    expect(untouched?.moderated_at).toBe(t0 + 25)
+    const moved = await db
+      .prepare('select status, moderated_at from comments where id = ?1')
+      .bind(reply.id)
+      .first<{ status: string; moderated_at: number | null }>()
+    expect(moved).toEqual({ status: 'spam', moderated_at: t0 + 30 })
+  })
+
+  // The root is returned whatever its own status, or setCommentStatus would raise
+  // NoSuchCommentError on a comment that is simply already in that status — and the
+  // endpoint would turn that into a 404 for a comment that plainly exists.
+  it('still answers when the comment is already in the status asked for', async () => {
+    const { root } = await seedRootAndReply()
+    await setCommentStatus(db, root.id, 'spam', t0 + 30)
+
+    const decision = await setCommentStatus(db, root.id, 'spam', t0 + 40)
+
+    expect(decision.id).toBe(root.id)
+    expect(decision.status).toBe('spam')
+    expect(decision.cascaded).toBe(0)
+  })
+
   it('never shows a reply whose parent is still waiting for review', async () => {
     const thread = await seedThread()
     const root = await insertComment(db, {

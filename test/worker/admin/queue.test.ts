@@ -67,6 +67,7 @@ interface DecisionBody {
   status: string
   moderatedAt: number
   counts: Record<string, number>
+  cascaded: number
 }
 
 async function statusOf(id: number): Promise<string | undefined> {
@@ -253,6 +254,38 @@ describe('the per-status counts (#135)', () => {
     const body = await (await moderate(root as number, { status: 'spam' })).json<DecisionBody>()
 
     expect(body.counts).toEqual({ pending: 0, spam: 4, approved: 0 })
+  })
+
+  // #133. The counts say the queue moved by four; without this the response says only
+  // that one comment changed, and the dashboard has nothing to explain the other three
+  // with. setCommentStatus has computed it since #12 and the endpoint threw it away.
+  it('says how many replies the decision took with it', async () => {
+    const [root] = await seed(1)
+    for (let index = 0; index < 3; index++) {
+      await insertComment(db, {
+        threadId,
+        parentId: root,
+        authorName: `Replier ${String(index)}`,
+        body: `reply ${String(index)}`,
+        bodyHash: `r${String(index)}`,
+        now: t0 + 100 + index,
+      })
+    }
+
+    const body = await (await moderate(root as number, { status: 'spam' })).json<DecisionBody>()
+
+    expect(body.cascaded).toBe(3)
+  })
+
+  it('says zero for a decision that took nothing with it', async () => {
+    // Present and zero rather than absent, for the reason the counts are zero-filled: a
+    // dashboard handed `undefined` renders it, and "and undefined replies" is a worse
+    // answer than the true one.
+    const [id] = await seed(1)
+
+    const body = await (await moderate(id as number, { status: 'approved' })).json<DecisionBody>()
+
+    expect(body.cascaded).toBe(0)
   })
 
   it('tells an unauthenticated caller nothing about how much is unmoderated', async () => {
