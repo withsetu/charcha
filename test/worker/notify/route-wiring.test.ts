@@ -249,12 +249,20 @@ describe('POST /comments — a comment the spam layers rejected never mails', ()
 describe('POST /comments — the notification costs no D1 queries', () => {
   /**
    * What one root comment on a new thread costs, with no `Origin` header, in order:
-   * the per-page rate-limit count, the duplicate-body check, the thread insert, the
-   * comment insert.
+   * the per-page rate-limit count, the duplicate-body check, the classifier's model
+   * read, the thread insert, the comment insert.
    *
    * Both bodies below are past `DUPLICATE_MIN_LENGTH` (60, src/spam/content.ts) on
-   * purpose: under it the duplicate check does not run and this is three, which would
-   * read as the wiring having saved a query rather than as the fixture being short.
+   * purpose: under it the duplicate check does not run and this is one lower, which
+   * would read as the wiring having saved a query rather than as the fixture being
+   * short.
+   *
+   * **The classifier's read is one and stays one (#10).** It is `READ_SPAM_MODEL_SQL`
+   * — a rowid seek on a table the schema allows a single row in — and it happens
+   * whether or not a model has been trained, because the counts that decide are in
+   * that row. What it must never become is a read per stored vector, which is the
+   * shape a nearest-neighbour classifier would have had and the reason this one is a
+   * single weight vector.
    *
    * Written down rather than only compared against itself. An on-versus-off
    * comparison is blind to a statement the wiring added *unconditionally* — the
@@ -264,9 +272,9 @@ describe('POST /comments — the notification costs no D1 queries', () => {
    * 50-query budget is per invocation, and constant is the rule); a submit path that
    * legitimately gains a statement updates this line.
    */
-  const STATEMENTS_PER_SUBMISSION = 4
+  const STATEMENTS_PER_SUBMISSION = 5
 
-  it('prepares the same four statements with notifications on as with them off', async () => {
+  it('prepares the same five statements with notifications on as with them off', async () => {
     const prepare = db.prepare.bind(db)
     const seen: string[] = []
     vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {

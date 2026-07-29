@@ -74,61 +74,94 @@ export function classifierLayer(config: ClassifierConfig = {}): SpamLayer {
   return {
     name: 'classifier',
     async run(context: SpamCheckContext): Promise<LayerOutcome> {
-      if (embed === null) {
-        // Once per isolate. A deployment whose AI binding is missing has no other
-        // way to learn that layer 6 is not running — it abstains, which is
-        // indistinguishable from a working layer with no opinion.
-        announceOnce('classifier:no-binding', {
-          event: 'spam_layer_inactive',
-          layer: 'classifier',
-          reason: 'no-ai-binding',
-        })
+      // **Total, and it is the second catch rather than the first.**
+      // `workersAiEmbedder` already turns every Workers AI failure into `null`, so
+      // in production nothing below is expected to reject. This one is here because
+      // `runLayers` does not catch, so a layer that could throw would turn a
+      // reader's comment into a 500 — and the cost of being wrong about "nothing
+      // below can throw" is paid by the person who wrote the comment, on a feature
+      // that is a convenience. An injected embedder, a D1 fault on the model read
+      // and any future edit are all covered by it. Card rule 5: fail closed, and
+      // closed for a spam layer is no opinion.
+      // Enforced by test/worker/spam/classifier.test.ts.
+      try {
+        return await classify(context)
+      } catch (error) {
+        console.error('classifier: layer failed', error)
         return null
       }
-
-      const stored = await readSpamModel(context.db)
-      if (stored === null) return null
-
-      // The cold-start gate, and it is checked before anything is spent. CLAUDE.md:
-      // "Cold start must abstain, not guess." Below MIN_LABELS_PER_CLASS human
-      // decisions in *each* class there is no model worth consulting, and asking one
-      // anyway would be guessing with a decimal point on it.
-      const weights = decodeWeights(stored.weights, stored.dims)
-      if (weights === null) return null
-
-      const model = {
-        model: stored.model,
-        dims: stored.dims,
-        weights,
-        bias: stored.bias,
-        hamCount: stored.hamCount,
-        spamCount: stored.spamCount,
-      }
-      if (!isTrained(model)) return null
-
-      // Weights fitted in one embedding space say nothing about a vector from
-      // another, and the id is recorded on the row precisely so this is checkable
-      // rather than assumed. Abstain and say so; ./train.ts is what refits.
-      if (model.model !== EMBEDDING_MODEL) {
-        announceOnce('classifier:model-changed', {
-          event: 'spam_layer_inactive',
-          layer: 'classifier',
-          reason: 'model-changed',
-          fitted: model.model,
-          current: EMBEDDING_MODEL,
-        })
-        return null
-      }
-
-      const vector = await embed(context.comment.body)
-      if (vector === null) return null
-
-      // The only CPU this layer spends: one dot product, constant in the number of
-      // comments this site has ever moderated. See src/spam/model.ts.
-      const score = spamProbability(model, vector)
-      if (!(score >= threshold)) return null
-
-      return { action: 'review', reason: CLASSIFIER_REASON }
     },
+  }
+
+  async function classify(context: SpamCheckContext): Promise<LayerOutcome> {
+    if (embed === null) {
+      // Once per isolate. A deployment whose AI binding is missing has no other way
+      // to learn that layer 6 is not running — it abstains, which is
+      // indistinguishable from a working layer with no opinion.
+      announceOnce('classifier:no-binding', {
+        event: 'spam_layer_inactive',
+        layer: 'classifier',
+        reason: 'no-ai-binding',
+      })
+      return null
+    }
+
+    const stored = await readSpamModel(context.db)
+    if (stored === null) return null
+
+    const weights = decodeWeights(stored.weights, stored.dims)
+    if (weights === null) return null
+
+    const model = {
+      model: stored.model,
+      dims: stored.dims,
+      weights,
+      bias: stored.bias,
+      hamCount: stored.hamCount,
+      spamCount: stored.spamCount,
+    }
+
+    // The cold-start gate, and it is checked before anything is spent. CLAUDE.md:
+    // "Cold start must abstain, not guess." Below MIN_LABELS_PER_CLASS human
+    // decisions in *each* class there is no model worth consulting, and asking one
+    // anyway would be guessing with a decimal point on it. Being above the embedding
+    // rather than below it is what makes an untrained deployment cost one row read
+    // and no inference at all.
+    // Enforced by test/worker/spam/classifier.test.ts.
+    if (!isTrained(model)) return null
+
+    // Weights fitted in one embedding space say nothing about a vector from another,
+    // and the id is recorded on the row precisely so this is checkable rather than
+    // assumed. Abstain and say so; ./train.ts is what refits.
+    if (model.model !== EMBEDDING_MODEL) {
+      announceOnce('classifier:model-changed', {
+        event: 'spam_layer_inactive',
+        layer: 'classifier',
+        reason: 'model-changed',
+        fitted: model.model,
+        current: EMBEDDING_MODEL,
+      })
+      return null
+    }
+
+    const vector = await embed(context.comment.body)
+    if (vector === null) return null
+
+    // The only CPU this layer spends: one dot product, constant in the number of
+    // comments this site has ever moderated. See src/spam/model.ts.
+    //
+    // `!(score >= threshold)` rather than `score < threshold`, so a NaN abstains.
+    // `toUnitVector` already refuses a vector carrying one, which makes this the
+    // second guard on the same hazard rather than the only one — but the direction
+    // of a comparison is exactly the sort of thing a later edit inverts.
+    const score = spamProbability(model, vector)
+    if (!(score >= threshold)) return null
+
+    // **`review`, and there is deliberately no branch that returns `reject`.** See
+    // the file header for the three reasons; the third is that a rejected comment is
+    // never stored, so a classifier able to reject would delete the training
+    // examples it was most confident about.
+    // Enforced by test/worker/spam/classifier.test.ts.
+    return { action: 'review', reason: CLASSIFIER_REASON }
   }
 }

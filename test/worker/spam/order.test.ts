@@ -232,10 +232,65 @@ describe('createSpamCheck — a comment from a real person', () => {
     expect(verdict).toEqual({ action: 'allow' })
   })
 
-  it('costs at most three database reads, whatever the page already holds', async () => {
-    // Three: one per-IP count, one per-thread count, one duplicate-body lookup.
-    // Constant in the number of comments, which is the rule the 50-query budget
-    // produces (CLAUDE.md).
+  it('costs at most four database reads once the classifier is wired in', async () => {
+    // Four: one per-IP count, one per-thread count, one duplicate-body lookup, and
+    // the classifier's model row (#10). Constant in the number of comments *and* in
+    // the number of comments the site has ever moderated, which is the rule the
+    // 50-query budget produces (CLAUDE.md) and the property layer 6's single weight
+    // vector exists to keep — a nearest-neighbour classifier would read one row per
+    // stored vector right here.
+    //
+    // The seeded history is what makes this an assertion rather than a restatement:
+    // thirty comments on the page and sixty labelled decisions behind the model, and
+    // it is still four.
+    const trained = await import('../../../src/spam/train')
+    const model = await import('../../../src/spam/model')
+    const unit = (index: number) => {
+      const vector = new Float32Array(8)
+      vector[index] = 1
+      return model.toUnitVector(vector)
+    }
+
+    const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
+    for (let i = 0; i < 30; i++) {
+      const body = `an earlier comment number ${i}, long enough to be a real one on this thread`
+      const stored = await insertComment(db, {
+        threadId: thread.id,
+        authorName: `Reader ${i}`,
+        body,
+        bodyHash: await computeBodyHash(body),
+        ipHash: null,
+        now: t0 - DEFAULT_WINDOW_AGO,
+      })
+      await trained.trainOnDecision(stored.id, i % 2 === 0 ? 'spam' : 'approved', {
+        db,
+        embed: () => Promise.resolve(unit(i % 2)),
+        now: t0 - DEFAULT_WINDOW_AGO,
+      })
+    }
+
+    const statements: string[] = []
+    const counting = {
+      ...db,
+      prepare(sql: string) {
+        statements.push(sql)
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+
+    const check = createSpamCheck(
+      { IP_HASH_SECRET: 'ip-secret' },
+      { classifier: { embed: () => Promise.resolve(unit(1)) } },
+    )
+    await check.check({ ...contextFor({ form: goodForm() }), db: counting })
+
+    expect(statements).toHaveLength(4)
+  })
+
+  it('costs at most three database reads on a deployment with no Workers AI', async () => {
+    // Three: one per-IP count, one per-thread count, one duplicate-body lookup. The
+    // classifier reads nothing at all without a binding — it abstains before the
+    // model row, so the feature costs an unprovisioned deployment exactly zero.
     const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
     for (let i = 0; i < 30; i++) {
       const body = `an earlier comment number ${i}, long enough to be a real one on this thread`
