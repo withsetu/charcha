@@ -313,12 +313,17 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     mount()
 
     const section = await turnstileSection()
-    const badges = [...section.querySelectorAll('[data-slot="badge"]')].map(
-      (badge) => badge.textContent,
-    )
-    expect(badges).toEqual(['Recommended', 'Off'])
-    const grouped = section.querySelector('[data-slot="badge"]')?.parentElement
-    expect(grouped?.querySelectorAll('[data-slot="badge"]')).toHaveLength(2)
+    const badges = [...section.querySelectorAll('[data-slot="badge"]')]
+    expect(badges.map((badge) => badge.textContent)).toEqual(['Recommended', 'Off'])
+
+    // **The assertion is that the badges have a parent of their own, and the first
+    // attempt at it did not test that.** "Both badges share a parent" is true of the
+    // broken layout too — loose in the header row, their shared parent is the row. What
+    // separates the two is whether the heading is in there with them: it is exactly the
+    // heading that `justify-between` pushes them away from.
+    const grouped = badges[0]?.parentElement
+    expect(grouped?.contains(badges[1] ?? null)).toBe(true)
+    expect(grouped?.querySelector('h2')).toBeNull()
   })
 
   it('says which half is the trap and which half is harmless', async () => {
