@@ -535,10 +535,14 @@ function TurnstileSection({ set }: { set: boolean }) {
         set ? (
           <On />
         ) : (
-          <>
+          // Grouped, because the header row is `justify-between`: two loose children
+          // there would space themselves across the whole row and the status badge
+          // would stop lining up with the other sections' — which is the column a
+          // reader scans down.
+          <span className="flex items-center gap-2">
             <Recommended />
             <Off />
-          </>
+          </span>
         )
       }
     >
