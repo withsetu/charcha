@@ -3,7 +3,7 @@
 // comment could never be judged.
 
 import { env, exports } from 'cloudflare:workers'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getOrCreateThread, insertComment } from '../../../src/db'
 import { app } from '../../../src/index'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
@@ -275,6 +275,40 @@ describe('the per-status counts (#135)', () => {
     const body = await (await moderate(root as number, { status: 'spam' })).json<DecisionBody>()
 
     expect(body.cascaded).toBe(3)
+  })
+
+  // **The number is free, and this is what says so.** CLAUDE.md's rule is a *constant*
+  // query count rather than a low one, because the 50-per-invocation budget throws
+  // rather than slows — so a count of replies that cost a query per reply would fail
+  // exactly on the comment popular enough to need it. `cascaded` comes out of the
+  // statement that was already being sent.
+  it('spends the same two statements however many replies the decision moves', async () => {
+    const [alone] = await seed(1)
+    const [crowded] = await seed(1)
+    for (let index = 0; index < 12; index++) {
+      await insertComment(db, {
+        threadId,
+        parentId: crowded,
+        authorName: `Replier ${String(index)}`,
+        body: `reply ${String(index)}`,
+        bodyHash: `c${String(index)}`,
+        now: t0 + 200 + index,
+      })
+    }
+
+    const prepare = vi.spyOn(db, 'prepare')
+    try {
+      await moderate(alone as number, { status: 'spam' })
+      const forOne = prepare.mock.calls.length
+      prepare.mockClear()
+      await moderate(crowded as number, { status: 'spam' })
+      const forTwelve = prepare.mock.calls.length
+
+      expect(forOne).toBe(2)
+      expect(forTwelve).toBe(2)
+    } finally {
+      prepare.mockRestore()
+    }
   })
 
   it('says zero for a decision that took nothing with it', async () => {
