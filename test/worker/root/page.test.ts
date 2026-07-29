@@ -64,14 +64,19 @@ describe('the page Cloudflare sends a deployer to', () => {
   })
 
   // The claim it made before #143 was that readers never see it. They can: it is this
-  // origin's front door. The sentence stays now that the page is nearly empty, because
-  // it is the reason the page is nearly empty — without it this reads as unfinished,
-  // which is an invitation to fill it in (#143, #107).
+  // origin's front door, and a page that misdescribes its own audience invites the next
+  // person to put something on it that should not be public.
+  //
+  // #156 removed the replacement sentence too — a marketing page has no business
+  // explaining its own design — so nothing user-facing says either thing now. This
+  // assertion is what remains of that fix: it stops the false claim coming back, and
+  // the reasoning lives in src/root/page.ts's header where it belongs. What the page
+  // must not disclose is enforced by the twelve tests below, none of which ever
+  // depended on the copy.
   it('does not tell the reader it is private', async () => {
     const html = await (await get()).text()
 
     expect(html).not.toMatch(/readers never see/i)
-    expect(html).toMatch(/anyone with this address can see this page/i)
   })
 })
 
