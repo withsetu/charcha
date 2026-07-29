@@ -1,0 +1,339 @@
+// The wiring, driven through the deployed Worker rather than through the pipeline.
+//
+// test/worker/notify/pipeline-seam.test.ts covers the seam itself, with a notifier
+// and a `defer` handed in — and every case in it passed while `POST /comments`
+// supplied neither, so the whole feature was inert and fully green (#125). This file
+// is the difference: it posts a real comment at the real route and asks whether a
+// send was attempted, which is the one question a test with injected dependencies
+// cannot ask.
+//
+// Nothing here reaches Resend. `globalThis.fetch` is stubbed for the whole file, and
+// the stub is what the assertions read — a test that let a request out would be
+// mailing a third party from CI.
+//
+// **The isolate's send budget is a real constraint on this file.** The production
+// notifier draws on the module-scope bucket in src/notify/index.ts — NOTIFY_BURST,
+// five tokens, refilling once every fifteen minutes — and nothing here can reset it,
+// which is exactly the property src/notify/throttle.ts is for. Four tests below reach
+// it, in file order; a fifth would spend the last token, and a sixth would test the
+// rate limiter while reading as a test of the wiring.
+
+import { env, exports } from 'cloudflare:workers'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { RESEND_SEND_URL } from '../../../src/notify/resend'
+import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
+import { reportingDefer } from '../../../src/submit/route'
+import type { WaitUntilContext } from '../../../src/submit/route'
+import { app } from '../../../src/index'
+
+const db = env.DB
+const origin = 'https://charcha.example'
+
+/**
+ * The three secrets, as `env` actually carries them.
+ *
+ * `env` is one object shared by every test file in the isolate, so what was there at
+ * import is read once and put back — the rule test/worker/admin/env.ts states for the
+ * dashboard password, for the same reason.
+ */
+const mutable = env as unknown as {
+  RESEND_API_KEY?: string
+  CHARCHA_NOTIFY_FROM?: string
+  CHARCHA_NOTIFY_TO?: string
+}
+const real = {
+  RESEND_API_KEY: mutable.RESEND_API_KEY,
+  CHARCHA_NOTIFY_FROM: mutable.CHARCHA_NOTIFY_FROM,
+  CHARCHA_NOTIFY_TO: mutable.CHARCHA_NOTIFY_TO,
+}
+
+/** A key that reaches no network, because `fetch` is stubbed before it is used. */
+const FAKE_KEY = 'test-key-that-never-leaves-this-isolate'
+
+function configureNotify(): void {
+  mutable.RESEND_API_KEY = FAKE_KEY
+  mutable.CHARCHA_NOTIFY_FROM = 'Charcha <comments@maya.build>'
+  mutable.CHARCHA_NOTIFY_TO = 'maya@maya.build'
+}
+
+function unconfigureNotify(): void {
+  delete mutable.RESEND_API_KEY
+  delete mutable.CHARCHA_NOTIFY_FROM
+  delete mutable.CHARCHA_NOTIFY_TO
+}
+
+function restoreNotify(): void {
+  for (const [name, value] of Object.entries(real)) {
+    if (value === undefined) delete mutable[name as keyof typeof real]
+    else mutable[name as keyof typeof real] = value
+  }
+}
+
+interface Outbound {
+  url: string
+  body: string
+  authorization: string | null
+}
+
+/** Records every outbound request and answers each with `respond`. */
+function stubFetch(respond: () => Promise<Response>): Outbound[] {
+  const calls: Outbound[] = []
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({
+      url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      body: typeof init?.body === 'string' ? init.body : '',
+      authorization: new Headers(init?.headers).get('authorization'),
+    })
+    return await respond()
+  })
+  return calls
+}
+
+const accepted = () => Promise.resolve(new Response('{"id":"re_1"}', { status: 200 }))
+
+function comment(fields: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    authorName: 'Rahul Kanwar',
+    body: 'The part people underestimate is the export, and nobody checks it until they leave.',
+    url: 'https://maya.build/notes/leaving',
+    [HONEYPOT_FIELD]: '',
+    [ELAPSED_FIELD]: 31_000,
+    ...fields,
+  })
+}
+
+function post(fields: Record<string, unknown> = {}) {
+  return exports.default.fetch(`${origin}/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: comment(fields),
+  })
+}
+
+async function countComments() {
+  const row = await db.prepare('select count(*) as n from comments').first<{ n: number }>()
+  return row?.n ?? -1
+}
+
+beforeEach(async () => {
+  await db.exec('DELETE FROM comments')
+  await db.exec('DELETE FROM threads')
+})
+
+afterEach(() => {
+  restoreNotify()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+describe('POST /comments — the notifier is actually wired to the route', () => {
+  it('attempts one send to Resend, carrying the comment, and answers the reader 202', async () => {
+    // The test #125 exists for. Every assertion below held with `createNotifier`
+    // never called at all, except this one: that a request left for Resend.
+    configureNotify()
+    const calls = stubFetch(accepted)
+
+    const response = await post()
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(1)
+    })
+    expect(calls[0]?.url).toBe(RESEND_SEND_URL)
+    expect(calls[0]?.authorization).toBe(`Bearer ${FAKE_KEY}`)
+    expect(calls[0]?.body).toContain('The part people underestimate is the export')
+  })
+
+  it('costs the reader nothing when Resend never answers', async () => {
+    // The reason the seam takes a `defer` rather than an `await`. The stub holds the
+    // request open; the reader's POST must be answered anyway, and the comment must
+    // already be in the queue.
+    configureNotify()
+    let release: (response: Response) => void = () => undefined
+    const held = new Promise<Response>((resolve) => {
+      release = resolve
+    })
+    const calls = stubFetch(() => held)
+
+    const response = await post()
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    expect(calls).toHaveLength(1)
+    // Released rather than abandoned, so the runtime is not left holding a promise
+    // that never settles for the rest of the file.
+    release(new Response('{"id":"re_2"}', { status: 200 }))
+  })
+
+  it('reports a Resend failure rather than dropping it, and still answers 202', async () => {
+    // Inside `waitUntil` a rejection is discarded with no trace, so the failure has
+    // to report itself or it never happened. Cloudflare documents the lifetime
+    // extension and the 30-second limit, and documents no reporting of a rejected
+    // promise: https://developers.cloudflare.com/workers/runtime-apis/context/
+    configureNotify()
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    })
+    stubFetch(() => Promise.resolve(new Response('nope', { status: 500 })))
+
+    const response = await post()
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    await vi.waitFor(() => {
+      expect(errors.join('\n')).toContain('"event":"notify_send"')
+    })
+    expect(errors.join('\n')).toContain('http-500')
+  })
+})
+
+describe('POST /comments — unconfigured means off, not broken', () => {
+  it('sends nothing and still takes the comment when the three secrets are absent', async () => {
+    // The default on every deployment. No key, no email, no error, and the comment
+    // is stored and queued exactly as it would be with notifications switched on.
+    unconfigureNotify()
+    const calls = stubFetch(accepted)
+
+    const response = await post()
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('sends nothing when only two of the three are set', async () => {
+    // A half-configured deployment has nowhere to send. It must be as silent as an
+    // unconfigured one rather than a broken send path.
+    configureNotify()
+    delete mutable.CHARCHA_NOTIFY_TO
+    const calls = stubFetch(accepted)
+
+    const response = await post()
+
+    expect(response.status).toBe(202)
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe('POST /comments — a comment the spam layers rejected never mails', () => {
+  it('sends nothing for a submission the honeypot caught', async () => {
+    // A spam flood becoming an email flood at the owner's expense is the failure
+    // this rules out. The seam sits after the write and the reject path returns
+    // before it, so the cost of a stopped flood is zero emails and zero quota.
+    configureNotify()
+    const calls = stubFetch(accepted)
+
+    const response = await post({ [HONEYPOT_FIELD]: 'https://buy-pills.example' })
+
+    expect(response.status).toBe(403)
+    expect(await countComments()).toBe(0)
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe('POST /comments — the notification costs no D1 queries', () => {
+  it('prepares the same statements with notifications on as with them off', async () => {
+    // The 50-query budget is per invocation and the rule is that the count stays
+    // constant. The notifier is handed what the pipeline already read, so switching
+    // it on must move nothing here.
+    const prepare = db.prepare.bind(db)
+    const seen: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      seen.push(sql)
+      return prepare(sql)
+    })
+
+    unconfigureNotify()
+    stubFetch(accepted)
+    await post({ url: 'https://maya.build/notes/off', body: 'One comment, notifications off.' })
+    const withoutNotify = seen.length
+
+    seen.length = 0
+    configureNotify()
+    await post({ url: 'https://maya.build/notes/on', body: 'One comment, notifications on.' })
+    const withNotify = seen.length
+
+    expect(withoutNotify).toBeGreaterThan(0)
+    expect(withNotify).toBe(withoutNotify)
+  })
+})
+
+describe('what is handed to waitUntil reports its own failure', () => {
+  /** A `waitUntil` that keeps what it was given, so a test can settle it. */
+  function collector() {
+    const handed: Promise<unknown>[] = []
+    const ctx: WaitUntilContext = {
+      waitUntil(work: Promise<unknown>) {
+        handed.push(work)
+      },
+    }
+    return { ctx, handed }
+  }
+
+  it('logs a rejected deferred promise instead of letting the runtime discard it', async () => {
+    // The bug this exists to prevent has no symptom: `ctx.waitUntil(work)` with a
+    // rejecting `work` is silence, and silence is what a working notifier looks like
+    // to everyone except the owner who is not getting email.
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    })
+    const { ctx, handed } = collector()
+
+    reportingDefer(ctx)(Promise.reject(new Error('resend exploded')))
+    await Promise.all(handed)
+
+    expect(errors.join('\n')).toContain('notify: deferred work failed')
+    expect(errors.join('\n')).toContain('resend exploded')
+  })
+
+  it('hands the runtime a promise that never rejects', async () => {
+    // The other half, and the reason the `.catch` is inside `waitUntil` rather than
+    // around the call: what the runtime holds must settle, not reject.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { ctx, handed } = collector()
+
+    reportingDefer(ctx)(Promise.reject(new Error('resend exploded')))
+    const settled = await Promise.allSettled(handed)
+
+    expect(settled.map((one) => one.status)).toEqual(['fulfilled'])
+  })
+
+  it('still defers the work itself — the reporting is not a replacement for it', async () => {
+    const { ctx, handed } = collector()
+    let ran = false
+
+    reportingDefer(ctx)(Promise.resolve().then(() => (ran = true)))
+    await Promise.all(handed)
+
+    expect(ran).toBe(true)
+    expect(handed).toHaveLength(1)
+  })
+})
+
+describe('POST /comments — no ExecutionContext, no notification', () => {
+  it('takes the comment and sends nothing when there is nowhere to defer to', async () => {
+    // `app.fetch(request, env)` is a Worker invoked without an ExecutionContext, and
+    // Hono's `c.executionCtx` throws rather than returning undefined. There is then
+    // no way to run work after the response, and the pipeline's answer is to do
+    // nothing: awaiting the send would put Resend in front of the reader's POST, and
+    // dropping the promise would discard its failures. The comment still arrives.
+    configureNotify()
+    const calls = stubFetch(accepted)
+
+    const response = await app.fetch(
+      new Request(`${origin}/comments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: comment(),
+      }),
+      env,
+    )
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    expect(calls).toHaveLength(0)
+  })
+})

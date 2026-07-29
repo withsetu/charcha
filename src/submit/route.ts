@@ -5,8 +5,13 @@
 // Enforced by test/worker/submit/route.test.ts.
 
 import type { Context } from 'hono'
+import { createNotifier } from '../notify'
 import { readCappedText } from '../request-body'
 import { withFragmentHeaders } from '../response-headers'
+// `announceOnce` lives under src/spam because that is where it was first needed; it
+// is generic isolate-scoped observability and src/admin and src/notify already reuse
+// it. Its dedupe set is shared across callers, so the key here is namespaced.
+import { announceOnce } from '../spam/log'
 import { runSubmission } from './pipeline'
 import type { SubmitResult } from './pipeline'
 import type { SpamCheck } from './spam'
@@ -77,6 +82,79 @@ export async function handleSubmit(
   return withFragmentHeaders(await submitAnswer(c, config))
 }
 
+/**
+ * The one method this file needs from an execution context.
+ *
+ * Structural rather than `ExecutionContext`, because there are two of those: Hono
+ * declares its own and `c.executionCtx` is typed with it, while the generated binding
+ * types declare Cloudflare's, and they are not assignable to each other. Neither
+ * difference has anything to do with deferring work.
+ */
+export interface WaitUntilContext {
+  waitUntil(work: Promise<unknown>): void
+}
+
+/**
+ * Runs `work` after the reader's response has gone out, and makes its failure report
+ * itself.
+ *
+ * `ctx.waitUntil` "extends the lifetime of your Worker, allowing you to perform work
+ * without blocking returning a response", with a 30-second limit after the invocation
+ * ends. What Cloudflare documents about a promise passed to it *rejecting* is only
+ * that other `waitUntil` promises keep running — nothing surfaces the rejection
+ * itself (https://developers.cloudflare.com/workers/runtime-apis/context/, checked
+ * 2026-07-28). So a bare `ctx.waitUntil(work)` is the discarded-rejection bug
+ * CLAUDE.md names, and the `.catch` here is the whole of what stops it: an email that
+ * never sent says so in the log rather than vanishing. #128 is where these become
+ * visible in the dashboard.
+ *
+ * `Notifier.commentCreated` already promises never to reject, and this deliberately
+ * does not trust it — that promise is a comment in another module, and this is the
+ * call site that would pay for it being wrong. Exported for the test below; the only
+ * caller is `deferFor`.
+ * Enforced by test/worker/notify/route-wiring.test.ts.
+ */
+export function reportingDefer(ctx: WaitUntilContext): (work: Promise<unknown>) => void {
+  return (work) => {
+    ctx.waitUntil(
+      work.catch((error: unknown) => {
+        console.error('notify: deferred work failed', error)
+      }),
+    )
+  }
+}
+
+/**
+ * The Context's `waitUntil`, or nothing at all.
+ *
+ * Read inside the handler, never at module scope, and never stored: `c.executionCtx`
+ * is a getter that **throws** when the invocation has none rather than returning
+ * undefined, so asking is the only way to find out. A Worker Cloudflare invoked
+ * always has one; an app driven directly — `app.fetch(request, env)` — does not.
+ *
+ * Returning undefined leaves the pipeline's seam inert, which is its documented
+ * answer and not a degradation: the two alternatives are awaiting the send, which
+ * puts Resend's uptime in front of the reader's POST, and dropping the promise, which
+ * discards its failures. Announced once per isolate because a deployment that
+ * silently stopped being able to defer would otherwise look exactly like one with no
+ * Resend key. See src/submit/pipeline.ts.
+ * Enforced by test/worker/notify/route-wiring.test.ts.
+ */
+function deferFor(c: Context<{ Bindings: Env }>): ((work: Promise<unknown>) => void) | undefined {
+  let ctx: WaitUntilContext
+  try {
+    ctx = c.executionCtx
+  } catch {
+    announceOnce('submit-no-execution-context', {
+      event: 'notify_config',
+      enabled: false,
+      reason: 'this invocation has no ExecutionContext, so nothing can run after the response',
+    })
+    return undefined
+  }
+  return reportingDefer(ctx)
+}
+
 async function submitAnswer(
   c: Context<{ Bindings: Env }>,
   config: SubmitRouteConfig,
@@ -102,6 +180,15 @@ async function submitAnswer(
     // and the value counted there are the same key. Unset on a deployment that has
     // not run `wrangler secret put IP_HASH_SECRET`, and then nothing is stored.
     ipSecret: c.env.IP_HASH_SECRET,
+    // Email notifications (#125). Both halves are assembled here rather than passed
+    // in as config, unlike `spamCheck`: they are read off the Context — the three
+    // secrets on `c.env`, and a `waitUntil` that exists nowhere else — and neither is
+    // a seam a caller replaces. `createNotifier` reads its own configuration and
+    // returns a notifier that does nothing when the trio is unset, which is the
+    // default on every deployment, so this line is not a switch to check first.
+    // Enforced by test/worker/notify/route-wiring.test.ts.
+    notifier: createNotifier(c.env),
+    defer: deferFor(c),
   })
 
   return renderResult(result)
