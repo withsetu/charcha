@@ -197,9 +197,14 @@ export function composerMarkup(prefix: string): string {
     // is (#1).
     //
     // `aria-live` because the rendering arrives after the reader has stopped
-    // pressing the tab, so nothing announces it otherwise; `tabindex="0"` because
-    // the panel is mostly non-interactive text, which is unreachable from the
-    // keyboard without its own stop.
+    // pressing the tab, so nothing announces it otherwise.
+    //
+    // `tabindex="0"` is the deliberate trade of the two APG allows. A previewed
+    // comment usually holds no focusable element and would then be unreachable from
+    // the keyboard entirely; it sometimes holds a link, and the panel is then one
+    // redundant stop before it. Unreachable content is the worse of the two, and
+    // which one applies is decided by what the reader wrote, so it cannot be
+    // decided here.
     `<div class="charcha-preview" id="${id.preview}" role="tabpanel"` +
     ` aria-labelledby="${id.previewTab}" aria-live="polite" tabindex="0" hidden></div>` +
     `<div class="charcha-fields">` +

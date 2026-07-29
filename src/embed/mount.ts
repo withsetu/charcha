@@ -587,7 +587,11 @@ async function submit(widget: Widget): Promise<void> {
       // show them their own posted comment a second time, in the box they write in.
       // `moveFocus` is false: insertOwnComment has already taken focus to the
       // comment that was just placed, and that is where the reader should be.
-      widget.previewed = null
+      //
+      // A preview that was in flight when the reader pressed Post would otherwise
+      // land afterwards and write a rendering of the published draft into a panel
+      // nobody is looking at, cached against a box that is now empty.
+      dropPreview(widget)
       selectTab(widget, false, false)
       endReply(widget)
       showStatus(widget, pending ? POSTED_PENDING : POSTED_PUBLISHED, false)
@@ -619,8 +623,12 @@ async function submit(widget: Widget): Promise<void> {
  * rebuilds anything: the field is the same plain `<textarea>` in both states, which
  * is the whole of the "the toolbar is not an editor" decision on #5.
  *
- * Focus stays on the tab the reader pressed, which is what a tablist does. The one
- * exception is going back to Write, where the reader has asked to carry on writing.
+ * `moveFocus` is the caller's answer to "did the reader ask to be somewhere else?".
+ * Clicking Write is a reader saying they want to carry on writing, so focus lands in
+ * the field; arrowing onto it is a reader browsing the tablist, and APG is explicit
+ * that focus stays on the tab. Passing it unconditionally would focus the textarea
+ * and then have `wireRoving` immediately take focus back, which is a flash of the
+ * soft keyboard on a phone for no gain.
  * Enforced by test/dom/embed/preview.test.ts.
  */
 function selectTab(widget: Widget, preview: boolean, moveFocus: boolean): void {
@@ -654,21 +662,30 @@ function selectTab(widget: Widget, preview: boolean, moveFocus: boolean): void {
 async function showPreview(widget: Widget): Promise<void> {
   const draft = widget.body.value
 
+  // Already on screen, or already on its way. `previewed` is assigned before the
+  // fetch rather than after it precisely so that the second case counts: assigned
+  // after, a reader who pressed Preview twice — or went Preview, Write, Preview
+  // while the first answer was still travelling — would have paid for every press.
+  if (widget.previewed === draft) return
+
+  // Every answer still in flight is now answering a question nobody is asking.
+  // Bumping here, above the empty check rather than below it, is load-bearing: a
+  // reader who emptied the box while a render was in flight would otherwise be
+  // shown, a moment later, a rendering of the text they had just deleted.
+  const run = (widget.previewRun += 1)
+  widget.previewed = null
+
   if (draft.trim() === '') {
     // Nothing is sent. An empty draft is a 400 the reader would have waited for and
     // a request somebody would have paid for, and the panel can say so instantly.
-    widget.previewed = null
+    widget.preview.removeAttribute('aria-busy')
     message(widget.preview, PREVIEW_EMPTY, null)
     return
   }
 
-  // Already on screen. A reader flicking between the tabs is not a reason to spend
-  // requests against the 100,000/day that bounds a site on the free tier.
-  if (widget.previewed === draft) return
-
-  const run = (widget.previewRun += 1)
-  message(widget.preview, PREVIEW_LOADING, null)
+  widget.previewed = draft
   widget.preview.setAttribute('aria-busy', 'true')
+  message(widget.preview, PREVIEW_LOADING, null)
 
   try {
     const response = await fetch(previewUrl(widget.config.api), {
@@ -681,14 +698,17 @@ async function showPreview(widget: Widget): Promise<void> {
     const html = await response.text()
     if (run !== widget.previewRun) return
 
+    // Cleared before the contents change rather than after, so that the change the
+    // reader is waiting on is made to a region that is live again. Removing it
+    // afterwards re-triggers no announcement on most assistive technology, which
+    // would leave `aria-live` announcing the waiting and never the answer.
+    widget.preview.removeAttribute('aria-busy')
+
     if (response.status !== 200) {
       // Not rendered comment HTML — a sentence, a proxy's error page, or whatever
       // an endpoint that is not this Worker chose to send. It reaches the DOM
       // through `message`, as text, and never through `innerHTML`.
-      widget.previewed = null
-      message(widget.preview, messageForPreviewFailure(response.status, html), () => {
-        void showPreview(widget)
-      })
+      previewFailed(widget, messageForPreviewFailure(response.status, html))
       return
     }
 
@@ -701,24 +721,58 @@ async function showPreview(widget: Widget): Promise<void> {
     const body = document.createElement('div')
     body.className = 'charcha-comment-body'
     body.innerHTML = html
+
+    // A 200 that rendered to no element at all is not this Worker's answer: the
+    // route refuses an empty draft with a 400, so every draft that gets a 200 gets
+    // at least one element back. An empty body, a JSON blob, a proxy's own page —
+    // placed unchallenged, each is a blank panel that then *caches itself*, and the
+    // reader has no way to ask again. This is #93's lesson on the write path,
+    // arriving at the read of a draft through a second door.
+    if (body.firstElementChild === null) {
+      console.error('charcha: the preview endpoint returned nothing renderable')
+      previewFailed(widget, messageForPreviewFailure(response.status, ''))
+      return
+    }
+
     widget.preview.textContent = ''
     widget.preview.appendChild(body)
-    widget.previewed = draft
   } catch (error) {
     if (run !== widget.previewRun) return
     // The catch owns a visible state, or the panel sits on "Rendering…" forever and
-    // reports the failure to nobody (CLAUDE.md). `previewed` stays null so that the
-    // retry has something to retry.
+    // reports the failure to nobody (CLAUDE.md).
     console.error('charcha: could not render the preview', error)
-    widget.previewed = null
-    message(widget.preview, messageForPreviewFailure(0, ''), () => {
-      void showPreview(widget)
-    })
-  } finally {
-    // Only the current run may say the panel has stopped working; a stale one
-    // clearing this would unset a flag a newer request had just set.
-    if (run === widget.previewRun) widget.preview.removeAttribute('aria-busy')
+    widget.preview.removeAttribute('aria-busy')
+    previewFailed(widget, messageForPreviewFailure(0, ''))
   }
+}
+
+/**
+ * What the panel shows when the draft could not be rendered.
+ *
+ * `previewed` goes back to null, which is what makes the failure recoverable two
+ * ways: the button below, and simply leaving the tab and coming back. A failure left
+ * cached would be permanent for that draft.
+ */
+function previewFailed(widget: Widget, text: string): void {
+  widget.previewed = null
+  message(widget.preview, text, () => {
+    void showPreview(widget)
+  })
+}
+
+/**
+ * Abandons whatever the preview was doing, with nothing taking its place.
+ *
+ * The busy flag has to come off here and not be left to the run that set it: that
+ * run is now stale and will return without touching the panel, and every other
+ * caller of `showPreview` clears the flag only because it is starting work of its
+ * own. This is the one path with no successor, so it owns the clearing.
+ * Enforced by test/dom/embed/preview.test.ts.
+ */
+function dropPreview(widget: Widget): void {
+  widget.previewed = null
+  widget.previewRun += 1
+  widget.preview.removeAttribute('aria-busy')
 }
 
 /**
@@ -821,14 +875,15 @@ function wireRoving(
  */
 function wireTabs(widget: Widget): void {
   const tabs = requireElement<HTMLElement>(widget.form, '.charcha-tabs')
-  const show = (tab: Element): void => {
-    selectTab(widget, tab === widget.previewTab, true)
-  }
-  wireRoving(tabs, [widget.writeTab, widget.previewTab], show)
+  wireRoving(tabs, [widget.writeTab, widget.previewTab], (next) => {
+    // No focus move: `wireRoving` puts focus on the tab itself, which is where APG
+    // says it belongs while a reader is arrowing along a tablist.
+    selectTab(widget, next === widget.previewTab, false)
+  })
   tabs.addEventListener('click', (event) => {
     const tab = (event.target as Element | null)?.closest('.charcha-tab')
     if (tab === null || tab === undefined) return
-    show(tab)
+    selectTab(widget, tab === widget.previewTab, true)
   })
 }
 

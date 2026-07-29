@@ -42,6 +42,7 @@ interface Call {
   method: string
   body: string | null
   headers: unknown
+  credentials: unknown
 }
 
 /**
@@ -59,29 +60,35 @@ function serve(...outcomes: readonly Outcome[]): { calls: Call[]; settle: (body:
 
   vi.stubGlobal(
     'fetch',
-    vi.fn((input: unknown, init?: { method?: string; body?: unknown; headers?: unknown }) => {
-      calls.push({
-        url: String(input),
-        method: init?.method ?? 'GET',
-        body: typeof init?.body === 'string' ? init.body : null,
-        headers: init?.headers,
-      })
-
-      const outcome = outcomes[next]
-      next += 1
-      if (outcome === undefined) {
-        return Promise.reject(new Error(`unexpected request ${calls.length}: ${String(input)}`))
-      }
-      if ('pending' in outcome) {
-        return new Promise<Response>((resolve) => {
-          release = (body: string) => {
-            resolve(new Response(body, { status: 200 }))
-          }
+    vi.fn(
+      (
+        input: unknown,
+        init?: { method?: string; body?: unknown; headers?: unknown; credentials?: unknown },
+      ) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          body: typeof init?.body === 'string' ? init.body : null,
+          headers: init?.headers,
+          credentials: init?.credentials,
         })
-      }
-      if ('networkError' in outcome) return Promise.reject(new Error(outcome.networkError))
-      return Promise.resolve(new Response(outcome.body, { status: outcome.status }))
-    }),
+
+        const outcome = outcomes[next]
+        next += 1
+        if (outcome === undefined) {
+          return Promise.reject(new Error(`unexpected request ${calls.length}: ${String(input)}`))
+        }
+        if ('pending' in outcome) {
+          return new Promise<Response>((resolve) => {
+            release = (body: string) => {
+              resolve(new Response(body, { status: 200 }))
+            }
+          })
+        }
+        if ('networkError' in outcome) return Promise.reject(new Error(outcome.networkError))
+        return Promise.resolve(new Response(outcome.body, { status: outcome.status }))
+      },
+    ),
   )
 
   return {
@@ -143,6 +150,21 @@ async function mount(): Promise<Harness> {
   return harness
 }
 
+/**
+ * Lets everything pending run to completion.
+ *
+ * Deliberately generous. A fixed two `await Promise.resolve()` happens to be exactly
+ * the number `showPreview` needs today, which makes any test that relies on it pass
+ * for the wrong reason the moment one more `await` is added to the function under
+ * test — a stale-response test that can no longer see the stale response is a test
+ * that passes with its guard removed.
+ */
+async function settleAll(): Promise<void> {
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+}
+
 /** What the reader sees rendered, once the preview has landed. */
 async function previewed(harness: Harness): Promise<HTMLElement> {
   await vi.waitFor(() => {
@@ -183,6 +205,11 @@ describe('asking the Worker for a preview', () => {
     // No header at all. Setting one — even `content-type: text/plain` — is what
     // makes the request non-simple and costs a preflight.
     expect(request?.headers).toBeUndefined()
+    // Card rule 8, at the one place the embed could break it without meaning to.
+    // The default is `same-origin`, so a deployment on the site's own domain would
+    // send the reader's cookies to the Worker on every keystroke-ful of draft they
+    // previewed. Charcha never wants them and must never ask for them.
+    expect(request?.credentials).toBe('omit')
   })
 
   it('shows the published output, in the renderer’s own wrapper', async () => {
@@ -235,6 +262,48 @@ describe('asking the Worker for a preview', () => {
     // Distinguishable from a failure: nothing went wrong, there is just nothing
     // written yet.
     expect(harness.preview.querySelector('.charcha-retry')).toBeNull()
+  })
+
+  it('does not ask twice for a draft it is already waiting on', async () => {
+    // The dedupe has to cover the in-flight window, not only the shown one. A
+    // reader who presses Preview twice, or goes Preview → Write → Preview before
+    // the first answer arrives, is one reader asking one question.
+    const { calls } = serve({ status: 200, body: EMPTY_THREAD }, { pending: true })
+
+    const harness = await mount()
+    harness.body.value = 'hi'
+    harness.previewTab.click()
+    harness.previewTab.click()
+    harness.writeTab.click()
+    harness.previewTab.click()
+    await settleAll()
+
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(1)
+  })
+
+  it('drops an answer to a draft the reader has since deleted', async () => {
+    // The empty branch returns early, so it is the one path that could skip
+    // invalidating what is in flight. If it does, the reader empties the box, is
+    // correctly told there is nothing to preview, and is then shown a rendering of
+    // the very text they just deleted.
+    const { settle } = serve({ status: 200, body: EMPTY_THREAD }, { pending: true })
+
+    const harness = await mount()
+    harness.body.value = 'delete me'
+    harness.previewTab.click()
+
+    harness.writeTab.click()
+    harness.body.value = ''
+    harness.previewTab.click()
+
+    settle('<p>delete me</p>')
+    await settleAll()
+
+    expect(harness.preview.textContent).not.toContain('delete me')
+    expect(harness.preview.textContent).toContain('Nothing to preview')
+    expect(harness.preview.querySelector('.charcha-comment-body')).toBeNull()
+    // And it does not sit there claiming to be working on something.
+    expect(harness.preview.hasAttribute('aria-busy')).toBe(false)
   })
 
   it('does not ask twice for a draft it is already showing', async () => {
@@ -381,6 +450,52 @@ describe('when the preview fails', () => {
     expect(harness.preview.textContent).not.toContain('onerror')
   })
 
+  it('says so when a 200 carries nothing it can render', async () => {
+    // The write path already learned this (#93): an endpoint that answers 2xx and
+    // sends nothing showable leaves the reader looking at a blank panel that reads
+    // exactly like a comment which renders to nothing. Worse here, because a blank
+    // panel accepted as the answer would be *cached* against this draft, so leaving
+    // the tab and coming back would never ask again.
+    serve(
+      { status: 200, body: EMPTY_THREAD },
+      { status: 200, body: '   ' },
+      { status: 200, body: '<p>second time lucky</p>' },
+    )
+
+    const harness = await mount()
+    harness.body.value = 'hi'
+    harness.previewTab.click()
+    await vi.waitFor(() => {
+      expect(harness.preview.querySelector('.charcha-retry')).not.toBeNull()
+    })
+
+    expect(harness.preview.hasAttribute('aria-busy')).toBe(false)
+    expect(consoleError).toHaveBeenCalledWith(
+      'charcha: the preview endpoint returned nothing renderable',
+    )
+
+    // Not cached: the same unchanged draft is asked for again.
+    harness.writeTab.click()
+    harness.previewTab.click()
+    const body = await previewed(harness)
+    expect(body.textContent).toBe('second time lucky')
+  })
+
+  it('stops saying it is working when the server refuses the draft', async () => {
+    serve({ status: 200, body: EMPTY_THREAD }, { status: 400, body: 'Your comment is too long.' })
+
+    const harness = await mount()
+    harness.body.value = 'hi'
+    harness.previewTab.click()
+    await vi.waitFor(() => {
+      expect(harness.preview.textContent).toContain('too long')
+    })
+
+    // The refusal branch returns early, so it is the one that could leave the panel
+    // announcing itself as busy while displaying a finished answer.
+    expect(harness.preview.hasAttribute('aria-busy')).toBe(false)
+  })
+
   it('does not let a slow answer overwrite the one the reader is looking at', async () => {
     // Preview 1 never settles until after preview 2 has landed. Without the run
     // guard the reader ends up reading a rendering of a draft they have already
@@ -403,8 +518,7 @@ describe('when the preview fails', () => {
     })
 
     settle('<p>first</p>')
-    await Promise.resolve()
-    await Promise.resolve()
+    await settleAll()
     expect(harness.preview.textContent).toContain('second')
     expect(harness.preview.textContent).not.toContain('first')
   })
@@ -455,12 +569,22 @@ describe('the tabs themselves', () => {
     const tablist = must<HTMLElement>(harness.form, '.charcha-tabs')
     tablist.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
 
+    // Focus lands on the *tab*, not inside the panel: APG is explicit that arrowing
+    // along a tablist leaves the reader on the tablist. Landing in the textarea
+    // would also flash the soft keyboard on a phone for a reader who was browsing.
     expect(document.activeElement).toBe(harness.previewTab)
     expect(harness.preview.hidden).toBe(false)
+    expect(harness.previewTab.getAttribute('aria-selected')).toBe('true')
+    expect(harness.writeTab.getAttribute('aria-selected')).toBe('false')
+    expect(harness.previewTab.tabIndex).toBe(0)
+    expect(harness.writeTab.tabIndex).toBe(-1)
 
     tablist.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
     expect(document.activeElement).toBe(harness.writeTab)
     expect(harness.writePanel.hidden).toBe(false)
+    expect(harness.writeTab.getAttribute('aria-selected')).toBe('true')
+    expect(harness.writeTab.tabIndex).toBe(0)
+    expect(harness.previewTab.tabIndex).toBe(-1)
   })
 
   it('returns to Write once the comment has been posted', async () => {
@@ -486,6 +610,36 @@ describe('the tabs themselves', () => {
     expect(harness.writePanel.hidden).toBe(false)
     expect(harness.preview.hidden).toBe(true)
     expect(harness.writeTab.getAttribute('aria-selected')).toBe('true')
+    // The tab order comes back with it. Left at two stops, the tablist would be
+    // announcing one selected tab while offering both to Tab.
+    expect(harness.writeTab.tabIndex).toBe(0)
+    expect(harness.previewTab.tabIndex).toBe(-1)
+  })
+
+  it('drops a preview still in flight when the comment is posted', async () => {
+    // The reader pressed Preview and then Post without waiting. The answer to the
+    // preview arrives after the comment is published — into a panel nobody is
+    // looking at, cached against a box that is now empty.
+    const { settle } = serve(
+      { status: 200, body: EMPTY_THREAD },
+      { pending: true },
+      { status: 201, body: renderComments([postedComment()]) },
+    )
+
+    const harness = await mount()
+    harness.body.value = 'hi'
+    must<HTMLInputElement>(harness.form, '.charcha-input').value = 'Reader'
+    harness.previewTab.click()
+    harness.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => {
+      expect(harness.thread.querySelector('#charcha-comment-3')).not.toBeNull()
+    })
+
+    settle('<p>hi</p>')
+    await settleAll()
+
+    expect(harness.preview.querySelector('.charcha-comment-body')).toBeNull()
+    expect(harness.preview.hasAttribute('aria-busy')).toBe(false)
   })
 })
 
