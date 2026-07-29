@@ -44,6 +44,7 @@ Re-verify before relying on these; they were checked on the date shown.
 | D1 free tier | 5M rows read/day, 100k rows written/day, 5 GB storage **per account**, 500 MB per database | 2026-07-23 |
 | D1 queries per Worker invocation | **Disputed — design for 50 on Free.** See the note below the table | 2026-07-23 |
 | D1 foreign keys | enforced by default, as `PRAGMA foreign_keys = on` | 2026-07-23 |
+| Turnstile free plan | **free, with "Unlimited challenges (traffic or verification requests)"** — up to 20 widgets, 10 hostnames per widget. The basis for recommending it in the dashboard and the README (#174): there is no quota to spend and no billing decision to take, and the audience already holds a Cloudflare account because deploying Charcha requires one. [Plans](https://developers.cloudflare.com/turnstile/plans/) | 2026-07-29 |
 | Workers AI free tier | 10,000 neurons/day (Free *and* Paid plans) | 2026-07-23 |
 | Workers AI embeddings | ~1,075 neurons per 1M input tokens | 2026-07-23 |
 | Akismet paid tier | $9.95/mo for **500 checks/month** | 2026-07-23 |

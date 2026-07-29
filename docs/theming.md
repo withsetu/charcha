@@ -26,7 +26,7 @@ from there.
 | `data-thread` | the mount element | Pins the conversation to a slug of your choosing instead of the page's path. Use it when the same conversation appears at more than one address, or when your CDN rewrites paths |
 | `data-api` | the mount element | The deployment address, if it is not where `embed.js` was served from |
 | `data-charcha` | any element | An alternative to `id="charcha"`, for pages that mount more than one widget |
-| `data-turnstile-sitekey` | the mount element | Your [Turnstile](https://developers.cloudflare.com/turnstile/) sitekey — half of a pair. Set it **exactly when** `TURNSTILE_SECRET_KEY` is set on the Worker, and not otherwise. The bot check is the one optional thing worth turning on, and each half alone has its own failure — see below |
+| `data-turnstile-sitekey` | the mount element | Your [Turnstile](https://developers.cloudflare.com/turnstile/) sitekey — half of a pair. Set it **exactly when** `TURNSTILE_SECRET_KEY` is set on the Worker, and not otherwise; the two halves fail differently, and the [Turnstile section](#turnstile) has both |
 
 `embed.js` is served as a **static asset**, so fetching it costs your deployment nothing
 against the Cloudflare request budget — only the comment read does. It is
@@ -35,14 +35,14 @@ against the Cloudflare request budget — only the comment read does. It is
 ## Turnstile
 
 Turnstile is optional and off until you set it up — and it is the one optional thing
-here worth going out of your way for. It is the only layer of the spam pipeline that asks
-for evidence rather than for the absence of a problem: the honeypot, the typing-speed
-floor and the link count all measure what a comment is *not*, and a script written
-against this form passes every one of them. It is free — Cloudflare's free plan is
-[unlimited verification requests](https://developers.cloudflare.com/turnstile/plans/), up
-to 20 widgets, checked 2026-07-29 — and it runs on the same Cloudflare account the Worker
-is already deployed to. The [README](../README.md#turning-on-the-optional-features) has
-the two steps.
+here worth going out of your way for. It is the only layer that asks for evidence rather
+than for the absence of a problem: the honeypot, the typing-speed floor and the link count
+all measure what a comment is *not*, and a script written against this form passes every
+one of them. It is also
+[free, with unlimited verification requests](https://developers.cloudflare.com/turnstile/plans/),
+and it runs on the same Cloudflare account the Worker is already deployed to. The
+[README](../README.md#turning-on-the-optional-features) has both steps — and it takes
+both, in the two places below.
 
 With no `TURNSTILE_SECRET_KEY` on the Worker, Charcha never checks a token and never makes
 the call; with no `data-turnstile-sitekey` on the page, Cloudflare's script is never
@@ -53,8 +53,12 @@ stops every comment reaching the page: the Worker wants a token that nothing on 
 is producing. Those comments are **held for review** rather than refused, until one real
 token has verified on the deployment — after that a comment with no token is refused. So
 the symptom of a missing sitekey is a moderation queue filling with comments that look
-perfectly fine, which is why your dashboard's **Setup** tab names the sitekey explicitly
-([#104](https://github.com/withsetu/charcha/issues/104)). The sitekey is public by design
+perfectly fine — each one carrying `turnstile: no-token-unverified-deployment` as its held
+reason, which is what tells this apart from a quiet week. It is also why your dashboard's
+**Setup** tab names the sitekey explicitly
+([#104](https://github.com/withsetu/charcha/issues/104)). The other direction is harmless:
+a sitekey with no secret key renders the widget, the Worker ignores it, and comments carry
+on as though Turnstile were off. The sitekey is public by design
 — it appears in the page HTML of every site that uses Turnstile — so putting it in an
 attribute discloses nothing.
 

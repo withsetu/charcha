@@ -263,8 +263,8 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
 })
 
 describe('Turnstile, which this tab recommends rather than merely lists (#174)', () => {
-  /** The Turnstile section on its own — the tab has four, and three of them also print
-   * a command block and a "Variables and Secrets" line. */
+  /** The Turnstile section on its own — the tab has four sections, and three of them also
+   * print a command block and a "Variables and Secrets" line. */
   async function turnstileSection(): Promise<HTMLElement> {
     const heading = await screen.findByText('Turnstile bot check')
     const section = heading.closest('section')
@@ -298,6 +298,45 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(section.textContent).toContain('Recommended')
     expect(section.textContent).toContain('the absence of something wrong')
     expect(section.textContent).toContain('free and unmetered')
+    // Scoped to the layers that judge a comment, and the exception named, because rate
+    // limiting is layer 4 and measures volume rather than an absence (src/spam/index.ts).
+    // "Every other layer" would be the sort of overclaim a reader can falsify.
+    expect(section.textContent).toContain('Rate limiting bounds how many arrive')
+  })
+
+  it('puts Recommended beside the status badge, not loose in the row', async () => {
+    // The badges are a column a reader scans down, so `Off` keeps the right-hand edge
+    // that `On` holds in every section below. Two loose children of a `justify-between`
+    // row spread themselves across it instead, which is what this looked like when it
+    // was first driven in a browser.
+    answering(() => json(200, report()))
+    mount()
+
+    const section = await turnstileSection()
+    const badges = [...section.querySelectorAll('[data-slot="badge"]')].map(
+      (badge) => badge.textContent,
+    )
+    expect(badges).toEqual(['Recommended', 'Off'])
+    const grouped = section.querySelector('[data-slot="badge"]')?.parentElement
+    expect(grouped?.querySelectorAll('[data-slot="badge"]')).toHaveLength(2)
+  })
+
+  it('says which half is the trap and which half is harmless', async () => {
+    // They are not symmetrical and the copy must not imply they are: a secret with no
+    // sitekey holds every comment (#104), while a sitekey with no secret makes the layer
+    // abstain and costs nothing (src/spam/turnstile.ts). Told as one undifferentiated
+    // warning, the reader cannot tell which mistake they are about to make.
+    answering(() => json(200, report()))
+    mount()
+
+    const text = (await turnstileSection()).textContent ?? ''
+    expect(text).toContain('the two failures are not the same size')
+    expect(text).toContain('A sitekey with no secret key is the harmless direction')
+    // And the queue does name the reason — src/spam/layer.ts prefixes the layer and
+    // src/submit/pipeline.ts stores it, asserted by test/worker/submit/pipeline.test.ts.
+    // Saying "nothing anywhere says why" would document a signal the Worker goes out of
+    // its way to produce as absent.
+    expect(text).toContain('turnstile: no-token-unverified-deployment')
   })
 
   it('goes quiet the moment the secret is set, rather than nagging', async () => {

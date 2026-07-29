@@ -23,8 +23,11 @@
 // terminal — and several of them have neither a checkout nor wrangler, which is
 // documented history on #57.
 //
-// **And it is not a nag.** A deployment with everything on finds four quiet lines and
-// nothing to do.
+// **And it is not a nag.** A deployment with everything on finds no recommendation, no
+// badge urging anything and no command to run — four sections that only report. Not
+// four *short* ones: Turnstile keeps the two paragraphs about its sitekey in the `On`
+// state, because #104 is invisible from here and has to stay readable on a deployment
+// that looks finished.
 //
 // Enforced by test/dashboard/setup.test.tsx.
 
@@ -196,8 +199,8 @@ function Off() {
  * **A second badge rather than a replacement for `Off`, because they answer different
  * questions.** *Off* is the state and *Recommended* is the advice; collapsing them into
  * one word would leave a reader working out from the absence of "On" whether the thing
- * is running. It sits before `Off` so the strong status badge keeps the right-hand edge
- * it holds in every other section, and the four badges still line up down the tab.
+ * is running. It sits before `Off` so the status badge keeps the right-hand edge it holds
+ * in the sections below, which is the column a reader scans.
  *
  * **It renders only in the unconfigured state, and that is the whole of how this stays
  * inside #158's no-nagging rule.** A deployment that has already done this sees `On` and
@@ -348,10 +351,14 @@ export function Setup({
           {/*
             Turnstile leads the optional three, because it is the one this tab
             recommends (#174) and reading order is the only prominence a tab of equal
-            sections has to give. It is also the only one of the three whose absence
-            costs anything on the surface this project exists to defend — the other two
-            are a notification and a rate-limit half. Costs nothing when it is already
-            on: the section goes quiet, and a quiet section at the top is not a nag.
+            sections has to give.
+
+            What being first costs a configured deployment is honestly not nothing: this
+            section keeps two paragraphs in its `On` state, because #104's asymmetry has
+            to be readable on a deployment that looks finished, so a finished tab now
+            opens on its longest quiet section. That is the trade, and it is worth
+            stating rather than describing this as free. What it does not do is nag —
+            the recommendation, the badge and the command are all gone by then.
           */}
           <TurnstileSection set={secrets.value.secrets.TURNSTILE_SECRET_KEY} />
           <EmailSection secrets={secrets.value.secrets} />
@@ -518,14 +525,15 @@ function EmailSection({ secrets }: { secrets: Record<SetupSecret, boolean> }) {
  * Enforced by test/dashboard/setup.test.tsx.
  *
  * **The argument is in the copy, not in the badge.** *Recommended* on its own is taste;
- * what earns it is the fact that separates this layer from the other five, which is that
- * every one of those measures the absence of something wrong and a script written for
- * this form passes all of them. Turnstile is the only one that asks for evidence.
+ * what earns it is the fact that separates this layer from the ones that judge a comment.
+ * The honeypot, the timing floor and the content heuristics all measure the absence of
+ * something wrong, and a script written for this form passes all three. Turnstile is the
+ * only one that asks for evidence. The claim is scoped to those three deliberately: layer
+ * 4 is rate limiting (src/spam/index.ts), which bounds how many comments arrive rather
+ * than judging any one of them, so "every other layer" would be false.
  *
- * The claim that it is free and unmetered is Cloudflare's:
- * https://developers.cloudflare.com/turnstile/plans/ lists the free plan as "Unlimited
- * challenges (traffic or verification requests)", up to 20 widgets and 10 hostnames per
- * widget — checked 2026-07-29 (card rule 7).
+ * The free-and-unmetered claim is Cloudflare's, and CLAUDE.md's verified-facts table is
+ * where it is recorded with its date: https://developers.cloudflare.com/turnstile/plans/
  */
 function TurnstileSection({ set }: { set: boolean }) {
   return (
@@ -553,16 +561,17 @@ function TurnstileSection({ set }: { set: boolean }) {
       ) : (
         <>
           <p>
-            The invisible bot check is off, and it is the layer worth having. Every other one
-            measures the absence of something wrong — a honeypot left empty, more than two seconds
-            spent typing, not too many links — and a script written for this form passes all of
-            them. Turnstile is the only layer that asks for something a script cannot make up: a
+            The invisible bot check is off, and it is the layer worth having. Everything else that
+            looks at a comment measures the absence of something wrong — a honeypot left empty, more
+            than two seconds spent typing, not too many links — and a script written for this form
+            passes all of it. Rate limiting bounds how many arrive, not whether any one of them is
+            real. Turnstile is the only layer that asks for something a script cannot make up: a
             token from a browser that solved a real challenge. Without it, everything reaching your
             queue has only managed not to look wrong.
           </p>
           <p>
             It is free and unmetered, and it is on the Cloudflare account you already have —
-            deploying Charcha needed one. Two values, from one screen.
+            deploying Charcha needed one. One widget, and the two keys it gives you.
           </p>
           <p>
             It is also the one thing Charcha can put a third party into a reader’s browser — the
@@ -579,11 +588,23 @@ function TurnstileSection({ set }: { set: boolean }) {
         <code>data-turnstile-sitekey</code>, and it is what puts the widget there. Charcha cannot
         see your pages, so nothing on this screen can tell you whether that is done.
       </p>
+      {/*
+        The two halves are not symmetrical, and saying so is the point: only one of them
+        is #104. The named reason is the one this queue actually shows — `runLayers`
+        prefixes the layer (src/spam/layer.ts) and `runSubmission` stores the result on
+        the comment, asserted by test/worker/submit/pipeline.test.ts and
+        test/worker/spam/turnstile.test.ts. An earlier version of this paragraph said
+        "nothing anywhere saying why", which was the #162 class of drift: a signal the
+        code goes out of its way to produce, documented as absent.
+      */}
       <p>
-        Set both or neither. A secret key with no sitekey means every comment arrives with no token
-        to check and is held for review — a queue filling with comments that look perfectly fine,
-        and nothing anywhere saying why. A sitekey with no secret key means the widget renders and
-        nothing checks its answer.
+        Set both or neither, and the two failures are not the same size. A secret key with no
+        sitekey means every comment arrives with no token to check and is held for review — a queue
+        filling with comments that look perfectly fine. What tells you it is this rather than a
+        quiet week is the reason on each one: they arrive marked <b>Held</b>, with{' '}
+        <code>turnstile: no-token-unverified-deployment</code> beside them. A sitekey with no secret
+        key is the harmless direction: the widget renders, this layer abstains, and comments carry
+        on as though Turnstile were off.
       </p>
       {!set && (
         <>

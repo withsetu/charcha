@@ -87,11 +87,12 @@ names in the Cloudflare dashboard, in your Worker under **Settings → Variables
 Secrets**. Each takes effect on the next request; there is nothing to redeploy.
 
 **The invisible bot check ([Turnstile](https://developers.cloudflare.com/turnstile/get-started/)) — the one worth doing.**
-It is the only layer in the spam pipeline that asks for evidence rather than for the
-absence of a problem. The honeypot, the two-second typing floor and the link count all
-measure what a comment is *not*, and a script written against this form passes every one
-of them; Turnstile asks for a token that only a browser which solved a real challenge can
-produce. It is also free — Cloudflare's free plan is
+It is the only layer that asks for evidence rather than for the absence of a problem. The
+honeypot, the two-second typing floor and the link count all measure what a comment is
+*not*, and a script written against this form passes every one of them; rate limiting, the
+one layer that is not a judgement about the comment, bounds how many arrive rather than
+whether any of them is real. Turnstile asks for a token that only a browser which solved a
+real challenge can produce. It is also free — Cloudflare's free plan is
 [unlimited verification requests](https://developers.cloudflare.com/turnstile/plans/),
 up to 20 widgets, checked 2026-07-29 — and it is on the Cloudflare account you already
 have, because deploying Charcha needed one.
@@ -118,9 +119,12 @@ pnpm wrangler secret put TURNSTILE_SECRET_KEY
 Set both halves or neither. A secret key with no sitekey on the page means every
 comment arrives with no token to verify: those are **held for review** rather than
 refused, so the symptom is a moderation queue filling with comments that look perfectly
-fine ([#104](https://github.com/withsetu/charcha/issues/104)). Once one real token has
+fine ([#104](https://github.com/withsetu/charcha/issues/104)). They are not unmarked —
+each one carries `turnstile: no-token-unverified-deployment` as its held reason in the
+queue, which is how you tell this from a quiet week. Once one real token has
 verified on your deployment, a comment arriving without one is refused instead. A sitekey
-with no secret key means the widget renders and nothing checks it. Your dashboard's
+with no secret key is the harmless direction: the widget renders, the Worker ignores it,
+and comments carry on as though Turnstile were off. Your dashboard's
 **Setup** tab reports which half the Worker has — it cannot see your pages, so the sitekey
 half is yours to confirm.
 
@@ -239,23 +243,32 @@ Then three things, none of which take long:
 3. **Paste [the snippet](#adding-it-to-a-page) into your page**, with your Worker's
    address in place of the example one.
 
-That is a working install. There is a fourth step, and it is the only optional thing here
-worth treating as a step:
+That is a working install, and skipping everything below still leaves a site that takes
+comments rather than a broken form.
 
-4. **Turn on [Turnstile](#turning-on-the-optional-features).** It is the only spam layer
-   that asks a commenter's browser to prove something, rather than checking that nothing
-   about the comment looks wrong — and it is free, unmetered, and on the Cloudflare
-   account you have just deployed to. **Cloudflare dashboard → Turnstile → Add widget**
-   gives you two keys, and it needs both: the **secret key** goes on the Worker
-   (`pnpm wrangler secret put TURNSTILE_SECRET_KEY`), and the **sitekey** goes on your
-   page as `data-turnstile-sitekey`, on the same element you pasted in step 3. One
-   without the other is [#104](https://github.com/withsetu/charcha/issues/104), which
-   holds every comment on your site for review and tells you nothing.
+**Then do the bot check.** It is the one optional feature worth going out of your way for:
+every other check that looks at a comment measures the absence of something wrong — an
+untouched honeypot, more than two seconds spent typing, not too many links — and a script
+written against this form passes all of it. [Turnstile](#turning-on-the-optional-features)
+asks for a token only a browser that solved a real challenge can produce. It is free,
+unmetered, and on the Cloudflare account you have just deployed to.
 
-Email notifications are separate and genuinely optional.
-[Turning on the optional features](#turning-on-the-optional-features) has them, and the
-longer version of step 4. Skipping either leaves a site that takes comments rather than a
-broken form.
+**Cloudflare dashboard → Turnstile → Add widget** gives you two keys, and it needs both:
+
+- the **secret key** goes on the Worker —
+  `pnpm wrangler secret put TURNSTILE_SECRET_KEY`;
+- the **sitekey** goes on your page as `data-turnstile-sitekey`, on the same element you
+  pasted in step 3.
+
+The secret without the sitekey is
+[#104](https://github.com/withsetu/charcha/issues/104): nothing on your page can produce a
+token, so every comment is held for review, marked with the reason
+`turnstile: no-token-unverified-deployment` in the queue. The sitekey without the secret is
+the harmless direction — the widget renders, the Worker ignores it, and comments carry on.
+
+Email notifications are the other optional feature, and that one you can genuinely take or
+leave. [Turning on the optional features](#turning-on-the-optional-features) has both, at
+length.
 
 If you want to check the deployment from a script rather than a browser, `/health`
 answers JSON, and it distinguishes the three states that matter:

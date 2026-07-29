@@ -64,13 +64,16 @@ trained on the site's own moderation decisions. Optional third-party providers a
 email, comment text — to a company that is not you, which the site owner then has to
 disclose.
 
-One of those layers is worth singling out. Every layer but Turnstile measures the
+One of those layers is worth singling out. The layers that judge a comment measure the
 *absence* of something wrong — an untouched honeypot, more than two seconds spent typing,
-not too many links — and a script written against the form passes all of them. Turnstile
-is the only one that asks for evidence: a token a browser has to earn by solving a real
-challenge. It is off until the site owner configures it, and the
-[README](../README.md#turning-on-the-optional-features) recommends turning it on — in
-both of the places it has to be set, because setting only one is its own failure.
+not too many links — and a script written against the form passes all of them; rate
+limiting, which is not a judgement about the comment, bounds how many arrive rather than
+whether any of them is real. Turnstile is the only one that asks for evidence: a token a
+browser has to earn by solving a real challenge. It is off until the site owner configures
+it, and the [README](../README.md#turning-on-the-optional-features) recommends turning it
+on — in **both** of the places it is set, because the two halves fail differently. The
+Worker's secret key without a sitekey on the page holds every comment for review; a
+sitekey without the secret key costs nothing at all.
 
 When that configuration ships, its documentation will state exactly what each provider
 receives, before the switch that turns it on. That ordering is a commitment, not a
