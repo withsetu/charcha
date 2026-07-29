@@ -16,6 +16,9 @@
 // Deliberately not re-exported: one type, one import path, or the next reader
 // declares a second one here and the two drift.
 import type { RenderableComment } from '../render'
+// The set of statuses the cascade applies to, shared with the dashboard rather than
+// written out here — see src/cascade.ts for why a second copy is the bug it prevents.
+import { CASCADING_STATUSES_SQL } from '../cascade'
 
 export type CommentStatus = 'pending' | 'approved' | 'spam' | 'deleted'
 
@@ -461,6 +464,12 @@ interface ModerationDecisionRow {
  * can inflate by replying to their own comment. What comes back is the decision: the
  * ids, the status, and the count. Bounding the *write* is #122.
  *
+ * **The statuses it cascades on come from src/cascade.ts, not from a list written out
+ * here.** The dashboard takes the same replies off the screen the moment a decision
+ * starts (#133), and a second copy of the set in a different TypeScript project is a
+ * copy nothing can check: a third cascading status would leave the queue showing rows
+ * the server had already hidden, with every test in both projects still green.
+ *
  * **`status <> ?2` on the cascade branch, and it is on the branch rather than on the
  * whole statement.** A reply already in the target status is not moved by this
  * decision, so writing it would spend a row write to change nothing, overwrite the
@@ -474,7 +483,7 @@ interface ModerationDecisionRow {
  */
 export const MODERATE_SQL = `update comments set status = ?2, moderated_at = ?3
         where id = ?1
-           or (parent_id = ?1 and ?2 in ('spam', 'deleted') and status <> ?2)
+           or (parent_id = ?1 and ?2 in (${CASCADING_STATUSES_SQL}) and status <> ?2)
        returning id, thread_id, parent_id, status, moderated_at`
 
 /**

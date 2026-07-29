@@ -7,6 +7,7 @@ import {
   listPageComments,
   setCommentStatus,
 } from '../../../src/db'
+import { cascades } from '../../../src/cascade'
 
 const db = env.DB
 const t0 = 1_753_300_000
@@ -433,6 +434,50 @@ describe('hiding a comment', () => {
       .first<{ status: string }>()
     expect(stored?.status).toBe('pending')
   })
+
+  // **The dashboard's predicate, run against the statement it is supposed to describe.**
+  // src/cascade.ts is the one definition of which decisions cascade — MODERATE_SQL builds
+  // its `in (...)` list from it and src/dashboard/queue.ts calls `cascades` — so the copies
+  // cannot disagree. What can still go wrong is the set itself being wrong, and this is
+  // where that shows: it drives every status the column allows through the real write and
+  // asks the database what happened, so adding a status to that constant without meaning
+  // to fails here rather than in a browser.
+  it.each(['pending', 'approved', 'spam', 'deleted'] as const)(
+    'moves the reply exactly when cascades() says it will: %s',
+    async (status) => {
+      // A reply nobody has judged, so `moderated_at` is null and "did this decision
+      // touch it" has a yes-or-no answer. Comparing its *status* to the one being set
+      // would not: a reply that was already in that status reads as moved without
+      // having been, which is how the first version of this test passed for `approved`
+      // while proving nothing.
+      const thread = await seedThread()
+      const root = await insertComment(db, {
+        threadId: thread.id,
+        authorName: 'Root',
+        body: 'a root comment',
+        bodyHash: `root-${status}`,
+        now: t0,
+      })
+      const reply = await insertComment(db, {
+        threadId: thread.id,
+        parentId: root.id,
+        authorName: 'Replier',
+        body: 'an unreviewed reply',
+        bodyHash: `reply-${status}`,
+        now: t0 + 10,
+      })
+
+      const decision = await setCommentStatus(db, root.id, status, t0 + 30)
+      const stored = await db
+        .prepare('select status, moderated_at from comments where id = ?1')
+        .bind(reply.id)
+        .first<{ status: string; moderated_at: number | null }>()
+
+      expect(stored?.moderated_at === t0 + 30).toBe(cascades(status))
+      expect(stored?.status).toBe(cascades(status) ? status : 'pending')
+      expect(decision.cascaded).toBe(cascades(status) ? 1 : 0)
+    },
+  )
 
   // **A reply already in the target status was not taken down by this decision.**
   // Counting it would put a number on screen that the tab counts contradict: the

@@ -14,6 +14,7 @@
 //
 // Enforced by test/dashboard/queue.test.ts.
 
+import { cascades } from '../cascade'
 import { VIEW_STATUSES } from './api'
 import type {
   ApiFailure,
@@ -349,23 +350,10 @@ function countOfReplies(cascaded: number): number {
   return Number.isInteger(cascaded) && cascaded > 0 ? cascaded : 0
 }
 
-/**
- * Whether this decision hides the replies under the comment.
- *
- * Mirrors `?2 in ('spam', 'deleted')` in MODERATE_SQL, which is the authority — the
- * server cascades whether or not this agrees, so the only thing at stake here is
- * whether the screen matches what the server did.
- *
- * **Exported only so a test can hold it against that statement**, which is the whole
- * reason it is a named function rather than an inline condition. Nothing in this project
- * can typecheck agreement between a TypeScript predicate and a SQL string, and a comment
- * claiming the mirror would sit exactly where a reader goes to verify it — so the mirror
- * is asserted instead, from the one test project that can import both.
- * Enforced by test/worker/db/cascade-mirror.test.ts.
- */
-export function cascadesToReplies(status: DecisionStatus): boolean {
-  return status === 'spam' || status === 'deleted'
-}
+// Whether a decision hides the replies under the comment. `cascades` is imported from
+// src/cascade.ts rather than restated here, and MODERATE_SQL builds its `in (...)` list
+// from the same constant — so this is the same set as the statement's rather than a
+// mirror of it, and there is nothing to keep in step. See that file for why.
 
 /**
  * An announcement and the state fields that carry it, ready to spread.
@@ -554,10 +542,10 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       // them (MODERATE_SQL), so a list that keeps them shows comments the server no
       // longer considers pending — under a tab count that has already moved, with live
       // Approve buttons that would publish a reply beneath a comment the moderator has
-      // just hidden. The predicate is intended to mirror the statement in both halves:
-      // the cascade is to spam and deleted only, and a reply already in the target status
-      // does not move. cascadesToReplies is where the first half is pinned to the SQL.
-      const alsoRemoved: Removed[] = cascadesToReplies(action.status)
+      // just hidden. Both halves come from the statement rather than resembling it: the
+      // status set is `cascades`, which MODERATE_SQL's own `in (...)` list is built from,
+      // and `status !== action.status` is that statement's `status <> ?2`.
+      const alsoRemoved: Removed[] = cascades(action.status)
         ? state.comments.flatMap((candidate, at) =>
             candidate.parentId === action.id && candidate.status !== action.status
               ? [{ comment: candidate, index: at }]
