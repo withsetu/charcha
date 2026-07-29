@@ -9,7 +9,14 @@
 
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import { DUPLICATE_BODY_SQL, RECENT_BY_IP_SQL, RECENT_ON_PAGE_SQL } from '../../../src/db'
+import {
+  DUPLICATE_BODY_SQL,
+  PRUNE_COMMENT_VECTORS_SQL,
+  READ_SPAM_MODEL_SQL,
+  RECENT_BY_IP_SQL,
+  RECENT_ON_PAGE_SQL,
+  TRAINING_SUBJECT_SQL,
+} from '../../../src/db'
 
 const db = env.DB
 
@@ -64,6 +71,46 @@ describe('the per-thread rate-limit read', () => {
       /SEARCH c USING (?:COVERING )?INDEX comments_by_thread_time \(thread_id=\? AND created_at>\?\)/,
     )
     expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+})
+
+describe("the classifier's model read (#10)", () => {
+  it('is a rowid seek and reads no other table', async () => {
+    // This one is on the public submission path — the busiest write endpoint in the
+    // Worker — so it carries the same burden as the three reads above. It is also
+    // the read that a nearest-neighbour classifier would have made per stored
+    // vector, which is the design this shape exists to avoid: `spam_model` is
+    // `CHECK (id = 1)`, so there is one row to seek to, forever.
+    const plan = await planOf(READ_SPAM_MODEL_SQL)
+
+    expect(plan).toMatch(/SEARCH spam_model USING INTEGER PRIMARY KEY \(rowid=\?\)/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+})
+
+describe("the trainer's reads (#10)", () => {
+  it('seeks the one comment and its one vector, both on a primary key', async () => {
+    // The moderator's decision is authenticated and rare, so this is not the hot
+    // path — but it must not grow with the site either, because it runs on every
+    // decision and D1's row reads are an account-wide daily budget. Both halves are
+    // primary keys: `comments.id` is the rowid, and `comment_vectors.comment_id` is
+    // the table's own INTEGER PRIMARY KEY.
+    const plan = await planOf(TRAINING_SUBJECT_SQL, 1)
+
+    expect(plan).toMatch(/SEARCH c USING INTEGER PRIMARY KEY \(rowid=\?\)/)
+    expect(plan).toMatch(/SEARCH v USING INTEGER PRIMARY KEY \(rowid=\?\)/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('finds the vectors to prune on the label index rather than sorting the table', async () => {
+    // The subquery walks one label's entries in `created_at` order. Naming the index
+    // is the assertion: without `comment_vectors_by_label` this is a full scan plus a
+    // B-TREE sort of every vector ever stored, on a statement whose whole job is to
+    // stop that table growing.
+    const plan = await planOf(PRUNE_COMMENT_VECTORS_SQL, 'spam', 2000)
+
+    expect(plan).toMatch(/USING (?:COVERING )?INDEX comment_vectors_by_label \(label=\?\)/)
+    expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
   })
 })
 

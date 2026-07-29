@@ -31,7 +31,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --local",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",

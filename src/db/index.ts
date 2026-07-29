@@ -1062,3 +1062,233 @@ export async function hasDuplicateBodyOnPage(
     .first<{ hit: number }>()
   return row !== null
 }
+
+/**
+ * The classifier's five statements (#10, layer 6). Here rather than in src/spam/ for
+ * the reason the file header gives, and the count matters more for these than for
+ * most: one of them is on the public submission path.
+ *
+ * **Exactly one — READ_SPAM_MODEL_SQL — runs on a submission**, and it is a rowid
+ * seek on a table the schema forbids a second row in. The other four run only on the
+ * authenticated moderation decision, which is one owner clicking one button.
+ *
+ * None of them is per-comment, and none grows with the site's moderation history.
+ * That is the rule CLAUDE.md states — a constant query count, not a low one — and it
+ * is what the classifier's whole shape exists to satisfy: a nearest-neighbour model
+ * would read one row per stored vector on every submission.
+ * Enforced by test/worker/spam/query-plan.test.ts and test/worker/spam/order.test.ts.
+ */
+
+/**
+ * The weights, on the submission path.
+ *
+ * `id = 1` is the INTEGER PRIMARY KEY and `spam_model` is `CHECK (id = 1)`, so this
+ * is one rowid seek against a table of one row, forever.
+ */
+export const READ_SPAM_MODEL_SQL = `select model, dims, weights, bias, ham_count, spam_count
+     from spam_model
+    where id = 1`
+
+/**
+ * A fitted classifier as it is stored, with the weights still in the shape D1 gave
+ * them back.
+ *
+ * The BLOB is `unknown` deliberately: D1 converts it to a JavaScript `Array` of byte
+ * values ("ArrayBuffer and ArrayBuffer views are converted using `Array.from`",
+ * https://developers.cloudflare.com/d1/worker-api/, checked 2026-07-29), and this
+ * layer does not decode it — src/spam/model.ts owns the float encoding, and typing
+ * it here as `number[]` would be this file asserting a conversion it did not perform.
+ */
+export interface StoredSpamModel {
+  model: string
+  dims: number
+  weights: unknown
+  bias: number
+  hamCount: number
+  spamCount: number
+}
+
+interface SpamModelRow {
+  model: string
+  dims: number
+  weights: unknown
+  bias: number
+  ham_count: number
+  spam_count: number
+}
+
+/** The stored classifier, or null on a deployment that has trained none yet. */
+export async function readSpamModel(db: D1Database): Promise<StoredSpamModel | null> {
+  const row = await db.prepare(READ_SPAM_MODEL_SQL).first<SpamModelRow>()
+  if (row === null) return null
+
+  return {
+    model: row.model,
+    dims: row.dims,
+    weights: row.weights,
+    bias: row.bias,
+    hamCount: row.ham_count,
+    spamCount: row.spam_count,
+  }
+}
+
+/** One statement, so two decisions moderated at once cannot interleave into half a model. */
+export const WRITE_SPAM_MODEL_SQL = `insert into spam_model
+         (id, model, dims, weights, bias, ham_count, spam_count, updated_at)
+       values (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       on conflict (id) do update set
+         model      = excluded.model,
+         dims       = excluded.dims,
+         weights    = excluded.weights,
+         bias       = excluded.bias,
+         ham_count  = excluded.ham_count,
+         spam_count = excluded.spam_count,
+         updated_at = excluded.updated_at`
+
+/**
+ * Stores the fitted classifier.
+ *
+ * **Nothing on a public path may reach this**, for the same reason `writeSetting`
+ * says so: the write budget is 100k rows/day against 5M reads, and a model write
+ * reachable from the submission path would let traffic spend the day's comments. The
+ * only caller is the authenticated moderation decision (src/spam/train.ts).
+ * Enforced by test/worker/spam/train.test.ts.
+ */
+export async function writeSpamModel(
+  db: D1Database,
+  model: { model: string; dims: number; weights: ArrayBuffer; bias: number },
+  counts: { hamCount: number; spamCount: number },
+  now: number,
+): Promise<void> {
+  await db
+    .prepare(WRITE_SPAM_MODEL_SQL)
+    .bind(
+      model.model,
+      model.dims,
+      model.weights,
+      model.bias,
+      counts.hamCount,
+      counts.spamCount,
+      now,
+    )
+    .run()
+}
+
+/**
+ * What the trainer needs about one comment, in one statement.
+ *
+ * **It takes a single id and returns a single row, and that is the load-bearing
+ * property rather than an optimisation.** The moderation decision cascades to
+ * replies (MODERATE_SQL above), and those replies are marked spam without a
+ * moderator ever reading them — #28. This read is what the trainer is given, so a
+ * cascaded reply's id is not merely filtered out downstream: it is never in the
+ * trainer's hands at all. `setCommentStatus` returns the cascade as a *count*, not
+ * as ids, so there is nothing for a future caller to pass here by mistake.
+ *
+ * `prior_label` comes back on the same seek so that re-deciding a comment can be
+ * told from deciding it, without a second query. `comment_id` is the primary key of
+ * `comment_vectors`, so the join is a seek.
+ * Enforced by test/worker/spam/train.test.ts and test/worker/db/query-plan.test.ts.
+ */
+export const TRAINING_SUBJECT_SQL = `select c.body, v.label as prior_label
+     from comments c
+     left join comment_vectors v on v.comment_id = c.id
+    where c.id = ?1`
+
+export interface TrainingSubject {
+  body: string
+  /** The label already stored for this comment, or null when it has never been labelled. */
+  priorLabel: 'ham' | 'spam' | null
+}
+
+/** The one comment a human just judged, or null when there is no such comment. */
+export async function readTrainingSubject(
+  db: D1Database,
+  commentId: number,
+): Promise<TrainingSubject | null> {
+  const row = await db
+    .prepare(TRAINING_SUBJECT_SQL)
+    .bind(commentId)
+    .first<{ body: string; prior_label: string | null }>()
+  if (row === null) return null
+
+  return {
+    body: row.body,
+    priorLabel: row.prior_label === 'ham' || row.prior_label === 'spam' ? row.prior_label : null,
+  }
+}
+
+/**
+ * One labelled training example.
+ *
+ * An upsert, because a moderator may change their mind: `comment_id` is the primary
+ * key, so a second decision on the same comment replaces the first rather than
+ * storing two contradictory examples of the same text.
+ */
+export const WRITE_COMMENT_VECTOR_SQL = `insert into comment_vectors
+         (comment_id, label, model, vector, created_at)
+       values (?1, ?2, ?3, ?4, ?5)
+       on conflict (comment_id) do update set
+         label      = excluded.label,
+         model      = excluded.model,
+         vector     = excluded.vector,
+         created_at = excluded.created_at`
+
+/**
+ * Records that a human labelled this comment, with the vector that was scored.
+ *
+ * **The one writer of `comment_vectors` in this project, and it is called from one
+ * place** — the moderation decision handler, with the id from the request path. That
+ * is the whole of #28's answer: the cascade, the spam layers and the classifier's own
+ * verdict all write `comments.status` and none of them can reach this function, so a
+ * row here means a person judged *this* comment. `status` answers "should this appear
+ * on the page"; this table answers "did somebody decide". One column could not carry
+ * both, which is what #28 diagnosed.
+ * Enforced by test/worker/spam/train.test.ts.
+ */
+export async function writeCommentVector(
+  db: D1Database,
+  input: {
+    commentId: number
+    label: 'ham' | 'spam'
+    model: string
+    vector: ArrayBuffer
+    now: number
+  },
+): Promise<void> {
+  await db
+    .prepare(WRITE_COMMENT_VECTOR_SQL)
+    .bind(input.commentId, input.label, input.model, input.vector, input.now)
+    .run()
+}
+
+/**
+ * Drops all but the newest `keep` vectors of one label.
+ *
+ * `limit -1 offset ?2` is SQLite's "everything after the first N" — the newest `keep`
+ * rows are the ones the subquery keeps, and the delete takes the rest.
+ * `comment_vectors_by_label` is `(label, created_at)`, so the subquery walks that
+ * label's index entries in order rather than sorting the table.
+ *
+ * Newest-first rather than a random sample, and that is a real trade: recency loses
+ * old spam campaigns that may recur. It is chosen because the alternative needs a
+ * sampling scheme nobody has evaluated, and because these rows are a *record* — the
+ * fitted weights already carry every decision ever made, including the pruned ones.
+ * Enforced by test/worker/spam/train.test.ts.
+ */
+export const PRUNE_COMMENT_VECTORS_SQL = `delete from comment_vectors
+      where comment_id in (
+        select comment_id from comment_vectors
+         where label = ?1
+         order by created_at desc, comment_id desc
+         limit -1 offset ?2
+      )`
+
+export async function pruneCommentVectors(
+  db: D1Database,
+  label: 'ham' | 'spam',
+  keep: number,
+): Promise<number> {
+  const { meta } = await db.prepare(PRUNE_COMMENT_VECTORS_SQL).bind(label, keep).run()
+  return meta.changes
+}

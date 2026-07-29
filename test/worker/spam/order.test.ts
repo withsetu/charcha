@@ -116,6 +116,70 @@ describe('the layered run', () => {
 
     expect(verdict.action).toBe('allow')
   })
+
+  it('skips a reviewOnly layer once a review is held, because its answer is discarded', async () => {
+    // #10. The first review's reason is the one kept and a reviewOnly layer cannot
+    // reject, so asking one after a review can no longer change the verdict — it can
+    // only cost. For layer 6 that cost is a metered Workers AI call on the public
+    // write endpoint, spent on an answer nobody reads, and omitting one form field is
+    // enough to make layer 2 hold every submission.
+    const seen: string[] = []
+    const verdict = await runLayers(
+      [
+        spy('holder', { action: 'review', reason: 'unsure' }, seen),
+        {
+          ...spy('expensive', { action: 'review', reason: 'never-asked' }, seen),
+          reviewOnly: true,
+        },
+      ],
+      contextFor(),
+    )
+
+    expect(seen).toEqual(['holder'])
+    if (verdict.action !== 'review') throw new Error('expected review')
+    expect(verdict.reason).toContain('unsure')
+  })
+
+  it('still runs a reviewOnly layer when nothing has been held', async () => {
+    const seen: string[] = []
+    const verdict = await runLayers(
+      [
+        spy('quiet', null, seen),
+        { ...spy('expensive', { action: 'review', reason: 'spoke' }, seen), reviewOnly: true },
+      ],
+      contextFor(),
+    )
+
+    expect(seen).toEqual(['quiet', 'expensive'])
+    expect(verdict.action).toBe('review')
+  })
+
+  it('never skips a layer that can reject, because a reject overrules a review', async () => {
+    // The boundary of the rule above. A rejecting layer's answer still matters after
+    // a review, so marking one `reviewOnly` would let a held comment skip the layer
+    // that would have refused it — which is the rate limit, among others.
+    const seen: string[] = []
+    const verdict = await runLayers(
+      [
+        spy('holder', { action: 'review', reason: 'unsure' }, seen),
+        spy('refuser', { action: 'reject', reason: 'caught' }, seen),
+      ],
+      contextFor(),
+    )
+
+    expect(seen).toEqual(['holder', 'refuser'])
+    expect(verdict.action).toBe('reject')
+  })
+
+  it('marks exactly the layers that never reject, and no others', () => {
+    // `reviewOnly` is a promise about a layer's strongest answer, and getting it
+    // wrong on a rejecting layer would silently disable that layer for any held
+    // comment. Only the classifier makes the promise today.
+    const check = createSpamCheck({})
+    const reviewOnly = check.layers.filter((layer) => layer.reviewOnly === true)
+
+    expect(reviewOnly.map((layer) => layer.name)).toEqual(['classifier'])
+  })
 })
 
 describe('createSpamCheck — the assembled ordering', () => {
@@ -232,10 +296,75 @@ describe('createSpamCheck — a comment from a real person', () => {
     expect(verdict).toEqual({ action: 'allow' })
   })
 
-  it('costs at most three database reads, whatever the page already holds', async () => {
-    // Three: one per-IP count, one per-thread count, one duplicate-body lookup.
-    // Constant in the number of comments, which is the rule the 50-query budget
-    // produces (CLAUDE.md).
+  it('costs at most four database reads once the classifier is wired in', async () => {
+    // Four: one per-IP count, one per-thread count, one duplicate-body lookup, and
+    // the classifier's model row (#10). Constant in the number of comments *and* in
+    // the number of comments the site has ever moderated, which is the rule the
+    // 50-query budget produces (CLAUDE.md) and the property layer 6's single weight
+    // vector exists to keep — a nearest-neighbour classifier would read one row per
+    // stored vector right here.
+    //
+    // **The model must be past the cold-start gate for this to assert anything**, and
+    // that is not a detail: below the gate the layer abstains before the embedding,
+    // so a fixture with too little history measures the untrained path and reads as
+    // coverage of the trained one. A kill-shot found exactly that here — an added
+    // per-vector read on the classify path left this test green until the seeding
+    // below reached MIN_LABELS_PER_CLASS in both classes.
+    const trained = await import('../../../src/spam/train')
+    const model = await import('../../../src/spam/model')
+    const unit = (index: number) => {
+      const vector = new Float32Array(8)
+      vector[index] = 1
+      return model.toUnitVector(vector)
+    }
+
+    const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
+    for (let i = 0; i < model.MIN_LABELS_PER_CLASS * 2; i++) {
+      const body = `an earlier comment number ${i}, long enough to be a real one on this thread`
+      const stored = await insertComment(db, {
+        threadId: thread.id,
+        authorName: `Reader ${i}`,
+        body,
+        bodyHash: await computeBodyHash(body),
+        ipHash: null,
+        now: t0 - DEFAULT_WINDOW_AGO,
+      })
+      await trained.trainOnDecision(stored.id, i % 2 === 0 ? 'spam' : 'approved', {
+        db,
+        embed: () => Promise.resolve(unit(i % 2)),
+        now: t0 - DEFAULT_WINDOW_AGO,
+      })
+    }
+
+    const statements: string[] = []
+    const counting = {
+      ...db,
+      prepare(sql: string) {
+        statements.push(sql)
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+
+    // The model really is past the gate, or the four below is the untrained path
+    // wearing the trained path's name.
+    const { readSpamModel } = await import('../../../src/db')
+    const fitted = await readSpamModel(db)
+    expect(fitted?.hamCount).toBeGreaterThanOrEqual(model.MIN_LABELS_PER_CLASS)
+    expect(fitted?.spamCount).toBeGreaterThanOrEqual(model.MIN_LABELS_PER_CLASS)
+
+    const check = createSpamCheck(
+      { IP_HASH_SECRET: 'ip-secret' },
+      { classifier: { embed: () => Promise.resolve(unit(1)) } },
+    )
+    await check.check({ ...contextFor({ form: goodForm() }), db: counting })
+
+    expect(statements).toHaveLength(4)
+  })
+
+  it('costs at most three database reads on a deployment with no Workers AI', async () => {
+    // Three: one per-IP count, one per-thread count, one duplicate-body lookup. The
+    // classifier reads nothing at all without a binding — it abstains before the
+    // model row, so the feature costs an unprovisioned deployment exactly zero.
     const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
     for (let i = 0; i < 30; i++) {
       const body = `an earlier comment number ${i}, long enough to be a real one on this thread`

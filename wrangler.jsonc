@@ -119,6 +119,54 @@
     }
   ],
 
+  // The spam classifier's embedding model (#10, layer 6). "Unlike other bindings,
+  // this binding is limited to one AI binding per Worker project."
+  // https://developers.cloudflare.com/workers/wrangler/configuration/ (checked 2026-07-29)
+  //
+  // **It is here rather than only in a type declaration because the Deploy button
+  // reads this file**, and "Workers AI" is on its list of automatically provisioned
+  // resources — so a one-click deployment gets the binding without the deployer doing
+  // anything, and layer 6 needs no secret and no setup step. That is also why the
+  // classifier is a *local* layer in the sense CLAUDE.md means: inference runs in the
+  // deployer's own account, and no comment is sent to a third party.
+  // https://developers.cloudflare.com/workers/platform/deploy-buttons/ (checked 2026-07-29)
+  //
+  // **There is no local simulation of this binding, and that is why nothing in the
+  // test suite touches it.** "By default, bindings connect to local resource
+  // simulations (except for AI bindings, as AI models always run remotely)", and
+  // using Workers AI "always accesses your Cloudflare account [...] and will incur
+  // usage charges even in local development"
+  // (https://developers.cloudflare.com/workers/development-testing/, checked
+  // 2026-07-29). A test that reached `env.AI` would therefore need account
+  // credentials and would spend real neurons on every CI run. So `createSpamCheck`
+  // takes the binding as an argument and every test passes a stand-in — see
+  // src/spam/classifier.ts, and test/worker/spam/classifier.test.ts for the
+  // assertion that an absent binding abstains rather than throwing.
+  //
+  // **`remote: true` states a fact rather than choosing anything.** It has no effect
+  // on a deployed Worker — it describes what a *local* run connects to, and for this
+  // binding there is no other answer: "If a Workers AI binding has `remote` set to
+  // `false`, Cloudflare will produce an error. If the property is omitted, Cloudflare
+  // will connect to the remote resource and issue a warning to add the property to
+  // configuration." Omitting it printed that warning twice on every `pnpm test`, which
+  // is noise on a line nobody can act on. Saying it out loud is also the more honest
+  // record: `wrangler dev` against this file reaches the owner's real account and
+  // spends real neurons.
+  //
+  // **Which is why package.json's `dev` script is `wrangler dev --local`.** Plain
+  // `wrangler dev` now refuses to start at all without a CLOUDFLARE_API_TOKEN —
+  // "Failed to start the remote proxy session" before the first request — because it
+  // opens the remote session for this binding eagerly. That would make a Cloudflare
+  // account a prerequisite for running this project locally, which it has never been.
+  // `--local` is documented as "Run locally with remote bindings disabled", and under
+  // it `env.AI.run` throws, src/spam/embed.ts catches, and layer 6 abstains — which is
+  // the same path a deployment with no Workers AI takes and is covered by tests.
+  // Drop the flag, with credentials, to exercise the classifier for real.
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+
   // The Deploy to Cloudflare button reads this file to decide what to provision,
   // and rewrites `database_id` with the ID of the database it creates. The value
   // below is a placeholder that exists only so the binding is well-formed before

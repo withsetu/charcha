@@ -1,4 +1,4 @@
-// The two secrets the spam layers read.
+// The two secrets the spam layers read, and the one binding.
 //
 // Neither is a binding in wrangler.jsonc, because both are secrets rather than
 // vars — `wrangler secret put TURNSTILE_SECRET_KEY` — and `wrangler types` only
@@ -32,5 +32,19 @@ declare global {
   }
 }
 
-/** Just the parts of `Env` the spam layers are allowed to see. */
-export type SpamEnv = Pick<Env, 'TURNSTILE_SECRET_KEY' | 'IP_HASH_SECRET'>
+/**
+ * Just the parts of `Env` the spam layers are allowed to see.
+ *
+ * **`AI` is `Partial` where the generated `Env` has it required**, and that is a
+ * statement about this seam rather than about the binding. `wrangler types` marks
+ * every declared binding as present because the platform provides it; layer 6 must
+ * still behave when it is not — on a deployment where provisioning did not happen,
+ * and in every test in this project, because Workers AI has no local simulation and
+ * a test that reached it would need account credentials and spend real neurons (see
+ * vitest.config.ts). Making the absence expressible here is what lets
+ * `createSpamCheck({})` stay the shape the other layers' tests already use, and what
+ * `classifierLayer` abstains on.
+ * Enforced by test/worker/spam/classifier.test.ts.
+ */
+export type SpamEnv = Pick<Env, 'TURNSTILE_SECRET_KEY' | 'IP_HASH_SECRET'> &
+  Partial<Pick<Env, 'AI'>>

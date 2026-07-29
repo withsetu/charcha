@@ -282,7 +282,21 @@ describe('the per-status counts (#135)', () => {
   // rather than slows — so a count of replies that cost a query per reply would fail
   // exactly on the comment popular enough to need it. `cascaded` comes out of the
   // statement that was already being sent.
-  it('spends the same two statements however many replies the decision moves', async () => {
+  //
+  // **Three since #10, and the third is the classifier's.** A decision is now also a
+  // training example, so the handler reads the comment it was given — one row, by
+  // primary key, `TRAINING_SUBJECT_SQL`. It reads *the* comment and not the replies
+  // the cascade moved, which is #28's whole point and is asserted directly in
+  // test/worker/spam/train.test.ts.
+  //
+  // It stops at three here because the embedding cannot be taken: this suite runs
+  // against a real `AI` binding with no local simulation, so `env.AI.run` throws
+  // "Binding AI needs to be run remotely", src/spam/embed.ts catches it, and training
+  // abstains before it would write. That is itself worth having pinned — **a decision
+  // must still be recorded when Workers AI is unreachable** — and the count for a
+  // training run that *succeeds* is pinned separately, with an injected embedder, in
+  // test/worker/spam/train.test.ts.
+  it('spends the same three statements however many replies the decision moves', async () => {
     const [alone] = await seed(1)
     const [crowded] = await seed(1)
     for (let index = 0; index < 12; index++) {
@@ -304,8 +318,8 @@ describe('the per-status counts (#135)', () => {
       await moderate(crowded as number, { status: 'spam' })
       const forTwelve = prepare.mock.calls.length
 
-      expect(forOne).toBe(2)
-      expect(forTwelve).toBe(2)
+      expect(forOne).toBe(3)
+      expect(forTwelve).toBe(3)
     } finally {
       prepare.mockRestore()
     }
