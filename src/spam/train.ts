@@ -191,6 +191,24 @@ export async function trainOnDecision(
 
   const trained = trainedWith(corrected, vector, label)
 
+  // **The vector is written before the model, and the order is the whole of the
+  // safety here.** These are two statements rather than one transaction, so a
+  // failure between them leaves the pair disagreeing, and the two orderings fail
+  // differently:
+  //
+  //   - vector first (this one) — the row exists and the count does not, so the
+  //     `already-labelled` guard above declines to train this comment again. One
+  //     training example is lost, permanently and quietly.
+  //   - model first — the count exists and the row does not, so the *next* decision
+  //     on this comment sees no prior label and trains it a second time. One comment
+  //     counts as two examples, and the cold-start gate is reading a history that
+  //     never happened.
+  //
+  // A lost example is the smaller harm, and it is the one that does not corrupt the
+  // gate. Making the pair atomic would need `D1Database.batch`, which takes prepared
+  // statements and so would change the shape src/db exposes for every writer;
+  // recorded here rather than done, because the window is one failed statement wide
+  // and this ordering already lands on the safe side of it.
   await writeCommentVector(deps.db, {
     commentId,
     label,

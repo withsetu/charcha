@@ -18,12 +18,24 @@
 
 import { env, exports } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { getOrCreateThread, insertComment, readSpamModel, setCommentStatus } from '../../../src/db'
+import {
+  getOrCreateThread,
+  insertComment,
+  pruneCommentVectors,
+  readSpamModel,
+  setCommentStatus,
+  writeCommentVector,
+} from '../../../src/db'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import { classifierLayer } from '../../../src/spam/classifier'
 import type { Embedder } from '../../../src/spam/embed'
 import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
-import { EMBEDDING_MODEL, MIN_LABELS_PER_CLASS, toUnitVector } from '../../../src/spam/model'
+import {
+  EMBEDDING_MODEL,
+  MIN_LABELS_PER_CLASS,
+  encodeWeights,
+  toUnitVector,
+} from '../../../src/spam/model'
 import { MAX_VECTORS_PER_LABEL, PRUNE_EVERY, trainOnDecision } from '../../../src/spam/train'
 import { createSpamCheck } from '../../../src/spam'
 import { contextFor } from './context'
@@ -348,6 +360,59 @@ describe('the cost of training', () => {
 
     expect(MAX_VECTORS_PER_LABEL).toBeGreaterThan(PRUNE_EVERY)
     expect(await vectorRows()).toHaveLength(1)
+  })
+})
+
+describe('pruning the training log (#10 — bounded storage)', () => {
+  // The statement is a DELETE on the only record of what a human ever decided, and
+  // `trainOnDecision` runs it only past a cap of 2,000 — which no test can afford to
+  // reach. So it is driven directly, with a small `keep`. Without this, a prune that
+  // deleted the newest rows, or every row, would pass the whole suite: the caller's
+  // tests never trigger it, and the query-plan test only reads the plan.
+  async function seedVectors(label: 'ham' | 'spam', count: number, from = 0) {
+    for (let i = 0; i < count; i++) {
+      const id = await comment(`${label} example number ${String(from + i)}`)
+      await writeCommentVector(db, {
+        commentId: id,
+        label,
+        model: EMBEDDING_MODEL,
+        vector: encodeWeights(unit(0)),
+        // Ascending, so "newest" is unambiguous.
+        now: t0 + from + i,
+      })
+    }
+  }
+
+  it('keeps the newest and drops the rest', async () => {
+    await seedVectors('spam', 6)
+
+    const deleted = await pruneCommentVectors(db, 'spam', 2)
+
+    expect(deleted).toBe(4)
+    const kept = await db
+      .prepare('select created_at from comment_vectors order by created_at')
+      .all<{ created_at: number }>()
+    expect(kept.results.map((row) => row.created_at)).toEqual([t0 + 4, t0 + 5])
+  })
+
+  it('touches only the label it was given', async () => {
+    // Both classes gate the classifier independently, so a prune that took the other
+    // label with it could silently drop a site below the cold-start threshold.
+    await seedVectors('spam', 4)
+    await seedVectors('ham', 4, 100)
+
+    await pruneCommentVectors(db, 'spam', 1)
+
+    const rows = await vectorRows()
+    expect(rows.filter((row) => row.label === 'spam')).toHaveLength(1)
+    expect(rows.filter((row) => row.label === 'ham')).toHaveLength(4)
+  })
+
+  it('deletes nothing when the class is under the cap', async () => {
+    await seedVectors('ham', 3)
+
+    expect(await pruneCommentVectors(db, 'ham', 10)).toBe(0)
+    expect(await vectorRows()).toHaveLength(3)
   })
 })
 

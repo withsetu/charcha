@@ -21,7 +21,18 @@
 // inference call, and its own internals repeat the pattern — the cold-start read
 // happens before the embedding, so a deployment that has never moderated anything
 // reaches Workers AI zero times.
-// Enforced by test/worker/spam/order.test.ts.
+//
+// **Layer 4 sitting ahead of layer 6 is what bounds the neuron budget**, and it is
+// the ordering doing security work rather than economics. Workers AI allows 10,000
+// neurons a day and answers HTTP 429 after that, so a flood that reached the
+// classifier could spend a site's whole allowance and leave layer 6 abstaining for
+// the rest of the day. It cannot: the per-IP limit answers `reject`, and `runLayers`
+// stops at the first reject without asking anything after it. The per-thread limit
+// answers `review` and so does not short-circuit — by design, since review must not
+// be a way to skip later layers — which leaves a distributed flood at one embedding
+// per admitted comment. That is the same bound the write budget already imposes, and
+// the failure it degrades to is this layer having no opinion.
+// Enforced by test/worker/spam/order.test.ts and test/worker/spam/rate-limit.test.ts.
 
 import type { SpamCheck, SpamCheckContext, SpamVerdict } from '../submit/spam'
 import { classifierLayer } from './classifier'
