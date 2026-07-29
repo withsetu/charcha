@@ -15,6 +15,7 @@ import {
   decision,
   json,
   queuePage,
+  rowNames,
   stubFetch,
   unhandled,
   type FetchStub,
@@ -270,6 +271,144 @@ describe('a decision that fails', () => {
   })
 })
 
+describe('a decision that cascades (#133)', () => {
+  /** The reproduction on the issue: one root with three pending replies under it. */
+  function rootAndThreeReplies() {
+    return [
+      comment({ id: 4, parentId: 1, depth: 1, authorName: 'Replier3' }),
+      comment({ id: 3, parentId: 1, depth: 1, authorName: 'Replier2' }),
+      comment({ id: 2, parentId: 1, depth: 1, authorName: 'Replier1' }),
+      comment({ id: 1, authorName: 'RootAuthor' }),
+    ]
+  }
+
+  /** The names in list order, which is what "put it back where it was" means here. */
+  function authorsOnScreen(): string[] {
+    return rowNames().map(
+      (name) => name.replace(/^Comment \d+ of \d+, by /, '').split(',')[0] ?? '',
+    )
+  }
+
+  /**
+   * `S` on the root, which is three rows down: the queue is newest first, so the replies
+   * sit above the comment they hang from — exactly as in the reproduction on the issue.
+   */
+  function spamTheRoot() {
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 's' })
+  }
+
+  function cascadingStub() {
+    return stubFetch((call) =>
+      call.method === 'POST'
+        ? json(
+            200,
+            call.body !== null && typeof call.body === 'object' && 'status' in call.body
+              ? (call.body as { status: string }).status === 'spam'
+                ? decision(1, 'spam', { pending: 0, spam: 20, approved: 0 }, 3)
+                : decision(1, 'pending', { pending: 1, spam: 19, approved: 0 }, 0)
+              : decision(1, 'spam', { pending: 0, spam: 20, approved: 0 }, 3),
+          )
+        : json(200, queuePage(rootAndThreeReplies(), null, { pending: 4, spam: 16, approved: 0 })),
+    )
+  }
+
+  it('leaves no card behind that the server no longer holds as pending', async () => {
+    // The screen contradicting itself, which is the visible symptom: the tab said
+    // "Pending, 0 comments" while three cards sat below it, styled as pending, each
+    // with a live Approve button — and pressing it published a reply under a root the
+    // moderator had just hidden.
+    cascadingStub()
+    mount()
+    await screen.findByText('RootAuthor')
+    expect(rowNames()).toHaveLength(4)
+
+    spamTheRoot()
+
+    await screen.findByText('Nothing waiting on you')
+    expect(rowNames()).toEqual([])
+    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull()
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Pending, 0 comments' })).toBeTruthy()
+    })
+  })
+
+  it('says how many replies went with it, and what undo will not do', async () => {
+    cascadingStub()
+    mount()
+    await screen.findByText('RootAuthor')
+
+    spamTheRoot()
+
+    await screen.findByRole('button', { name: /Undo/ })
+    expect(screen.getByText('Marked spam: RootAuthor, and 3 replies')).toBeTruthy()
+    // One sentence, asserted whole: the disclaimer only counts if it says both what
+    // undo does and what it leaves behind.
+    expect(screen.getByText('Undo restores RootAuthor. The 3 replies stay spam.')).toBeTruthy()
+  })
+
+  it('announces the same thing, so the keyboard user is not the one left guessing', async () => {
+    cascadingStub()
+    mount()
+    await screen.findByText('RootAuthor')
+
+    spamTheRoot()
+
+    const live = await waitFor(() => {
+      const region = document.querySelector('[aria-live="polite"]')
+      if (region === null || region.textContent === '') throw new Error('nothing announced')
+      return region
+    })
+    expect(live.textContent).toContain('and 3 replies')
+    expect(live.textContent).toContain('Press Z to undo RootAuthor.')
+    expect(live.textContent).toContain('The 3 replies stay spam.')
+  })
+
+  it('brings the root back on Z and reports that the replies did not come with it', async () => {
+    const stub = cascadingStub()
+    mount()
+    await screen.findByText('RootAuthor')
+    spamTheRoot()
+    await screen.findByRole('button', { name: /Undo/ })
+
+    fireEvent.keyDown(document.body, { key: 'z' })
+
+    await screen.findByText('RootAuthor')
+    // One row back, not four: the replies stayed spam, which is what the bar promised.
+    expect(rowNames()).toHaveLength(1)
+    expect(decisions(stub).map((call) => call.body)).toEqual([
+      { status: 'spam' },
+      { status: 'pending' },
+    ])
+    await waitFor(() => {
+      const region = document.querySelector('[aria-live="polite"]')
+      expect(region?.textContent).toContain('is pending again')
+    })
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain(
+      'Its 3 replies are still spam',
+    )
+  })
+
+  it('puts the whole cascade back when the decision does not apply', async () => {
+    stubFetch((call) =>
+      call.method === 'POST'
+        ? apiError(503, 'UNAVAILABLE', 'The dashboard is not available on this deployment.')
+        : json(200, queuePage(rootAndThreeReplies(), null, { pending: 4, spam: 16, approved: 0 })),
+    )
+    mount()
+    await screen.findByText('RootAuthor')
+
+    spamTheRoot()
+
+    await screen.findByText('Could not mark spam on the comment by RootAuthor')
+    // All four, in the order they were in. A queue missing three replies nobody
+    // moderated is the failure the restore exists to prevent, three times over.
+    expect(authorsOnScreen()).toEqual(['Replier3', 'Replier2', 'Replier1', 'RootAuthor'])
+  })
+})
+
 describe('the undo window', () => {
   it('offers an undo after a decision, and takes the comment back on Z', async () => {
     const stub = stubFetch((call) =>
@@ -282,7 +421,7 @@ describe('the undo window', () => {
     fireEvent.keyDown(document.body, { key: 's' })
 
     await screen.findByRole('button', { name: /Undo/ })
-    expect(screen.getByText('Marked spam')).toBeTruthy()
+    expect(screen.getByText('Marked spam: Ada')).toBeTruthy()
     // The queue advanced: this is the empty state, not the row.
     await screen.findByText('Nothing waiting on you')
 

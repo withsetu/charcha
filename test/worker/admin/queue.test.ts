@@ -3,7 +3,7 @@
 // comment could never be judged.
 
 import { env, exports } from 'cloudflare:workers'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getOrCreateThread, insertComment } from '../../../src/db'
 import { app } from '../../../src/index'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
@@ -67,6 +67,7 @@ interface DecisionBody {
   status: string
   moderatedAt: number
   counts: Record<string, number>
+  cascaded: number
 }
 
 async function statusOf(id: number): Promise<string | undefined> {
@@ -253,6 +254,72 @@ describe('the per-status counts (#135)', () => {
     const body = await (await moderate(root as number, { status: 'spam' })).json<DecisionBody>()
 
     expect(body.counts).toEqual({ pending: 0, spam: 4, approved: 0 })
+  })
+
+  // #133. The counts say the queue moved by four; without this the response says only
+  // that one comment changed, and the dashboard has nothing to explain the other three
+  // with. setCommentStatus has computed it since #12 and the endpoint threw it away.
+  it('says how many replies the decision took with it', async () => {
+    const [root] = await seed(1)
+    for (let index = 0; index < 3; index++) {
+      await insertComment(db, {
+        threadId,
+        parentId: root,
+        authorName: `Replier ${String(index)}`,
+        body: `reply ${String(index)}`,
+        bodyHash: `r${String(index)}`,
+        now: t0 + 100 + index,
+      })
+    }
+
+    const body = await (await moderate(root as number, { status: 'spam' })).json<DecisionBody>()
+
+    expect(body.cascaded).toBe(3)
+  })
+
+  // **The number is free, and this is what says so.** CLAUDE.md's rule is a *constant*
+  // query count rather than a low one, because the 50-per-invocation budget throws
+  // rather than slows — so a count of replies that cost a query per reply would fail
+  // exactly on the comment popular enough to need it. `cascaded` comes out of the
+  // statement that was already being sent.
+  it('spends the same two statements however many replies the decision moves', async () => {
+    const [alone] = await seed(1)
+    const [crowded] = await seed(1)
+    for (let index = 0; index < 12; index++) {
+      await insertComment(db, {
+        threadId,
+        parentId: crowded,
+        authorName: `Replier ${String(index)}`,
+        body: `reply ${String(index)}`,
+        bodyHash: `c${String(index)}`,
+        now: t0 + 200 + index,
+      })
+    }
+
+    const prepare = vi.spyOn(db, 'prepare')
+    try {
+      await moderate(alone as number, { status: 'spam' })
+      const forOne = prepare.mock.calls.length
+      prepare.mockClear()
+      await moderate(crowded as number, { status: 'spam' })
+      const forTwelve = prepare.mock.calls.length
+
+      expect(forOne).toBe(2)
+      expect(forTwelve).toBe(2)
+    } finally {
+      prepare.mockRestore()
+    }
+  })
+
+  it('says zero for a decision that took nothing with it', async () => {
+    // Present and zero rather than absent, for the reason the counts are zero-filled: a
+    // dashboard handed `undefined` renders it, and "and undefined replies" is a worse
+    // answer than the true one.
+    const [id] = await seed(1)
+
+    const body = await (await moderate(id as number, { status: 'approved' })).json<DecisionBody>()
+
+    expect(body.cascaded).toBe(0)
   })
 
   it('tells an unauthenticated caller nothing about how much is unmoderated', async () => {

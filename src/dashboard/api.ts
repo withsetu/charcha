@@ -137,6 +137,19 @@ export interface DecisionResult {
    * Enforced by test/worker/admin/queue.test.ts.
    */
   counts: QueueCounts
+  /**
+   * How many replies the decision took with it (#133).
+   *
+   * Zero for an approval, which does not cascade, and zero for a comment with no
+   * replies. Counted from the rows that actually moved, so it agrees with `counts`
+   * above rather than contradicting the badges beside it — see MODERATE_SQL in src/db.
+   *
+   * Cast rather than validated, like everything else here except `readSetup`: a value
+   * that is not a number is reduced to zero by the reducer, which under-claims instead
+   * of announcing "and undefined replies". See countOfReplies in src/dashboard/queue.ts.
+   * Enforced by test/worker/admin/queue.test.ts and test/dashboard/queue.test.ts.
+   */
+  cascaded: number
 }
 
 /** A whole sentence for each failure that never reached a handler. */

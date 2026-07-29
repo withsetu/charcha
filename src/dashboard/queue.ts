@@ -14,6 +14,7 @@
 //
 // Enforced by test/dashboard/queue.test.ts.
 
+import { cascades } from '../cascade'
 import { VIEW_STATUSES } from './api'
 import type {
   ApiFailure,
@@ -61,10 +62,28 @@ export type OriginStatus = SettableStatus
  */
 export interface UndoOffer {
   comment: QueuedComment
-  /** Where the row sat before it was removed, so undo restores order, not just rows. */
+  /**
+   * Where the row goes back, so undo restores order and not just rows.
+   *
+   * A position in the list as it is *now*, not the one the row had before the decision:
+   * a cascade removes the replies above it for good, so the original index would put
+   * the comment back below rows it used to sit above.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
   index: number
   from: OriginStatus
   to: DecisionStatus
+  /**
+   * How many replies the decision took with it, as the server counted them (#133).
+   *
+   * Carried on the offer because it is what the bar and the announcement have to
+   * disclaim: undo re-issues one status write for this comment, and MODERATE_SQL only
+   * cascades *to* spam and deleted — so the replies stay where the decision put them.
+   * Restoring them would need each one's prior status, which no row records: a reply
+   * that was already spam must not come back as pending. #163 is that record.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
+  cascaded: number
   /** Milliseconds since the epoch, from the caller's clock. Drives the visible window. */
   offeredAt: number
   /** True while the undo request is in flight. */
@@ -86,11 +105,34 @@ export interface Announcement {
   urgency: 'polite' | 'assertive'
 }
 
+/** A row and where it sat, so a restore puts back the order and not only the rows. */
+interface Removed {
+  comment: QueuedComment
+  index: number
+}
+
 /** A comment removed from the list while its decision is in flight. */
 interface InFlight {
   comment: QueuedComment
+  /** Where it sat in the list as it was, which is what a failure restores it to. */
   index: number
+  /**
+   * Where it sits in the list that is *left* — which is what an undo restores it to.
+   *
+   * The two differ by however many replies the cascade took off the screen above it,
+   * because a failure brings all of them back and an undo brings none.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
+  restoreIndex: number
   status: DecisionStatus
+  /**
+   * The replies removed alongside it, each with its own index in the list as it was.
+   *
+   * Held so `decide/failed` can put the whole cascade back where it was, not just the
+   * comment the owner pressed a key on.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
+  alsoRemoved: readonly Removed[]
 }
 
 export interface QueueState {
@@ -192,9 +234,10 @@ export type QueueAction =
   | { type: 'decide/start'; id: number; status: DecisionStatus }
   /**
    * `at` is the caller's clock: the reducer has none, so the undo window is testable.
-   * `counts` is the server's recount, which the reducer stores and never adjusts.
+   * `counts` is the server's recount, which the reducer stores and never adjusts, and
+   * `cascaded` is how many replies went with the comment (#133).
    */
-  | { type: 'decide/ok'; id: number; at: number; counts: QueueCounts }
+  | { type: 'decide/ok'; id: number; at: number; counts: QueueCounts; cascaded: number }
   | { type: 'decide/failed'; id: number; failure: ApiFailure }
   | { type: 'undo/start' }
   | { type: 'undo/ok'; counts: QueueCounts }
@@ -209,15 +252,21 @@ export const UNDO_WINDOW_MS = 12_000
 /**
  * The two ways this surface names a decision, in one place because both the
  * announcement built below and the visible bar in
- * src/dashboard/components/message-bar.tsx need them.
+ * src/dashboard/components/message-bar.tsx say them.
  *
  * They were briefly two copies, and the copies disagreed: the bar said "Could not mark
  * spam on the comment by X" and the announcement said "Could not mark spam the comment
  * by X". A screen-reader user got the ungrammatical one, and the test asserting
- * `toContain('mark spam')` passed either way — which is why they are exported from here
- * rather than retyped there.
+ * `toContain('mark spam')` passed either way — which is why they live here rather than
+ * being retyped there.
+ *
+ * `ATTEMPTED` is exported and `DECIDED` is not, and the asymmetry is the point: since
+ * #133 a decision is never named without also naming the replies it took, so the bar
+ * goes through `decisionSummary` below and reaching for `DECIDED` on its own would be
+ * the way to reintroduce a line that says less than the truth. The failure alert has no
+ * such second half and takes its verb directly.
  */
-export const DECIDED: Record<DecisionStatus, string> = {
+const DECIDED: Record<DecisionStatus, string> = {
   approved: 'Approved',
   spam: 'Marked spam',
   deleted: 'Deleted',
@@ -229,6 +278,88 @@ export const ATTEMPTED: Record<DecisionStatus, string> = {
   spam: 'mark spam on',
   deleted: 'delete',
 }
+
+/**
+ * The status a cascaded reply is left in, phrased to follow "stays" or "stay".
+ *
+ * `approved` is present so the map is total over `DecisionStatus`. Approving does not
+ * cascade, so `cascaded` is zero for it and every caller below is behind a
+ * `cascaded > 0` guard — see setCommentStatus in src/db, asserted by
+ * test/worker/db/comments.test.ts.
+ */
+const LEFT_AS: Record<DecisionStatus, string> = {
+  approved: 'approved',
+  spam: 'spam',
+  deleted: 'deleted',
+}
+
+/**
+ * What a decision did, in one phrase: the decision, whose comment, and how many
+ * replies went with it (#133).
+ *
+ * Exported because the visible bar in src/dashboard/components/message-bar.tsx and the
+ * live-region announcement built below must say the same thing. They were two copies
+ * once for the failure wording, and the copies disagreed — see DECIDED above.
+ * Enforced by test/dashboard/queue.test.ts and test/dashboard/triage.test.tsx.
+ */
+export function decisionSummary(
+  status: DecisionStatus,
+  authorName: string,
+  cascaded: number,
+): string {
+  if (cascaded === 0) return `${DECIDED[status]}: ${authorName}`
+  const replies = cascaded === 1 ? '1 reply' : `${String(cascaded)} replies`
+  return `${DECIDED[status]}: ${authorName}, and ${replies}`
+}
+
+/**
+ * What undo will *not* do, or null when the decision took nothing else with it.
+ *
+ * The honest half of #133's second question. Undo restores the comment and leaves the
+ * replies where the decision put them, so the offer has to say so — an undo that
+ * claims to have undone something it partly did is worse than one that does less.
+ * Enforced by test/dashboard/queue.test.ts and test/dashboard/triage.test.tsx.
+ */
+export function repliesStay(offer: Pick<UndoOffer, 'to' | 'cascaded'>): string | null {
+  if (offer.cascaded === 0) return null
+  return offer.cascaded === 1
+    ? `The reply under it stays ${LEFT_AS[offer.to]}.`
+    : `The ${String(offer.cascaded)} replies stay ${LEFT_AS[offer.to]}.`
+}
+
+/**
+ * The same fact in the past tense, for after the undo has happened.
+ *
+ * A separate sentence rather than reusing repliesStay, because "stay" before the fact
+ * is an intention and "are still" after it is a report, and the moment a moderator
+ * needs to be told is the one where they have just pressed `Z` and the count did not
+ * go back where they expected.
+ * Enforced by test/dashboard/queue.test.ts.
+ */
+function repliesStayed(offer: UndoOffer): string | null {
+  if (offer.cascaded === 0) return null
+  return offer.cascaded === 1
+    ? `Its reply is still ${LEFT_AS[offer.to]}.`
+    : `Its ${String(offer.cascaded)} replies are still ${LEFT_AS[offer.to]}.`
+}
+
+/**
+ * A count from the wire, reduced to a number this surface can put in a sentence.
+ *
+ * The server sends `cascaded` on every decision (src/admin/route.ts), so a value that
+ * is not a whole number means a proxy, a Worker mid-deploy, or a dashboard talking to
+ * an older deployment. Zero is the safe answer: it under-claims, where the alternative
+ * is "and undefined replies" read out in a live region.
+ * Enforced by test/dashboard/queue.test.ts.
+ */
+function countOfReplies(cascaded: number): number {
+  return Number.isInteger(cascaded) && cascaded > 0 ? cascaded : 0
+}
+
+// Whether a decision hides the replies under the comment. `cascades` is imported from
+// src/cascade.ts rather than restated here, and MODERATE_SQL builds its `in (...)` list
+// from the same constant — so this is the same set as the statement's rather than a
+// mirror of it, and there is nothing to keep in step. See that file for why.
 
 /**
  * An announcement and the state fields that carry it, ready to spread.
@@ -413,12 +544,62 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       const comment = state.comments[index]
       if (comment === undefined || isDeciding(state, action.id)) return state
 
-      const comments = state.comments.filter((candidate) => candidate.id !== action.id)
+      // **The replies go with it, and this is #133's visible half.** The server hides
+      // them (MODERATE_SQL), so a list that keeps them shows comments the server no
+      // longer considers pending — under a tab count that has already moved, with live
+      // Approve buttons that would publish a reply beneath a comment the moderator has
+      // just hidden. Both halves come from the statement rather than resembling it: the
+      // status set is `cascades`, which MODERATE_SQL's own `in (...)` list is built from,
+      // and `status !== action.status` is that statement's `status <> ?2`.
+      const alsoRemoved: Removed[] = cascades(action.status)
+        ? state.comments.flatMap((candidate, at) =>
+            candidate.parentId === action.id && candidate.status !== action.status
+              ? [{ comment: candidate, index: at }]
+              : [],
+          )
+        : []
+
+      const removed = new Set([action.id, ...alsoRemoved.map((entry) => entry.comment.id)])
+      const comments = state.comments.filter((candidate) => !removed.has(candidate.id))
+      // **The index a row at `at` will have in the list that is left**, which two
+      // different things need and which is not the index it had. A cascade removes rows
+      // from *above* the comment — the queue is newest first, so a reply always sits
+      // above the comment it hangs from — and every original index below `at` that goes
+      // shifts the survivors up by one.
+      // Enforced by test/dashboard/queue.test.ts.
+      const survivorsBefore = (at: number): number =>
+        state.comments.slice(0, at).filter((candidate) => !removed.has(candidate.id)).length
+
+      // Where the keyboard lands. Measured from the row the keyboard was *on* rather than
+      // from the comment decided, because the two can differ: a decision taken with the
+      // mouse, or by Tab into another row's buttons, leaves the caret on some other row.
+      // Measuring from the decided comment there would skip every surviving row between
+      // them.
+      const currentIndex = state.comments.findIndex((candidate) => candidate.id === state.currentId)
       return {
         ...state,
         comments,
-        currentId: state.currentId === action.id ? afterRemoval(comments, index) : state.currentId,
-        inFlight: [...state.inFlight, { comment, index, status: action.status }],
+        // The test is whether the current row survived, not whether it was the one
+        // decided — a cascaded reply can be the row the keyboard was sitting on.
+        currentId:
+          state.currentId !== null && removed.has(state.currentId)
+            ? afterRemoval(comments, survivorsBefore(currentIndex))
+            : state.currentId,
+        inFlight: [
+          ...state.inFlight,
+          {
+            comment,
+            index,
+            // Where an undo has to put it back, which is *not* `index`: by then the
+            // replies are gone for good — undo does not restore them — so the original
+            // index overshoots by however many sat above it, and the comment comes back
+            // below rows it used to sit above.
+            // Enforced by test/dashboard/queue.test.ts.
+            restoreIndex: survivorsBefore(index),
+            status: action.status,
+            alsoRemoved,
+          },
+        ],
         // A new decision replaces the offer to undo the previous one. `Z` means "take
         // back what I just did", and holding two offers would make it ambiguous which.
         undo: null,
@@ -429,6 +610,21 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
     case 'decide/ok': {
       const entry = state.inFlight.find((candidate) => candidate.comment.id === action.id)
       if (entry === undefined) return state
+      const cascaded = countOfReplies(action.cascaded)
+      const offer: UndoOffer = {
+        comment: entry.comment,
+        index: entry.restoreIndex,
+        from: originOf(entry.comment),
+        to: entry.status,
+        cascaded,
+        offeredAt: action.at,
+        running: false,
+      }
+      // What the decision did, and — when it took replies with it — what `Z` will and
+      // will not put back (#133). Said in the same breath as the offer of `Z`, because
+      // the moment to learn that undo is partial is before pressing it.
+      const summary = decisionSummary(entry.status, entry.comment.authorName, cascaded)
+      const scope = repliesStay(offer)
       return {
         ...state,
         // The server's recount, stored rather than adjusted: the decision cascades to
@@ -436,14 +632,7 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
         // many there were. See handleCommentStatus in src/admin/route.ts.
         counts: action.counts,
         inFlight: state.inFlight.filter((candidate) => candidate.comment.id !== action.id),
-        undo: {
-          comment: entry.comment,
-          index: entry.index,
-          from: originOf(entry.comment),
-          to: entry.status,
-          offeredAt: action.at,
-          running: false,
-        },
+        undo: offer,
         // **The `Z` prompt is dropped when the decision lands on the Setup tab.** `S`
         // then `4` before the request answers is two keystrokes on a surface built for
         // one per comment, and it resolves with the queue out of sight — where the bar
@@ -451,12 +640,18 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
         // in src/dashboard/components/triage.tsx). Announcing a keystroke that does
         // nothing is worse than announcing none. The offer itself survives, so the bar
         // and the key both come back with the queue if the window has not closed.
+        //
+        // The count of replies is said either way: it is what the decision *did*, not an
+        // invitation to press anything, and it is the one part of a cascade the tab the
+        // owner is looking at cannot explain.
         // Enforced by test/dashboard/queue.test.ts.
         ...say(
           state,
           state.tab === 'setup'
-            ? `${DECIDED[entry.status]}: ${entry.comment.authorName}.`
-            : `${DECIDED[entry.status]}: ${entry.comment.authorName}. Press Z to undo.`,
+            ? `${summary}.`
+            : scope === null
+              ? `${summary}. Press Z to undo.`
+              : `${summary}. Press Z to undo ${entry.comment.authorName}. ${scope}`,
         ),
       }
     }
@@ -464,12 +659,23 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
     case 'decide/failed': {
       const entry = state.inFlight.find((candidate) => candidate.comment.id === action.id)
       if (entry === undefined) return state
-      // The row goes back where it was. An optimistic removal that is not undone on
-      // failure is the worst outcome this surface has: the comment is still pending
-      // and the queue says otherwise, so the moderator believes they are finished.
+      // The rows go back where they were — all of them, including the replies the
+      // cascade took off the screen with the comment. An optimistic removal that is not
+      // undone on failure is the worst outcome this surface has: the comments are still
+      // pending and the queue says otherwise, so the moderator believes they are
+      // finished. Ascending by index, which is what makes re-inserting a set of rows
+      // reconstruct the list rather than approximate it: every earlier insert restores
+      // the position the next one's index was recorded against.
+      // Enforced by test/dashboard/queue.test.ts.
+      const restored = [{ comment: entry.comment, index: entry.index }, ...entry.alsoRemoved]
+        .sort((left, right) => left.index - right.index)
+        .reduce<readonly QueuedComment[]>(
+          (list, row) => insertAt(list, row.comment, row.index),
+          state.comments,
+        )
       return {
         ...state,
-        comments: insertAt(state.comments, entry.comment, entry.index),
+        comments: restored,
         // **The keyboard goes back to the restored comment, and that is not cosmetic.**
         // `decide/start` had already advanced past it. Leaving current where the
         // auto-advance put it means the owner reads "Could not approve the comment by
@@ -502,13 +708,25 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       const comments = restores
         ? insertAt(state.comments, { ...offer.comment, status: offer.from }, offer.index)
         : state.comments
+      // **The replies are not restored, and the announcement says so (#133).** Undo is
+      // one more status write on this comment, and putting the cascade back would need
+      // each reply's status from *before* the decision — a reply that was already spam
+      // must not come back as pending, and no row records what it used to be. So the
+      // scope is the comment, stated rather than implied: "Undone" on its own claims
+      // more than happened, which is the failure mode this issue is about.
+      // Enforced by test/dashboard/queue.test.ts.
+      const stayed = repliesStayed(offer)
       return {
         ...state,
         comments,
         counts: action.counts,
         currentId: restores ? offer.comment.id : state.currentId,
         undo: null,
-        ...say(state, `Undone: the comment by ${offer.comment.authorName} is ${offer.from} again.`),
+        ...say(
+          state,
+          `Undone: the comment by ${offer.comment.authorName} is ${offer.from} again.` +
+            (stayed === null ? '' : ` ${stayed}`),
+        ),
       }
     }
 

@@ -19,7 +19,7 @@ import type * as React from 'react'
 import { RotateCcwIcon, TriangleAlertIcon, UndoIcon, XIcon } from 'lucide-react'
 
 import type { ActionFailure, Announcement, UndoOffer } from '../queue'
-import { ATTEMPTED, DECIDED, UNDO_WINDOW_MS } from '../queue'
+import { ATTEMPTED, UNDO_WINDOW_MS, decisionSummary, repliesStay } from '../queue'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Button } from '../ui/button'
 import { Kbd } from '../ui/kbd'
@@ -57,6 +57,11 @@ export function MessageBar({
   onDismiss,
   hidden = false,
 }: MessageBarProps) {
+  // What undo will not do, or null when the decision took nothing else with it (#133).
+  // Read once rather than twice in the JSX below, where the same call decided both
+  // whether the line renders and what it says.
+  const leftBehind = undo === null ? null : repliesStay(undo)
+
   return (
     <>
       {/*
@@ -114,11 +119,29 @@ export function MessageBar({
             undo !== null && (
               <div className="overflow-hidden rounded-lg border bg-card shadow-lg">
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                  <p className="text-sm">
-                    <span className="font-medium">{DECIDED[undo.to]}</span>
-                    {': '}
-                    {undo.comment.authorName}
-                  </p>
+                  <div className="min-w-0">
+                    {/*
+                      What the decision did, replies included (#133). Hiding one comment
+                      hides the replies under it, and until this line existed the bar
+                      named one comment while the tab count beside it fell by four — the
+                      moderator had the number and no sentence to attach it to.
+                    */}
+                    <p className="text-sm font-medium">
+                      {decisionSummary(undo.to, undo.comment.authorName, undo.cascaded)}
+                    </p>
+                    {/*
+                      And what `Z` will not do. Undo re-issues one status write on this
+                      comment; the replies stay where the decision put them, because
+                      restoring them would need a status no row records. Saying it here
+                      is the difference between an undo that does less and an undo that
+                      claims more than it did.
+                    */}
+                    {leftBehind !== null && (
+                      <p className="mt-0.5 text-sm text-muted-foreground">
+                        Undo restores {undo.comment.authorName}. {leftBehind}
+                      </p>
+                    )}
+                  </div>
                   <Button variant="outline" size="sm" disabled={undo.running} onClick={onUndo}>
                     <UndoIcon aria-hidden="true" />
                     {undo.running ? 'Undoing…' : 'Undo'}

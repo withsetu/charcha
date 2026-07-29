@@ -16,6 +16,9 @@
 // Deliberately not re-exported: one type, one import path, or the next reader
 // declares a second one here and the two drift.
 import type { RenderableComment } from '../render'
+// The set of statuses the cascade applies to, shared with the dashboard rather than
+// written out here — see src/cascade.ts for why a second copy is the bug it prevents.
+import { CASCADING_STATUSES_SQL } from '../cascade'
 
 export type CommentStatus = 'pending' | 'approved' | 'spam' | 'deleted'
 
@@ -428,7 +431,15 @@ export interface ModerationDecision {
   parentId: number | null
   status: CommentStatus
   moderatedAt: number | null
-  /** How many replies the decision took down with it. Zero for an approval. */
+  /**
+   * How many replies the decision took down with it. Zero for an approval.
+   *
+   * Rows that *moved*, not rows the statement matched: a reply already in the target
+   * status is excluded by MODERATE_SQL, so this is a number the recomputed tab counts
+   * agree with. It is shown to the moderator (#133), and a count that disagreed with
+   * the badges beside it would be the same self-contradiction that issue is about.
+   * Enforced by test/worker/db/comments.test.ts.
+   */
   cascaded: number
 }
 
@@ -452,11 +463,27 @@ interface ModerationDecisionRow {
  * row, so hiding one popular comment would be an unbounded read on a path a spammer
  * can inflate by replying to their own comment. What comes back is the decision: the
  * ids, the status, and the count. Bounding the *write* is #122.
+ *
+ * **The statuses it cascades on come from src/cascade.ts, not from a list written out
+ * here.** The dashboard takes the same replies off the screen the moment a decision
+ * starts (#133), and a second copy of the set in a different TypeScript project is a
+ * copy nothing can check: a third cascading status would leave the queue showing rows
+ * the server had already hidden, with every test in both projects still green.
+ *
+ * **`status <> ?2` on the cascade branch, and it is on the branch rather than on the
+ * whole statement.** A reply already in the target status is not moved by this
+ * decision, so writing it would spend a row write to change nothing, overwrite the
+ * `moderated_at` of the decision that really did move it, and — since #133 puts the
+ * cascade count in front of the moderator — inflate a number the recomputed tab
+ * counts then contradict. The root is deliberately *not* filtered the same way: it
+ * must come back whatever its own status, or setting a comment to the status it is
+ * already in would raise NoSuchCommentError and the endpoint would answer 404 for a
+ * comment that plainly exists.
  * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/comments.test.ts.
  */
 export const MODERATE_SQL = `update comments set status = ?2, moderated_at = ?3
         where id = ?1
-           or (parent_id = ?1 and ?2 in ('spam', 'deleted'))
+           or (parent_id = ?1 and ?2 in (${CASCADING_STATUSES_SQL}) and status <> ?2)
        returning id, thread_id, parent_id, status, moderated_at`
 
 /**

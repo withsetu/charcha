@@ -185,6 +185,24 @@ describe('the moderation write', () => {
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 
+  // #133 added `status <> ?2` to the cascade branch, and it had to not cost the seek
+  // above: the two arms of the OR are separately indexed, so the extra predicate is a
+  // filter on rows the index has already narrowed to one parent's replies rather than
+  // a reason to look at the whole table. The plan is unchanged — asserted here rather
+  // than assumed, because a predicate that defeats MULTI-INDEX OR would turn a
+  // bounded write into a full scan on the busiest thread on the site, silently.
+  it('still seeks both arms of the OR separately with the status filter on it', async () => {
+    const plan = await planOf(MODERATE_SQL, 1, 'spam', 1_753_300_000)
+
+    expect(plan).toMatch(/MULTI-INDEX OR/)
+    expect(plan).toMatch(/USING INTEGER PRIMARY KEY/)
+  })
+
+  // The `status <> ?2` narrowing that keeps the reported count honest is asserted on
+  // behaviour instead, in test/worker/db/comments.test.ts — a regex over this constant
+  // would be the statement's source compared with a copy of itself, which cannot fail
+  // for any reason except a rewording.
+
   it('never returns a comment body, however many replies it cascades over', () => {
     // Selecting `body` would pull up to 10,000 characters per reply into a 128 MB
     // isolate on the way to discarding all but one row, so hiding one popular
