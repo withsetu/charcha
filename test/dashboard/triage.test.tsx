@@ -432,6 +432,35 @@ describe('switching view', () => {
     ])
   })
 
+  it('opens Setup from the mouse as well, since the mouse is the fallback (#158)', async () => {
+    stubFetch((call) => {
+      if (call.path.startsWith('/admin/api/queue')) return json(200, queuePage([]))
+      if (call.path === '/admin/api/setup') {
+        return json(200, {
+          secrets: {
+            RESEND_API_KEY: true,
+            CHARCHA_NOTIFY_FROM: true,
+            CHARCHA_NOTIFY_TO: true,
+            TURNSTILE_SECRET_KEY: true,
+            IP_HASH_SECRET: true,
+          },
+        })
+      }
+      if (call.path === '/admin/api/settings') {
+        return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+      }
+      return unhandled(call)
+    })
+    mount()
+    await screen.findByText('Nothing waiting on you')
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Setup' }))
+    await screen.findByText('Turnstile bot check')
+    // The queue's panel is gone rather than merely behind it, so nothing on screen
+    // invites a decision.
+    expect(screen.queryByText('Nothing waiting on you')).toBeNull()
+  })
+
   it('marks exactly one tab selected', async () => {
     stubFetch(() => json(200, queuePage([])))
     mount()
@@ -464,7 +493,8 @@ describe('the view tabs (#135)', () => {
     for (const name of names) {
       expect(screen.getByRole('tab', { name })).toBeTruthy()
     }
-    // No fourth tab quietly carrying one of the names instead.
+    // No extra tab quietly carrying one of the names instead. Setup (#158) is the fourth
+    // and is passed in by every caller, so a tab appearing without a test still fails.
     expect(screen.getAllByRole('tab')).toHaveLength(names.length)
   }
 
@@ -490,7 +520,7 @@ describe('the view tabs (#135)', () => {
     mount()
     await screen.findByText('Author 1')
 
-    expectTabNames(['Pending, 53 comments', 'Spam, 12 comments', 'Approved, 1 comment'])
+    expectTabNames(['Pending, 53 comments', 'Spam, 12 comments', 'Approved, 1 comment', 'Setup'])
     // And the ambiguous reading is gone: "Pending 53" is what the trigger's text content
     // computes to on its own, and it is exactly as unclear read aloud as on screen.
     expect(screen.queryByRole('tab', { name: 'Pending 53' })).toBeNull()
@@ -502,7 +532,7 @@ describe('the view tabs (#135)', () => {
     stubFetch(() => new Promise<Response>(() => {}))
     mount()
 
-    expectTabNames(['Pending', 'Spam', 'Approved'])
+    expectTabNames(['Pending', 'Spam', 'Approved', 'Setup'])
     expect(
       screen.getByRole('tab', { name: 'Pending' }).querySelector('[data-slot="tab-count"]'),
     ).toBeNull()
@@ -513,7 +543,7 @@ describe('the view tabs (#135)', () => {
     mount()
     await screen.findByText('Nothing waiting on you')
 
-    expectTabNames(['Pending, 0 comments', 'Spam, 3 comments', 'Approved, 0 comments'])
+    expectTabNames(['Pending, 0 comments', 'Spam, 3 comments', 'Approved, 0 comments', 'Setup'])
     expect(within(screen.getAllByRole('tab')[0] as HTMLElement).getByText('0')).toBeTruthy()
   })
 
@@ -525,7 +555,7 @@ describe('the view tabs (#135)', () => {
     await screen.findByText('Nothing waiting on you')
 
     const keys = screen.getAllByRole('tab').map((tab) => tab.querySelector('[data-slot="kbd"]'))
-    expect(keys.map((key) => key?.textContent)).toEqual(['1', '2', '3'])
+    expect(keys.map((key) => key?.textContent)).toEqual(['1', '2', '3', '4'])
     for (const key of keys) {
       expect(key?.getAttribute('aria-hidden')).toBe('true')
       // The keycap treatment itself: a bordered, filled cap of a fixed size. The
@@ -555,6 +585,21 @@ describe('the view tabs (#135)', () => {
     }
   })
 
+  it('gives Setup a keycap and never a count, however busy the queues are', async () => {
+    // #158's tab holds no comments, so the slot a count belongs in stays empty — which is
+    // #135's rule rather than an exception to it. A `4` in that slot is exactly the bug
+    // that was fixed.
+    stubFetch(() => json(200, queuePage([], null, { pending: 53, spam: 12, approved: 4 })))
+    mount()
+    await screen.findByText('Nothing waiting on you')
+
+    const setup = screen.getByRole('tab', { name: 'Setup' })
+    expect(setup.querySelector('[data-slot="tab-count"]')).toBeNull()
+    const key = setup.querySelector('[data-slot="kbd"]')
+    expect(key?.textContent).toBe('4')
+    expect(key?.getAttribute('aria-hidden')).toBe('true')
+  })
+
   it('follows a decision, including the replies it cascaded over', async () => {
     // A badge that does not move after an approval is the same class of lie as a
     // shortcut hint that reads as a count. The server recounts, so this is four moving
@@ -578,7 +623,7 @@ describe('the view tabs (#135)', () => {
     fireEvent.keyDown(document.body, { key: 's' })
 
     await waitFor(() => {
-      expectTabNames(['Pending, 49 comments', 'Spam, 4 comments', 'Approved, 0 comments'])
+      expectTabNames(['Pending, 49 comments', 'Spam, 4 comments', 'Approved, 0 comments', 'Setup'])
     })
   })
 
@@ -594,7 +639,7 @@ describe('the view tabs (#135)', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: /Spam/ }))
     // Asserted while the new queue is still loading: this is the moment the counts would
     // have been dropped.
-    expectTabNames(['Pending, 53 comments', 'Spam, 12 comments', 'Approved, 4 comments'])
+    expectTabNames(['Pending, 53 comments', 'Spam, 12 comments', 'Approved, 4 comments', 'Setup'])
     await screen.findByText('No spam held')
   })
 })

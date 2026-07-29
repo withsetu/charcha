@@ -356,7 +356,7 @@ describe('switching view', () => {
   it('starts a new queue and drops everything about the old one', () => {
     let state = reduce(loaded([1, 2], '1.2'), { type: 'decide/start', id: 1, status: 'spam' })
     state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
-    state = reduce(state, { type: 'view', view: 'spam' })
+    state = reduce(state, { type: 'tab', tab: 'spam' })
     expect(state.view).toBe('spam')
     expect(state.phase).toBe('loading')
     expect(state.comments).toEqual([])
@@ -368,10 +368,67 @@ describe('switching view', () => {
 
   it('keeps the shortcut sheet open, because it is about the surface not the queue', () => {
     const state = reduce(reduce(initialState(), { type: 'help', open: true }), {
-      type: 'view',
-      view: 'spam',
+      type: 'tab',
+      tab: 'spam',
     })
     expect(state.helpOpen).toBe(true)
+  })
+})
+
+describe('the setup tab (#158)', () => {
+  it('starts on the queue, so `tab` and `view` agree until somebody moves', () => {
+    expect(initialState().tab).toBe('pending')
+    expect(initialState('spam').tab).toBe('spam')
+  })
+
+  it('leaves the loaded queue exactly where it was', () => {
+    // Setup is not a queue. Clearing the list here would make every trip to this tab
+    // cost a refetch and lose the owner's place in a 50-row page.
+    const state = reduce(loaded([1, 2]), { type: 'tab', tab: 'setup' })
+    expect(state.tab).toBe('setup')
+    expect(state.view).toBe('pending')
+    expect(state.phase).toBe('ready')
+    expect(state.comments).toHaveLength(2)
+    expect(state.currentId).toBe(1)
+  })
+
+  it('takes the message bar with it, because the row it names is not on screen', () => {
+    let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    expect(state.undo).not.toBeNull()
+
+    state = reduce(state, { type: 'tab', tab: 'setup' })
+    expect(state.undo).toBeNull()
+    expect(state.actionFailure).toBeNull()
+  })
+
+  it('comes back to the same queue without asking for it again', () => {
+    // **The load-bearing one.** Resetting here would set `phase` back to `loading` while
+    // leaving `view` untouched — and the effect that fetches is keyed on `view`, so
+    // nothing would ever ask for the page and the skeleton would stand for ever.
+    const state = reduce(reduce(loaded([1, 2]), { type: 'tab', tab: 'setup' }), {
+      type: 'tab',
+      tab: 'pending',
+    })
+    expect(state.tab).toBe('pending')
+    expect(state.phase).toBe('ready')
+    expect(state.comments).toHaveLength(2)
+  })
+
+  it('starts a new queue when the tab chosen from setup is a different one', () => {
+    const state = reduce(reduce(loaded([1, 2]), { type: 'tab', tab: 'setup' }), {
+      type: 'tab',
+      tab: 'spam',
+    })
+    expect(state.tab).toBe('spam')
+    expect(state.view).toBe('spam')
+    expect(state.phase).toBe('loading')
+    expect(state.comments).toEqual([])
+  })
+
+  it('does nothing at all when the tab chosen is the one already showing', () => {
+    const state = loaded([1, 2])
+    expect(reduce(state, { type: 'tab', tab: 'pending' })).toBe(state)
   })
 })
 
@@ -396,7 +453,7 @@ describe('the per-status counts (#135)', () => {
     // Everything else about the old queue goes. If the counts went with it, switching
     // tabs would blank all three badges and then repopulate them — and the numbers were
     // still true the whole time.
-    const state = reduce(loaded([1, 2]), { type: 'view', view: 'spam' })
+    const state = reduce(loaded([1, 2]), { type: 'tab', tab: 'spam' })
     expect(state.comments).toEqual([])
     expect(state.counts).toEqual(SOME_COUNTS)
   })

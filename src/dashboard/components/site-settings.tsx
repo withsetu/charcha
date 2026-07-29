@@ -78,11 +78,21 @@ export function SiteSettings({
   open,
   onOpenChange,
   onExpired,
+  onSaved,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** A 401 here means the same thing it means in the queue: the session is gone. */
   onExpired: () => void
+  /**
+   * A successful save landed (#158).
+   *
+   * The Setup tab shows the same allowlist and can be behind this dialog while it is
+   * edited, so it has to be told. Reported from here rather than inferred from the
+   * dialog closing, because closing without saving is the commoner ending and would
+   * make a no-op re-read look like a change.
+   */
+  onSaved?: () => void
 }) {
   const [phase, setPhase] = React.useState<Phase>({ kind: 'loading' })
   const [value, setValue] = React.useState('')
@@ -145,6 +155,7 @@ export function SiteSettings({
         setValue(toField(result.value.allowedOrigins))
         setSelfOrigin(result.value.selfOrigin)
         setPhase({ kind: 'saved' })
+        onSaved?.()
       })
       .catch(() => {
         setSaveFailure(DASHBOARD_BUG)

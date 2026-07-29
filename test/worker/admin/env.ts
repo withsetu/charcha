@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers'
+import { REPORTED_SECRETS, type ReportedSecret } from '../../../src/admin/setup'
 
 // The dashboard's configuration is a secret and a binding on `env`, and both have
 // to be moved around to test what happens when they are missing — which is the
@@ -54,4 +55,27 @@ export function restoreLimiter(): void {
 /** Puts the secret back to whatever the Worker actually has. */
 export function restorePassword(): void {
   configurePassword(realPassword)
+}
+
+/**
+ * The optional secrets the Setup tab reports on (#158), as they were at import.
+ *
+ * Read once and restored wholesale for the reason `realPassword` gives: `env` is one
+ * object shared by every test file in the isolate, and a file that put back a constant
+ * rather than what it found would hand the next file a deployment it did not configure —
+ * which for these means a spam layer silently on or off in somebody else's test.
+ */
+const secrets = env as unknown as Record<ReportedSecret, string | undefined>
+
+const realSecrets = new Map<ReportedSecret, string | undefined>(
+  REPORTED_SECRETS.map((name) => [name, secrets[name]]),
+)
+
+export function configureSecret(name: ReportedSecret, value: string | undefined): void {
+  if (value === undefined) delete secrets[name]
+  else secrets[name] = value
+}
+
+export function restoreSecrets(): void {
+  for (const [name, value] of realSecrets) configureSecret(name, value)
 }

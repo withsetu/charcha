@@ -22,9 +22,11 @@ import {
 } from 'lucide-react'
 
 import type { ApiFailure, ApiResult, DecisionStatus, ViewStatus } from '../api'
-import { VIEW_STATUSES, decide, readQueue } from '../api'
+import { decide, readQueue } from '../api'
+import type { Command } from '../keys'
 import { resolveCommand } from '../keys'
 import {
+  TAB_VALUES,
   UNDO_WINDOW_MS,
   currentComment,
   initialState,
@@ -32,12 +34,14 @@ import {
   reduce,
   shouldLoadMore,
 } from '../queue'
+import type { TabValue } from '../queue'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Button } from '../ui/button'
 import { Kbd } from '../ui/kbd'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { CommentCard } from './comment-card'
 import { MessageBar } from './message-bar'
+import { Setup } from './setup'
 import { ShortcutSheet } from './shortcut-sheet'
 import { SiteSettings } from './site-settings'
 import { QueueEmpty, QueueFailed, QueueLoading } from './states'
@@ -47,6 +51,25 @@ const VIEW_LABELS: Record<ViewStatus, string> = {
   spam: 'Spam',
   approved: 'Approved',
 }
+
+/** Every tab's visible name. Setup (#158) is the one that is not a queue. */
+const TAB_LABELS: Record<TabValue, string> = { ...VIEW_LABELS, setup: 'Setup' }
+
+/**
+ * The commands that act on the queue, and so must not fire while Setup is in front.
+ *
+ * The queue is still in state behind that tab — leaving it there is what makes coming
+ * back free — so without this, `A` on the Setup tab would approve a comment the owner
+ * cannot see, and `Z` would undo something they can no longer read. Named as a set
+ * rather than checked inline so that a command added later is a decision about this list
+ * instead of an omission from a condition.
+ * Enforced by test/dashboard/shortcuts.test.tsx.
+ */
+const QUEUE_COMMANDS: ReadonlySet<Command['kind']> = new Set<Command['kind']>([
+  'move',
+  'decide',
+  'undo',
+])
 
 /** `53 comments`, or `1 comment`. Both places that count comments say it this way. */
 function commentCount(n: number): string {
@@ -63,11 +86,24 @@ function commentCount(n: number): string {
  *
  * A null count is a count nobody has answered for yet, and the name says only the view:
  * an accessible name claiming "0 comments" before the first response asserts an empty
- * queue on no evidence.
+ * queue on no evidence. Setup is always that case — it holds no comments, so it never
+ * carries a number, on screen or in its name.
  * Enforced by test/dashboard/triage.test.tsx.
  */
-function tabName(view: ViewStatus, count: number | null): string {
-  return count === null ? VIEW_LABELS[view] : `${VIEW_LABELS[view]}, ${commentCount(count)}`
+function tabName(tab: TabValue, count: number | null): string {
+  return count === null ? TAB_LABELS[tab] : `${TAB_LABELS[tab]}, ${commentCount(count)}`
+}
+
+/**
+ * How many comments a tab's badge should claim, or null for no badge at all.
+ *
+ * Setup is null unconditionally, and that is #135's rule rather than a special case: the
+ * number beside a queue's name is how many things are in it, so a tab that holds nothing
+ * countable must not put a digit in that slot. The keycap beside it is a keycap.
+ * Enforced by test/dashboard/triage.test.tsx.
+ */
+function tabCount(tab: TabValue, counts: Record<ViewStatus, number> | null): number | null {
+  return tab === 'setup' ? null : (counts?.[tab] ?? null)
 }
 
 /**
@@ -162,6 +198,24 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const settingsIsOpen = React.useRef(settingsOpen)
   settingsIsOpen.current = settingsOpen
+
+  /**
+   * The clock reading of the last successful allowlist save (#158).
+   *
+   * The Setup tab reads the allowlist for itself, and the dialog above can change it
+   * while that tab is on screen — so without this, an owner who saved would be looking
+   * at the list as it was before they edited it, in the one place they went to check the
+   * edit had landed. A value rather than a boolean because it has to change on *every*
+   * save, including two identical ones.
+   */
+  const [originsSavedAt, setOriginsSavedAt] = React.useState(0)
+  const onOriginsSaved = React.useCallback(() => {
+    setOriginsSavedAt(Date.now())
+  }, [])
+
+  const openOrigins = React.useCallback(() => {
+    setSettingsOpen(true)
+  }, [])
 
   /**
    * Starts async work and guarantees the failure has somewhere to go.
@@ -348,6 +402,14 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
       // see, behind a modal that claims the rest of the page is hidden.
       if (current.helpOpen && command.kind !== 'help') return
 
+      // The Setup tab has no queue in front of it, and the loaded one is still in state
+      // behind it — so a decision key here would act on a comment nobody can see. Tab
+      // switching, the sheet and Escape still work, which is what keeps `1` a way back.
+      // Returning before `preventDefault` leaves the browser's own use of the key intact,
+      // which on a tab full of prose and a scrollable command block is what arrow keys
+      // are for.
+      if (current.tab === 'setup' && QUEUE_COMMANDS.has(command.kind)) return
+
       // Only now, once the keystroke is known to be ours. Calling this earlier would
       // swallow the browser's own use of every key the map does not have.
       event.preventDefault()
@@ -373,9 +435,9 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
         case 'dismiss':
           dispatch({ type: 'dismiss' })
           return
-        case 'view': {
-          const view = VIEW_STATUSES[command.index]
-          if (view !== undefined && view !== current.view) dispatch({ type: 'view', view })
+        case 'tab': {
+          const tab = TAB_VALUES[command.index]
+          if (tab !== undefined) dispatch({ type: 'tab', tab })
           return
         }
       }
@@ -404,13 +466,7 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
             queue and is used about twice in a deployment's life. The letters are worth
             more on the queue.
           */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSettingsOpen(true)
-            }}
-          >
+          <Button variant="ghost" size="sm" onClick={openOrigins}>
             <GlobeIcon aria-hidden="true" />
             Allowed origins
           </Button>
@@ -433,13 +489,18 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
       </header>
 
       <Tabs
-        value={state.view}
+        value={state.tab}
         onValueChange={(value) => {
-          dispatch({ type: 'view', view: value as ViewStatus })
+          dispatch({ type: 'tab', tab: value as TabValue })
         }}
       >
-        <TabsList aria-label="Which comments to show">
-          {VIEW_STATUSES.map((view, index) => {
+        {/*
+          Not "which comments to show" any more: the strip holds a tab that shows no
+          comments at all (#158), and a list label that describes three of its four
+          children is a label a screen-reader user has to work around.
+        */}
+        <TabsList aria-label="Sections">
+          {TAB_VALUES.map((tab, index) => {
             // The number beside a queue's name is how many comments are in it, which is
             // what every inbox has taught everyone to read it as — and what #135 was: the
             // shortcut hint sat in that slot with no keycap on it. The count is plain
@@ -451,10 +512,10 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
             // so a secondary badge has no contrast at all against the `bg-muted` an
             // inactive tab shows — and an outline badge would give the count the same
             // bordered-chip shape as the keycap beside it.
-            const count = state.counts?.[view] ?? null
+            const count = tabCount(tab, state.counts)
             return (
-              <TabsTrigger key={view} value={view} aria-label={tabName(view, count)}>
-                {VIEW_LABELS[view]}
+              <TabsTrigger key={tab} value={tab} aria-label={tabName(tab, count)}>
+                {TAB_LABELS[tab]}
                 {count !== null && (
                   // `tabular-nums` so a count changing under the owner's cursor does not
                   // shift the keycap beside it.
@@ -473,6 +534,26 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
           })}
         </TabsList>
 
+        {/*
+          The Setup tab (#158). Its own `TabsContent`, so Radix unmounts it when another
+          tab is chosen — which is what makes every visit a fresh read of what is
+          configured, with no cache to go stale after somebody sets a secret in another
+          window.
+        */}
+        <TabsContent value="setup" className="mt-4">
+          <Setup
+            onEditOrigins={openOrigins}
+            onExpired={onExpired}
+            originsSavedAt={originsSavedAt}
+          />
+        </TabsContent>
+
+        {/*
+          The queue's panel is keyed on `view` rather than `tab`, so it is the inactive
+          one exactly while Setup is in front. The reducer keeps the loaded page through
+          that, which is why coming back costs no request — see the `tab` case in
+          src/dashboard/queue.ts.
+        */}
         <TabsContent value={state.view} className="mt-4">
           {state.phase === 'loading' && <QueueLoading />}
 
@@ -572,7 +653,12 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
         }}
       />
 
-      <SiteSettings open={settingsOpen} onOpenChange={setSettingsOpen} onExpired={onExpired} />
+      <SiteSettings
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        onExpired={onExpired}
+        onSaved={onOriginsSaved}
+      />
     </div>
   )
 }

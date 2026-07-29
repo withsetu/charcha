@@ -15,7 +15,17 @@ export type Command =
   | { kind: 'undo' }
   | { kind: 'help' }
   | { kind: 'dismiss' }
-  | { kind: 'view'; index: 0 | 1 | 2 }
+  /**
+   * A tab, by position — `1`…`4`, which is `TAB_VALUES` in src/dashboard/queue.ts.
+   *
+   * By index and not by name because the map is a pure function that knows nothing
+   * about the queue: naming `'setup'` here would put a second copy of the tab list in
+   * this file, and the two would eventually disagree about which key is the fourth. The
+   * union is the width of `TAB_VALUES`, so adding a fifth tab without a key for it is a
+   * type error rather than a silently unreachable tab.
+   * Enforced by test/dashboard/keys.test.ts.
+   */
+  | { kind: 'tab'; index: 0 | 1 | 2 | 3 }
 
 /**
  * The subset of `KeyboardEvent` the map reads.
@@ -122,11 +132,13 @@ export function resolveCommand(stroke: KeyStroke): Command | null {
     case 'escape':
       return { kind: 'dismiss' }
     case '1':
-      return { kind: 'view', index: 0 }
+      return { kind: 'tab', index: 0 }
     case '2':
-      return { kind: 'view', index: 1 }
+      return { kind: 'tab', index: 1 }
     case '3':
-      return { kind: 'view', index: 2 }
+      return { kind: 'tab', index: 2 }
+    case '4':
+      return { kind: 'tab', index: 3 }
     default:
       return null
   }
@@ -152,7 +164,7 @@ export const SHORTCUTS: readonly ShortcutHelp[] = [
   { keys: 'S', description: 'Spam — hides it, and its replies' },
   { keys: 'D', description: 'Delete — hides it, and its replies' },
   { keys: 'Z', description: 'Undo the last decision' },
-  { keys: '1  2  3', description: 'Pending, spam, approved' },
+  { keys: '1  2  3  4', description: 'Pending, spam, approved, setup' },
   { keys: 'Esc', description: 'Dismiss the message bar' },
   { keys: '?', description: 'This sheet' },
 ]
