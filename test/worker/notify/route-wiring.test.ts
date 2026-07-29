@@ -234,10 +234,26 @@ describe('POST /comments — a comment the spam layers rejected never mails', ()
 })
 
 describe('POST /comments — the notification costs no D1 queries', () => {
-  it('prepares the same statements with notifications on as with them off', async () => {
-    // The 50-query budget is per invocation and the rule is that the count stays
-    // constant. The notifier is handed what the pipeline already read, so switching
-    // it on must move nothing here.
+  /**
+   * What one root comment on a new thread costs, with no `Origin` header, in order:
+   * the per-page rate-limit count, the duplicate-body check, the thread insert, the
+   * comment insert.
+   *
+   * Both bodies below are past `DUPLICATE_MIN_LENGTH` (60, src/spam/content.ts) on
+   * purpose: under it the duplicate check does not run and this is three, which would
+   * read as the wiring having saved a query rather than as the fixture being short.
+   *
+   * Written down rather than only compared against itself. An on-versus-off
+   * comparison is blind to a statement the wiring added *unconditionally* — the
+   * notifier is built on every submission, configured or not — and that was a real
+   * kill-shot this test survived before the number was pinned. If it moves, the
+   * question is whether the invocation still costs the same at any thread size (the
+   * 50-query budget is per invocation, and constant is the rule); a submit path that
+   * legitimately gains a statement updates this line.
+   */
+  const STATEMENTS_PER_SUBMISSION = 4
+
+  it('prepares the same four statements with notifications on as with them off', async () => {
     const prepare = db.prepare.bind(db)
     const seen: string[] = []
     vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
@@ -247,16 +263,22 @@ describe('POST /comments — the notification costs no D1 queries', () => {
 
     unconfigureNotify()
     stubFetch(accepted)
-    await post({ url: 'https://maya.build/notes/off', body: 'One comment, notifications off.' })
+    await post({
+      url: 'https://maya.build/notes/off',
+      body: 'One comment on a page nobody has commented on before, notifications off.',
+    })
     const withoutNotify = seen.length
 
     seen.length = 0
     configureNotify()
-    await post({ url: 'https://maya.build/notes/on', body: 'One comment, notifications on.' })
+    await post({
+      url: 'https://maya.build/notes/on',
+      body: 'One comment on a page nobody has commented on before, notifications on.',
+    })
     const withNotify = seen.length
 
-    expect(withoutNotify).toBeGreaterThan(0)
-    expect(withNotify).toBe(withoutNotify)
+    expect(withoutNotify).toBe(STATEMENTS_PER_SUBMISSION)
+    expect(withNotify).toBe(STATEMENTS_PER_SUBMISSION)
   })
 })
 

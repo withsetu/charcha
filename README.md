@@ -122,6 +122,13 @@ the emails, because there is no unsubscribe link and nobody to unsubscribe but y
 **Check both addresses for typos before you paste them.** The failure mode is silence,
 and silence is indistinguishable from the feature being switched off.
 
+What arrives is one short plain-text email per comment: the page, the commenter's name,
+an excerpt, and a reminder to open the queue. It is sent after the reader's comment has
+already been accepted, so a Resend outage delays your notification and never costs
+anyone their comment. A burst is bounded rather than forwarded — five emails back to
+back, then one every fifteen minutes, and the next one that goes out says how many
+comments arrived while it was quiet. The dashboard always has all of them.
+
 Enabling this sends the commenter's display name and an excerpt of their comment to
 Resend, a third party. It does not send their email address or anything derived from
 their IP. If your site has a privacy notice, that first sentence is the one that belongs
