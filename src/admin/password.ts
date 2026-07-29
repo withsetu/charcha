@@ -35,6 +35,57 @@ export function usableDashboardPassword(secret: string | undefined): string | nu
   return trimmed === undefined || trimmed === '' ? null : trimmed
 }
 
+/**
+ * The length below which a configured password is reported as short (#120).
+ *
+ * Fifteen, because that is the number NIST states for this exact situation:
+ * "Verifiers and CSPs SHALL require passwords that are used as a single-factor
+ * authentication mechanism to be a minimum of 15 characters in length"
+ * (https://pages.nist.gov/800-63-4/sp800-63b.html, checked 2026-07-29). The
+ * eight-character figure beside it in the same document is for passwords used
+ * *within* multi-factor authentication, and this dashboard has no second factor —
+ * the password is the whole of the credential, and rotating it is the whole of the
+ * revocation story (src/admin/session.ts).
+ *
+ * Length and nothing else, from the same source: "Verifiers and CSPs SHALL NOT
+ * impose other composition rules (e.g., requiring mixtures of different character
+ * types) for passwords." So there is no rule here about digits, case or symbols,
+ * and adding one would be a change against the cited guidance rather than a
+ * tightening of it.
+ * Enforced by test/worker/admin/password.test.ts.
+ */
+export const MIN_DASHBOARD_PASSWORD_LENGTH = 15
+
+/**
+ * Whether the configured password is shorter than the floor.
+ *
+ * **An advisory, and never a gate.** Nothing on the authentication path calls this,
+ * and nothing may: there is no password reset, no second factor and no account, so a
+ * deployment already running on a four-character password has no way back in if this
+ * ever decides a login. The name says what is measured rather than passing a verdict —
+ * `false` means "not short", which is a narrower claim than "not weak" and the only one
+ * a length test can support. A fifteen-character password out of a breach corpus is
+ * exactly as compromised as a four-character one and this returns `false` for it.
+ * The floor is what a deployer can be held to at the moment they are choosing; the
+ * defences that cover the rest are the login throttle (src/admin/throttle.ts) and
+ * rotation.
+ *
+ * Measured on the *trimmed* value, because that is the string that would be compared:
+ * counting the padding would call `"    abcd    "` long enough, which is about the one
+ * input a hurried deployer produces by accident. Counted in code points rather than
+ * `.length`, so a password of astral characters is not credited twice for each one.
+ *
+ * Unset and blank are `false` — absent is not short, it is the harder state, and the
+ * dashboard already fails closed on it (src/admin/env.ts). No caller can observe this
+ * case anyway: the only one is `GET /admin/api/setup`, which an unconfigured deployment
+ * authenticates nobody for.
+ * Enforced by test/worker/admin/password.test.ts and test/worker/admin/setup.test.ts.
+ */
+export function dashboardPasswordIsShort(secret: string | undefined): boolean {
+  const usable = usableDashboardPassword(secret)
+  return usable !== null && [...usable].length < MIN_DASHBOARD_PASSWORD_LENGTH
+}
+
 /** SHA-256 of a string, as the 32 raw bytes. */
 async function digest(value: string): Promise<ArrayBuffer> {
   return crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))

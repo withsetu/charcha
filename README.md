@@ -49,7 +49,7 @@ Charcha can do is off until you turn it on, and none of it is asked for here.
 
 | Secret | What it is |
 |---|---|
-| `CHARCHA_DASHBOARD_PASSWORD` | The only credential for the moderation dashboard at `/admin`. No account, no reset, and no second user. Generate it — `openssl rand -base64 24`. Unset, the dashboard **refuses every request including its own login**: comments still arrive and nobody can moderate them. |
+| `CHARCHA_DASHBOARD_PASSWORD` | The only credential for the moderation dashboard at `/admin`. No account, no reset, and no second user. Generate it — `openssl rand -base64 24` — and make it **at least 15 characters**; see [how long it should be](#how-long-the-dashboard-password-should-be). Unset, the dashboard **refuses every request including its own login**: comments still arrive and nobody can moderate them. |
 | `IP_HASH_SECRET` | The key that turns a commenter's IP into the identifier the per-IP spam rate limit counts. **Any long random string** — `openssl rand -hex 32` if you have a terminal open. It is an HMAC key, not a credential registered with anything, so nothing has to recognise it. Unset, no IP is stored at all and the per-IP half of the rate limit stops running. |
 
 They are declared in [`.dev.vars.example`](.dev.vars.example), which is the file the
@@ -155,7 +155,33 @@ pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD
 ```
 
 Changing the dashboard password also signs out every open session, because sessions are
-signed with a key derived from it rather than stored.
+signed with a key derived from it rather than stored. That is the only revocation lever
+there is — there are no per-session controls to revoke with — so it is worth knowing
+rather than discovering mid-triage.
+
+#### How long the dashboard password should be
+
+**At least 15 characters**, which is the minimum
+[NIST states](https://pages.nist.gov/800-63-4/sp800-63b.html) for a password used as a
+single-factor authentication mechanism. This one has no second factor, no second user
+and no reset, and everything behind it can approve, hide and delete every comment on
+your site. `openssl rand -base64 24` produces 32 characters and is the recommendation
+everywhere else in this file for that reason.
+
+**Nothing refuses a shorter one** — not the deploy form, which has no validation hook at
+all, and emphatically not the login. A length floor enforced at sign-in would lock every
+deployment already running on a short password out of its own dashboard, permanently and
+with no way back in, and it would arrive as a routine update. So the check is an
+advisory in one place only: the dashboard's **Setup** tab grows a *Dashboard password*
+section when the configured value is under 15 characters, telling you this and giving
+you the command above. A deployment that clears the floor — 15 characters counts — has no
+such section, so the absence of one is the answer rather than a missing feature.
+
+It is a length check and only a length check. A sixteen-character password that appears
+in a breach corpus passes it and is no safer; nothing in Charcha compares your password
+against a blocklist, and no composition rule is imposed either — the same NIST document
+says verifiers "SHALL NOT impose other composition rules". Generating the value is what
+settles both, which is why every instruction here says to.
 
 ### Deploying from a terminal instead
 

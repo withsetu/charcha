@@ -18,10 +18,17 @@ function noop() {
   return
 }
 
-/** A report with every secret unset, then whatever the caller says. */
-function report(set: Partial<Record<SetupSecret, boolean>> = {}) {
+/**
+ * A report with every secret unset and a password that clears the floor, then whatever
+ * the caller says.
+ *
+ * `shortPassword: false` is the default because it is the uneventful deployment, which
+ * is what most of the assertions below are about.
+ */
+function report(set: Partial<Record<SetupSecret, boolean>> = {}, shortPassword = false) {
   return {
     secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, set[name] ?? false])),
+    shortPassword,
   }
 }
 
@@ -141,6 +148,117 @@ describe('email notifications, which are three secrets or nothing', () => {
   })
 })
 
+describe('the dashboard password, when it is shorter than the floor (#120)', () => {
+  it('says so, first, above everything optional', async () => {
+    // It is the only item on this tab that is not optional and the only one guarding
+    // every destructive action, so it does not sit under three feature switches.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    const headings = screen.getAllByRole('heading', { level: 2 })
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      'Dashboard password',
+      'Email notifications',
+      'Turnstile bot check',
+      'Per-commenter rate limiting',
+      'Allowed origins',
+    ])
+  })
+
+  it('says what it is short *of*, and that it is a length test and only that', async () => {
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    expect(panelText()).toContain('shorter than 15 characters')
+    // The honest caveat, in the place the claim is made rather than in a README.
+    expect(panelText()).toContain('been in a breach')
+  })
+
+  it('refuses a measurement where a verdict belongs, rather than rendering it', async () => {
+    // **The leak guard on this side, and the reason it is a *truthy* non-boolean.** The
+    // endpoint answers a boolean (src/admin/setup.ts), so today there is nothing here to
+    // leak. If a future one sent the length instead, the natural reading of `4` is
+    // truthy — the section would render, having been handed a measurement. A test
+    // asserting only that the copy contains no number could not fail, because the copy
+    // is static: the component takes no props and has nothing to print. So the assertion
+    // is on the client's refusal.
+    answering(() => json(200, { ...report(), shortPassword: 4 }))
+    mount()
+
+    await screen.findByText('Could not read what is configured')
+    expect(screen.queryByText('Dashboard password')).toBeNull()
+    expect(panelText()).not.toContain('4')
+  })
+
+  it('promises nothing will lock, because that is the fear this warning creates', async () => {
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    expect(panelText()).toContain('keeps working')
+  })
+
+  it('gives the command to replace it, and the dashboard path for anyone without one', async () => {
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    // **Scoped to this section, because the tab has four of them.** With everything
+    // unset the other three each render their own command block and their own
+    // "Variables and Secrets" line, so an unscoped query passes whether or not this
+    // section rendered anything at all.
+    const heading = await screen.findByText('Dashboard password')
+    const section = heading.closest('section')
+    expect(section).not.toBeNull()
+
+    expect(section?.querySelector('pre')?.textContent).toBe(
+      'pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD',
+    )
+    expect(section?.textContent).toContain('Variables and Secrets')
+    // The lead-in and the block's accessible name have to agree, or a screen reader is
+    // told to "set" a secret the visible copy says to "replace".
+    expect(section?.textContent).toContain('Replace it from a checkout')
+    expect(section?.querySelector('pre')?.getAttribute('aria-label')).toBe(
+      'Commands to replace CHARCHA_DASHBOARD_PASSWORD',
+    )
+  })
+
+  it('warns that replacing it signs every session out, including this one', async () => {
+    // Sessions are signed with a key derived from the password (src/admin/session.ts).
+    // An owner who rotates mid-triage and is thrown back to the login screen with no
+    // warning reads that as the thing breaking.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    expect(panelText()).toContain('signs out every open session, including this one')
+  })
+
+  it('is silent about a password that clears the floor', async () => {
+    // Not a nag, and not congratulatory: a deployment with a generated password has no
+    // password section at all. A permanent "your password is fine" row would be one
+    // more place a credential is named beside a status, for a line that is never news.
+    answering(() => json(200, report()))
+    mount()
+
+    await screen.findByText('Email notifications')
+    expect(screen.queryByText('Dashboard password')).toBeNull()
+    expect(panelText()).not.toContain('CHARCHA_DASHBOARD_PASSWORD')
+  })
+
+  it('does not turn the password into a fifth On/Off feature', async () => {
+    // It is always set — an unconfigured dashboard answers nothing at all — so an On
+    // badge beside it would report a fact that reaching the screen already proved.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    expect(screen.getAllByText('Off')).toHaveLength(3)
+    expect(screen.queryByText('On')).toBeNull()
+  })
+})
+
 describe('Turnstile, whose two halves live in two places', () => {
   it('spells the sitekey out even when the secret is set — which is #104', async () => {
     // The deployment that refused every comment silently had the secret and no
@@ -235,6 +353,7 @@ describe('what it refuses to do', () => {
     // the value in hand. `readSetup` refuses the whole report instead.
     answering(() =>
       json(200, {
+        ...report(),
         secrets: {
           ...report().secrets,
           TURNSTILE_SECRET_KEY: '0x4AAAAAAA-sentinel-secret',
@@ -253,11 +372,23 @@ describe('what it refuses to do', () => {
     // — so an owner would be told to configure something they configured months ago.
     const partial = report().secrets
     delete partial.TURNSTILE_SECRET_KEY
-    answering(() => json(200, { secrets: partial }))
+    answering(() => json(200, { ...report(), secrets: partial }))
     mount()
 
     await screen.findByText('Could not read what is configured')
     expect(screen.queryByText('Turnstile bot check')).toBeNull()
+  })
+
+  it('refuses a report with no password verdict, rather than reading silence as fine', async () => {
+    // #120's version of the field-missing failure, and the worse one: `undefined` is
+    // falsy, so a dropped `shortPassword` renders as a password nobody has any concern
+    // about — a reassurance the server never sent.
+    const { secrets } = report()
+    answering(() => json(200, { secrets }))
+    mount()
+
+    await screen.findByText('Could not read what is configured')
+    expect(screen.queryByText('Dashboard password')).toBeNull()
   })
 
   it('reports a failed read as a failure, never as a deployment with nothing on', async () => {

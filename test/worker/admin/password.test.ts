@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_SUPPLIED_PASSWORD_LENGTH,
+  MIN_DASHBOARD_PASSWORD_LENGTH,
+  dashboardPasswordIsShort,
   passwordMatches,
   usableDashboardPassword,
 } from '../../../src/admin/password'
@@ -26,6 +28,67 @@ describe('the configured password', () => {
 
   it('is null when only whitespace, for the same reason', () => {
     expect(usableDashboardPassword('   \n\t ')).toBeNull()
+  })
+})
+
+describe('whether the configured password clears the length floor (#120)', () => {
+  // An advisory and never a gate. The proof that it is never a gate is two tests down,
+  // in "the comparison itself", and end to end in test/worker/admin/setup.test.ts.
+
+  it('calls one character under the floor short', () => {
+    expect(dashboardPasswordIsShort('x'.repeat(MIN_DASHBOARD_PASSWORD_LENGTH - 1))).toBe(true)
+  })
+
+  it('calls exactly the floor long enough, so the boundary is not off by one', () => {
+    expect(dashboardPasswordIsShort('x'.repeat(MIN_DASHBOARD_PASSWORD_LENGTH))).toBe(false)
+  })
+
+  it('calls a four-character one short — the case #120 is named after', () => {
+    expect(dashboardPasswordIsShort('abcd')).toBe(true)
+  })
+
+  it('calls the generated value the deploy form recommends long enough', () => {
+    // `openssl rand -base64 24` is 24 bytes as base64, which is 32 characters — so the
+    // length asserted here is 32 and not `secret`'s 24. If the floor ever rose above
+    // what this project's own instruction produces, that is a contradiction worth
+    // failing on, and this is where it would fail.
+    const generated = 'm3K9vQrT8xL2wZ7pB4nC6jH1dF5sA0gY'
+
+    expect(generated).toHaveLength(32)
+    expect(dashboardPasswordIsShort(generated)).toBe(false)
+  })
+
+  it('counts characters, not UTF-16 code units', () => {
+    // Fourteen astral characters are 28 code units and 14 characters. A `.length`
+    // floor waves this through while calling a 14-character ASCII password short —
+    // two answers for the same password by any measure a person uses.
+    expect(dashboardPasswordIsShort('🔒'.repeat(MIN_DASHBOARD_PASSWORD_LENGTH - 1))).toBe(true)
+    expect(dashboardPasswordIsShort('🔒'.repeat(MIN_DASHBOARD_PASSWORD_LENGTH))).toBe(false)
+  })
+
+  it('measures the value that would actually be compared, so padding cannot inflate it', () => {
+    // usableDashboardPassword trims, so the credential really is the trimmed string.
+    // Measuring the untrimmed one would call a four-character password padded to
+    // sixteen with spaces "long enough" — about the one input a hurried deployer
+    // produces by accident.
+    expect(dashboardPasswordIsShort(`${' '.repeat(6)}abcd${' '.repeat(6)}\n`)).toBe(true)
+  })
+
+  it('says nothing about a deployment that has no password at all', () => {
+    // Unset is absent, not short — a different and harder state, already failed closed
+    // on in src/admin/env.ts, and one no caller of this can be reached in.
+    expect(dashboardPasswordIsShort(undefined)).toBe(false)
+    expect(dashboardPasswordIsShort('')).toBe(false)
+    expect(dashboardPasswordIsShort('   \n ')).toBe(false)
+  })
+
+  it('is the floor NIST states for a single-factor password', () => {
+    // https://pages.nist.gov/800-63-4/sp800-63b.html, checked 2026-07-29: "Verifiers
+    // and CSPs SHALL require passwords that are used as a single-factor authentication
+    // mechanism to be a minimum of 15 characters in length." This dashboard has no
+    // second factor, so that is the applicable clause rather than the eight-character
+    // one beside it. Pinned so that moving the number is a deliberate act.
+    expect(MIN_DASHBOARD_PASSWORD_LENGTH).toBe(15)
   })
 })
 
@@ -130,6 +193,20 @@ describe('the comparison itself', () => {
     const long = await passwordMatches('a'.repeat(500), secret)
 
     expect([short, long]).toEqual([false, false])
+  })
+
+  it('accepts a four-character password, and always will — #120', async () => {
+    // **Both halves of the credential path, because a floor would be written in the
+    // first one.** `usableDashboardPassword` is the shared helper every authenticator
+    // reads (src/admin/authenticate.ts), and returning `null` there for a short secret
+    // is the obvious, wrong fix — it would 401 every deployment already running on one,
+    // with no reset, no second factor and no account to recover through. Asserting only
+    // the comparison would miss that entirely, which a kill-shot confirmed.
+    //
+    // This is the unit-level half. The end-to-end proof — a real login and a working
+    // session on a four-character password — is test/worker/admin/setup.test.ts.
+    expect(usableDashboardPassword('abcd')).toBe('abcd')
+    expect(await passwordMatches('abcd', 'abcd')).toBe(true)
   })
 
   it('uses timingSafeEqual, which Workers really does provide', () => {

@@ -47,6 +47,7 @@ async function mountQueue(): Promise<FetchStub> {
           TURNSTILE_SECRET_KEY: false,
           IP_HASH_SECRET: false,
         },
+        shortPassword: false,
       })
     }
     if (call.path === '/admin/api/settings') {
@@ -257,6 +258,7 @@ describe('the shortcut listener', () => {
             TURNSTILE_SECRET_KEY: true,
             IP_HASH_SECRET: true,
           },
+          shortPassword: false,
         })
       }
       if (call.path === '/admin/api/settings') {

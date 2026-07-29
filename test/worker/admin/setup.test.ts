@@ -44,6 +44,7 @@ function read(headers: Record<string, string> = {}) {
 
 interface SetupBody {
   secrets: Record<ReportedSecret, boolean>
+  shortPassword: boolean
 }
 
 async function readBody(): Promise<SetupBody> {
@@ -185,4 +186,125 @@ describe('the report', () => {
 
     expect(body.secrets.IP_HASH_SECRET).toBe(false)
   })
+})
+
+/**
+ * Signs in the way a browser does, and returns the `name=value` pair to send back.
+ *
+ * A real `POST /admin/api/session` rather than `issueSession`, because the property
+ * under test below is that **the login itself** still accepts a short password. A
+ * minted token would prove the session format works and say nothing about the door.
+ */
+async function signIn(password: string): Promise<string> {
+  const response = await exports.default.fetch(`${origin}/admin/api/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+
+  expect(response.status).toBe(200)
+  const pair = (response.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
+  expect(pair.startsWith(`${SESSION_COOKIE_NAME}=`)).toBe(true)
+  return pair
+}
+
+/** The report as read by a session signed in with `password`, rather than a minted one. */
+async function reportFor(password: string): Promise<SetupBody> {
+  const response = await exports.default.fetch(SETUP, {
+    headers: { cookie: await signIn(password) },
+  })
+
+  expect(response.status).toBe(200)
+  return response.json()
+}
+
+describe('the dashboard password (#120)', () => {
+  // The one credential guarding every destructive action here, and the only item on
+  // this endpoint that is not a feature switch. It is reported as an advisory —
+  // whether it clears the length floor — and never as a gate.
+
+  // It is deliberately not in `secrets` — `answers for every secret the tab reports on,
+  // and for no others` above already pins that key set exactly, so a row for the password
+  // appearing there fails that test rather than needing one of its own.
+
+  it('says a short one is short', async () => {
+    configurePassword('abcd')
+
+    expect((await reportFor('abcd')).shortPassword).toBe(true)
+  })
+
+  it('says nothing of the sort about a generated one', async () => {
+    const body = await readBody()
+
+    expect(body.shortPassword).toBe(false)
+  })
+
+  it('answers a boolean and nothing that could be a measurement', async () => {
+    // The #158 rule applied to the one field that is about the credential itself: a
+    // boolean is one bit to a caller who already holds the password. A length, a
+    // prefix or a score would each be strictly more than they came in with.
+    configurePassword('abcd')
+
+    const body = await reportFor('abcd')
+
+    expect(typeof body.shortPassword).toBe('boolean')
+    expect(Object.keys(body).sort()).toEqual(['secrets', 'shortPassword'])
+  })
+
+  it('never carries the password, whatever it is', async () => {
+    configurePassword(SENTINEL)
+
+    const response = await exports.default.fetch(SETUP, {
+      headers: { cookie: await signIn(SENTINEL) },
+    })
+
+    expect(await response.text()).not.toContain(SENTINEL)
+  })
+
+  it('tells an unauthenticated caller nothing about it either', async () => {
+    // A weak-password verdict is information about the credential. It goes behind the
+    // same door as the rest of the report, and the refusal must not become the answer.
+    configurePassword('abcd')
+    const short = await (await exports.default.fetch(SETUP)).text()
+
+    configurePassword(TEST_PASSWORD)
+    const long = await (await exports.default.fetch(SETUP)).text()
+
+    expect(short).toBe(long)
+    expect(short).not.toContain('shortPassword')
+  })
+})
+
+describe('a deployment already running on a short password', () => {
+  // **The no-lockout proof, driven end to end.** #120's whole constraint: whatever this
+  // endpoint says about a four-character password, the deployment it says it about must
+  // keep working exactly as it did. There is no reset, no second factor and no account
+  // to recover through, so a floor enforced on the login path would be a self-inflicted
+  // denial of service arriving in a routine update.
+
+  it('still signs in, and gets a session that works', async () => {
+    configurePassword('abcd')
+
+    const cookie = await signIn('abcd')
+    const session = await exports.default.fetch(`${origin}/admin/api/session`, {
+      headers: { cookie },
+    })
+
+    expect(session.status).toBe(200)
+    expect(await session.json()).toMatchObject({ authenticated: true })
+  })
+
+  it('still reaches every authenticated surface behind that session', async () => {
+    configurePassword('abcd')
+    const cookie = await signIn('abcd')
+
+    for (const path of ['/admin/api/setup', '/admin/api/settings', '/admin/api/queue']) {
+      const response = await exports.default.fetch(`${origin}${path}`, { headers: { cookie } })
+
+      expect(response.status, path).toBe(200)
+    }
+  })
+
+  // What such a deployment *is* told is `says a short one is short` above. It is the
+  // same assertion, so it is not repeated here.
 })
