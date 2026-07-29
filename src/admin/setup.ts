@@ -18,6 +18,15 @@
 // Enforced by test/worker/admin/setup.test.ts, which sets every reported secret to one
 // sentinel string and asserts the response body does not contain it.
 //
+// **`shortPassword` is the one field outside that map, and it holds the same line by
+// the same means** (#120). It is a `boolean` returned by `dashboardPasswordIsShort`
+// (src/admin/password.ts), so the value cannot reach the response through it either —
+// not a length, not a prefix, not a score. It is a genuine disclosure and a deliberate
+// one: it says one bit about the credential to a caller who has already proved they
+// hold it, and the alternative is a deployment running on a four-character password
+// that nothing anywhere ever mentions. Nothing here refuses anything on the strength
+// of it; see that function on why a floor on the login path would be a lockout.
+//
 // **Behind the same door as the moderation queue.** An unauthenticated caller learning
 // which of a deployment's defences are switched off is a reconnaissance gift: "Turnstile
 // is not set" tells a spammer exactly where their afternoon is best spent. The refusal
@@ -35,6 +44,7 @@
 import type { Context } from 'hono'
 import { adminJson } from './api'
 import { authenticated } from './authenticate'
+import { dashboardPasswordIsShort } from './password'
 
 /** The route, as a constant, so src/index.ts and the tests name the same string. */
 export const SETUP_PATH = '/admin/api/setup'
@@ -50,7 +60,9 @@ type AdminContext = Context<{ Bindings: Env }>
  * `CHARCHA_DASHBOARD_PASSWORD` is deliberately absent. Reaching this endpoint at all
  * proves it is set — an unconfigured dashboard authenticates nobody (src/admin/env.ts) —
  * so a row for it could only ever say "set", which is a row that teaches nothing and one
- * more place a credential is named beside a status.
+ * more place a credential is named beside a status. The question worth asking about it
+ * is a different one, and it is answered separately as `shortPassword` (#120): set is
+ * not the same as long enough, and only the second can still be news.
  */
 export const REPORTED_SECRETS = [
   'RESEND_API_KEY',
@@ -69,7 +81,7 @@ export type ReportedSecret = (typeof REPORTED_SECRETS)[number]
  * `handleReadSetup` hands over the whole `c.env` and structural typing accepts it. The
  * guarantee that no value escapes is `isConfigured`'s return type, above — not this.
  */
-export type SetupEnv = Pick<Env, ReportedSecret>
+export type SetupEnv = Pick<Env, ReportedSecret | 'CHARCHA_DASHBOARD_PASSWORD'>
 
 /** The answer: one boolean per reported secret, and nothing else. */
 export type SecretReport = Record<ReportedSecret, boolean>
@@ -116,5 +128,8 @@ export async function handleReadSetup(c: AdminContext): Promise<Response> {
   const auth = await authenticated(c.env, c.req.raw, Math.floor(Date.now() / 1000))
   if (!auth.ok) return auth.response
 
-  return adminJson({ secrets: secretReport(c.env) })
+  return adminJson({
+    secrets: secretReport(c.env),
+    shortPassword: dashboardPasswordIsShort(c.env.CHARCHA_DASHBOARD_PASSWORD),
+  })
 }

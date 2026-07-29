@@ -51,6 +51,18 @@
 # the site. Use a generated one — `openssl rand -base64 24` — not a memorable one:
 # it is typed once into a password manager, never by hand.
 #
+# **At least 15 characters** (#120), which is the minimum NIST states for a
+# password used as a single-factor authentication mechanism — and there is no
+# second factor here. `openssl rand -base64 24` produces 32, so following the line
+# above is the whole of the compliance.
+#
+# Nothing refuses a shorter one, here or at the login. The deploy form has no
+# validation hook to refuse with (#139), and a floor at sign-in would lock every
+# deployment already running on a short password out of its own dashboard, with no
+# reset and no second factor to recover through. So this text and the dashboard's
+# Setup tab are the whole of the check: the tab grows a "Dashboard password"
+# section when the value is under 15 characters, and stays quiet otherwise.
+#
 # Leave it unset and the dashboard refuses every request, including the login.
 # That is deliberate: an unconfigured deployment is not an open one.
 CHARCHA_DASHBOARD_PASSWORD=

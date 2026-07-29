@@ -361,6 +361,15 @@ export type SetupSecret = (typeof SETUP_SECRETS)[number]
  */
 export interface SetupReport {
   secrets: Record<SetupSecret, boolean>
+  /**
+   * Whether the dashboard password is shorter than the floor (#120).
+   *
+   * Outside `secrets` because it is not a feature switch: the password is always set —
+   * an unconfigured dashboard answers nothing at all — and the question is whether it
+   * is long enough. A boolean like everything else here, and for the same reason: there
+   * is no version of this screen that needs a length, a prefix or the value.
+   */
+  shortPassword: boolean
 }
 
 /**
@@ -379,7 +388,8 @@ export async function readSetup(): Promise<ApiResult<SetupReport>> {
   const result = await request<unknown>({ method: 'GET', path: '/setup' })
   if (!result.ok) return result
 
-  const secrets = (result.value as { secrets?: unknown } | null)?.secrets
+  const body = result.value as { secrets?: unknown; shortPassword?: unknown } | null
+  const secrets = body?.secrets
   if (secrets === null || typeof secrets !== 'object') {
     return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
   }
@@ -388,5 +398,17 @@ export async function readSetup(): Promise<ApiResult<SetupReport>> {
       return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
     }
   }
-  return { ok: true, value: { secrets: secrets as Record<SetupSecret, boolean> } }
+  // Validated like the rest, and it is the field that most needs it: a missing
+  // `shortPassword` reads as `undefined`, which is falsy, which renders as *the password
+  // is fine* — a reassurance nobody sent. #120.
+  if (typeof body?.shortPassword !== 'boolean') {
+    return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+  }
+  return {
+    ok: true,
+    value: {
+      secrets: secrets as Record<SetupSecret, boolean>,
+      shortPassword: body.shortPassword,
+    },
+  }
 }

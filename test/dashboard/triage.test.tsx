@@ -583,6 +583,7 @@ describe('switching view', () => {
             TURNSTILE_SECRET_KEY: true,
             IP_HASH_SECRET: true,
           },
+          shortPassword: false,
         })
       }
       if (call.path === '/admin/api/settings') {
