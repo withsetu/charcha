@@ -240,9 +240,12 @@ describe('createSpamCheck — a comment from a real person', () => {
     // vector exists to keep — a nearest-neighbour classifier would read one row per
     // stored vector right here.
     //
-    // The seeded history is what makes this an assertion rather than a restatement:
-    // thirty comments on the page and sixty labelled decisions behind the model, and
-    // it is still four.
+    // **The model must be past the cold-start gate for this to assert anything**, and
+    // that is not a detail: below the gate the layer abstains before the embedding,
+    // so a fixture with too little history measures the untrained path and reads as
+    // coverage of the trained one. A kill-shot found exactly that here — an added
+    // per-vector read on the classify path left this test green until the seeding
+    // below reached MIN_LABELS_PER_CLASS in both classes.
     const trained = await import('../../../src/spam/train')
     const model = await import('../../../src/spam/model')
     const unit = (index: number) => {
@@ -252,7 +255,7 @@ describe('createSpamCheck — a comment from a real person', () => {
     }
 
     const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < model.MIN_LABELS_PER_CLASS * 2; i++) {
       const body = `an earlier comment number ${i}, long enough to be a real one on this thread`
       const stored = await insertComment(db, {
         threadId: thread.id,
@@ -277,6 +280,13 @@ describe('createSpamCheck — a comment from a real person', () => {
         return db.prepare(sql)
       },
     } as unknown as D1Database
+
+    // The model really is past the gate, or the four below is the untrained path
+    // wearing the trained path's name.
+    const { readSpamModel } = await import('../../../src/db')
+    const fitted = await readSpamModel(db)
+    expect(fitted?.hamCount).toBeGreaterThanOrEqual(model.MIN_LABELS_PER_CLASS)
+    expect(fitted?.spamCount).toBeGreaterThanOrEqual(model.MIN_LABELS_PER_CLASS)
 
     const check = createSpamCheck(
       { IP_HASH_SECRET: 'ip-secret' },

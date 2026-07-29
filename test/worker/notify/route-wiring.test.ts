@@ -257,12 +257,14 @@ describe('POST /comments — the notification costs no D1 queries', () => {
    * would read as the wiring having saved a query rather than as the fixture being
    * short.
    *
-   * **The classifier's read is one and stays one (#10).** It is `READ_SPAM_MODEL_SQL`
-   * — a rowid seek on a table the schema allows a single row in — and it happens
-   * whether or not a model has been trained, because the counts that decide are in
-   * that row. What it must never become is a read per stored vector, which is the
-   * shape a nearest-neighbour classifier would have had and the reason this one is a
-   * single weight vector.
+   * **The classifier's read is `READ_SPAM_MODEL_SQL` (#10)** — a rowid seek on a
+   * table the schema allows a single row in. It happens whether or not a model has
+   * been trained, because the counts that decide are in that row, and this fixture
+   * has trained none. So what this pins is the *untrained* cost; the count on a
+   * trained deployment, where the classify path runs to the end, is pinned in
+   * test/worker/spam/order.test.ts and test/worker/spam/classifier.test.ts. Both are
+   * needed: only the trained one can catch a read per stored vector, which is the
+   * shape a nearest-neighbour classifier would have had.
    *
    * Written down rather than only compared against itself. An on-versus-off
    * comparison is blind to a statement the wiring added *unconditionally* — the
