@@ -189,6 +189,32 @@ describe('the allowed origins, which are the one thing here that is editable', (
     expect(onEditOrigins).toHaveBeenCalledTimes(1)
   })
 
+  it('re-reads the list when the dialog reports a save, and not otherwise', async () => {
+    // The dialog can be open over this panel while the list is edited, so without the
+    // re-read an owner who saved would be looking at the list as it was before — in the
+    // one place they came to check the edit landed. Driven for real in a browser too, on
+    // the PR; this is the wiring.
+    let stored = ['https://old.example']
+    const stub = answering(
+      () => json(200, report()),
+      () => json(200, { allowedOrigins: stored, selfOrigin: 'https://c.example' }),
+    )
+    const { rerender } = render(<Setup onEditOrigins={noop} onExpired={noop} originsSavedAt={0} />)
+    expect(await screen.findByText('https://old.example')).toBeTruthy()
+    const reads = () => stub.paths().filter((path) => path === '/admin/api/settings').length
+    expect(reads()).toBe(1)
+
+    // A render for any other reason must not refetch — the effect is keyed on the save,
+    // not on the component running again.
+    rerender(<Setup onEditOrigins={noop} onExpired={noop} originsSavedAt={0} />)
+    expect(reads()).toBe(1)
+
+    stored = ['https://maya.build']
+    rerender(<Setup onEditOrigins={noop} onExpired={noop} originsSavedAt={17} />)
+    expect(await screen.findByText('https://maya.build')).toBeTruthy()
+    expect(reads()).toBe(2)
+  })
+
   it('does not offer a save button for anything a Worker cannot write', async () => {
     // A Worker cannot set its own secrets, so a control that looked like it could would
     // be a dead button. The only one on this panel is the origins editor.

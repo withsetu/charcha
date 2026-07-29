@@ -31,7 +31,7 @@
 import * as React from 'react'
 import { ExternalLinkIcon, GlobeIcon, TriangleAlertIcon } from 'lucide-react'
 
-import type { ApiFailure, SetupSecret, Settings } from '../api'
+import type { ApiFailure, ApiResult, SetupSecret, Settings } from '../api'
 import { readSettings, readSetup } from '../api'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Badge } from '../ui/badge'
@@ -52,8 +52,48 @@ const DASHBOARD_BUG: ApiFailure = {
   status: null,
 }
 
+/**
+ * Runs one of the dashboard's reads and reports it as a `Load`.
+ *
+ * One hook rather than a `then`/`catch` per section, because the part worth getting
+ * right is identical in both and is the sort of thing the second copy forgets: a 401
+ * ends the session rather than being shown as a failed read, and a *rejection* — which
+ * src/dashboard/api.ts is documented never to produce — still has to reach the screen,
+ * because a skeleton that never resolves is an unreported failure.
+ *
+ * `read` has to be a stable reference or the effect refetches on every render; the two
+ * callers pass module-level functions. `reloadKey` is what lets a caller ask for a fresh
+ * read after something it knows about has changed.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function useLoad<T>(
+  read: () => Promise<ApiResult<T>>,
+  onExpired: () => void,
+  reloadKey = 0,
+): Load<T> {
+  const [state, setState] = React.useState<Load<T>>({ kind: 'loading' })
+
+  React.useEffect(() => {
+    setState({ kind: 'loading' })
+    void read()
+      .then((result) => {
+        if (result.ok) {
+          setState({ kind: 'ready', value: result.value })
+          return
+        }
+        if (result.failure.code === 'UNAUTHORIZED') onExpired()
+        else setState({ kind: 'failed', failure: result.failure })
+      })
+      .catch(() => {
+        setState({ kind: 'failed', failure: DASHBOARD_BUG })
+      })
+  }, [read, onExpired, reloadKey])
+
+  return state
+}
+
 /** Where the long form of every instruction below lives. */
-const README = 'https://github.com/withsetu/charcha#turning-on-the-optional-features'
+const README_URL = 'https://github.com/withsetu/charcha#turning-on-the-optional-features'
 
 /**
  * The three that make email notifications work, in the order the README sets them.
@@ -199,45 +239,10 @@ export function Setup({
    */
   originsSavedAt: number
 }) {
-  const [secrets, setSecrets] = React.useState<Load<Record<SetupSecret, boolean>>>({
-    kind: 'loading',
-  })
-  const [origins, setOrigins] = React.useState<Load<Settings>>({ kind: 'loading' })
-
   // Two reads, landing independently: a settings failure must not hide the secret report
   // or the other way round, because either one alone is still worth the trip.
-  React.useEffect(() => {
-    setSecrets({ kind: 'loading' })
-    void readSetup()
-      .then((result) => {
-        if (!result.ok) {
-          if (result.failure.code === 'UNAUTHORIZED') return onExpired()
-          return setSecrets({ kind: 'failed', failure: result.failure })
-        }
-        setSecrets({ kind: 'ready', value: result.value.secrets })
-      })
-      .catch(() => {
-        // src/dashboard/api.ts is documented never to reject, so this is a bug in the
-        // callback above. Reported anyway: a skeleton that never resolves is an
-        // unreported failure, which is the rule CLAUDE.md states in as many words.
-        setSecrets({ kind: 'failed', failure: DASHBOARD_BUG })
-      })
-  }, [onExpired])
-
-  React.useEffect(() => {
-    setOrigins({ kind: 'loading' })
-    void readSettings()
-      .then((result) => {
-        if (!result.ok) {
-          if (result.failure.code === 'UNAUTHORIZED') return onExpired()
-          return setOrigins({ kind: 'failed', failure: result.failure })
-        }
-        setOrigins({ kind: 'ready', value: result.value })
-      })
-      .catch(() => {
-        setOrigins({ kind: 'failed', failure: DASHBOARD_BUG })
-      })
-  }, [onExpired, originsSavedAt])
+  const secrets = useLoad(readSetup, onExpired)
+  const origins = useLoad(readSettings, onExpired, originsSavedAt)
 
   return (
     <div className="space-y-4">
@@ -264,9 +269,9 @@ export function Setup({
 
       {secrets.kind === 'ready' && (
         <>
-          <EmailSection secrets={secrets.value} />
-          <TurnstileSection set={secrets.value.TURNSTILE_SECRET_KEY} />
-          <IpHashSection set={secrets.value.IP_HASH_SECRET} />
+          <EmailSection secrets={secrets.value.secrets} />
+          <TurnstileSection set={secrets.value.secrets.TURNSTILE_SECRET_KEY} />
+          <IpHashSection set={secrets.value.secrets.IP_HASH_SECRET} />
         </>
       )}
 
@@ -282,7 +287,7 @@ export function Setup({
         */}
         <a
           className="underline underline-offset-4 hover:text-foreground"
-          href={README}
+          href={README_URL}
           target="_blank"
           rel="noopener noreferrer"
         >

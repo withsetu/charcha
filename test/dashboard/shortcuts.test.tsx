@@ -114,12 +114,18 @@ describe('the shortcut listener', () => {
     expect(rows()[0]?.getAttribute('aria-current')).toBe('true')
 
     fireEvent.keyDown(document.body, { key: 'j' })
-    await waitFor(() => {
-      expect(rows()[1]?.getAttribute('aria-current')).toBe('true')
-    })
     // Focus follows, which is what makes a screen reader announce the new row without
     // any live region at all.
-    expect(document.activeElement).toBe(rows()[1])
+    //
+    // **Inside the `waitFor`, with the attribute it accompanies.** It moves in an effect,
+    // which flushes after the commit that sets `aria-current` — so as a bare assertion
+    // after the wait it was a race that lost under full-suite load, roughly once in ten
+    // runs, and reported a correct component as broken. This is the flake the harness's
+    // `asyncUtilTimeout` note is about, found again while adding to this file.
+    await waitFor(() => {
+      expect(rows()[1]?.getAttribute('aria-current')).toBe('true')
+      expect(document.activeElement).toBe(rows()[1])
+    })
 
     fireEvent.keyDown(document.body, { key: 'ArrowUp' })
     await waitFor(() => {

@@ -21,7 +21,7 @@ import {
   TriangleAlertIcon,
 } from 'lucide-react'
 
-import type { ApiFailure, ApiResult, DecisionStatus, ViewStatus } from '../api'
+import type { ApiFailure, ApiResult, DecisionStatus, QueueCounts, ViewStatus } from '../api'
 import { decide, readQueue } from '../api'
 import type { Command } from '../keys'
 import { resolveCommand } from '../keys'
@@ -102,7 +102,7 @@ function tabName(tab: TabValue, count: number | null): string {
  * countable must not put a digit in that slot. The keycap beside it is a keycap.
  * Enforced by test/dashboard/triage.test.tsx.
  */
-function tabCount(tab: TabValue, counts: Record<ViewStatus, number> | null): number | null {
+function tabCount(tab: TabValue, counts: QueueCounts | null): number | null {
   return tab === 'setup' ? null : (counts?.[tab] ?? null)
 }
 
