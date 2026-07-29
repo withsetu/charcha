@@ -403,11 +403,35 @@ describe('hiding a comment', () => {
   })
 
   it('approving reports none, because approving does not cascade', async () => {
-    const { root } = await seedRootAndReply()
+    // Seeded so approving *could* move the reply if the statement let it: the reply is
+    // pending, which is not the status being set, so only the `?2 in ('spam','deleted')`
+    // clause keeps it where it is. Approving the root of an already-approved reply would
+    // report zero whatever the statement did.
+    const thread = await seedThread()
+    const root = await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Root',
+      body: 'a root comment',
+      bodyHash: 'h1',
+      now: t0,
+    })
+    const reply = await insertComment(db, {
+      threadId: thread.id,
+      parentId: root.id,
+      authorName: 'Replier',
+      body: 'an unreviewed reply',
+      bodyHash: 'h2',
+      now: t0 + 10,
+    })
 
-    const decision = await setCommentStatus(db, root.id, 'pending', t0 + 30)
+    const decision = await setCommentStatus(db, root.id, 'approved', t0 + 30)
 
     expect(decision.cascaded).toBe(0)
+    const stored = await db
+      .prepare('select status from comments where id = ?1')
+      .bind(reply.id)
+      .first<{ status: string }>()
+    expect(stored?.status).toBe('pending')
   })
 
   // **A reply already in the target status was not taken down by this decision.**

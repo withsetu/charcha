@@ -282,11 +282,18 @@ describe('a decision that does not apply', () => {
     // The other half of the mirror: MODERATE_SQL's `status <> ?2` means such a reply is
     // not moved, so removing it here would take a row off the screen that the server
     // still holds — the same lie in the other direction.
+    //
+    // The scenario is reachable rather than contrived: the spam view carries the same
+    // three buttons every other view does, so pressing `S` on a comment that is already
+    // spam is one keystroke away, and every row in that list is spam by construction.
     const state = reduce(
       reduce(initialState('spam'), {
         type: 'load/ok',
         page: {
-          comments: [comment(2, { parentId: 1, depth: 1, status: 'spam' }), comment(1)],
+          comments: [
+            comment(2, { parentId: 1, depth: 1, status: 'spam' }),
+            comment(1, { status: 'spam' }),
+          ],
           nextCursor: null,
           counts: SOME_COUNTS,
         },
@@ -295,6 +302,57 @@ describe('a decision that does not apply', () => {
     )
 
     expect(state.comments.map((c) => c.id)).toEqual([2])
+  })
+
+  it('still takes them when the same view is being deleted rather than re-spammed', () => {
+    // And the predicate is a status comparison rather than a view one: a spam comment
+    // deleted from the spam queue does move its replies, because `deleted` is not the
+    // status they are in.
+    const state = reduce(
+      reduce(initialState('spam'), {
+        type: 'load/ok',
+        page: {
+          comments: [
+            comment(2, { parentId: 1, depth: 1, status: 'spam' }),
+            comment(1, { status: 'spam' }),
+          ],
+          nextCursor: null,
+          counts: SOME_COUNTS,
+        },
+      }),
+      { type: 'decide/start', id: 1, status: 'deleted' },
+    )
+
+    expect(state.comments).toEqual([])
+  })
+
+  it('advances from the row the keyboard was on, not from the comment decided', () => {
+    // The two can differ: a decision taken with the mouse, or by Tab into another row's
+    // buttons, leaves the caret on a row that is not the one being judged — and here the
+    // caret is on a reply that the cascade is about to take with it. Measuring from the
+    // decided comment instead would skip every surviving row in between.
+    let state = reduce(initialState('pending'), {
+      type: 'load/ok',
+      page: {
+        comments: [
+          comment(4, { parentId: 1, depth: 1 }),
+          comment(9),
+          comment(8),
+          comment(1),
+          comment(7),
+        ],
+        nextCursor: null,
+        counts: SOME_COUNTS,
+      },
+    })
+    expect(state.currentId).toBe(4)
+
+    state = reduce(state, { type: 'decide/start', id: 1, status: 'spam' })
+
+    expect(state.comments.map((c) => c.id)).toEqual([9, 8, 7])
+    // 9 slid into the position the caret was on. Measuring from comment 1 would have
+    // landed on 7 and skipped both.
+    expect(state.currentId).toBe(9)
   })
 
   it('puts every row back, in order, when the decision does not apply', () => {
@@ -414,6 +472,39 @@ describe('undo', () => {
     const running = reduce(state, { type: 'undo/start' })
     expect(reduce(running, { type: 'undo/expire' })).toBe(running)
     expect(reduce(state, { type: 'undo/expire' }).undo).toBeNull()
+  })
+
+  it('puts a cascaded comment back where it now belongs, not where it used to sit', () => {
+    // **The index the comment left is not the index it goes back to, because the replies
+    // do not come back with it.** The queue is newest first, so a reply always sits
+    // *above* the comment it hangs from — every cascade therefore removes rows from
+    // before the comment's own index, and restoring at that index overshoots by exactly
+    // as many. The comment would come back below rows it used to sit above, and nothing
+    // re-sorts the list, so it stays there until the tab is reloaded.
+    let state = reduce(initialState('pending'), {
+      type: 'load/ok',
+      page: {
+        comments: [
+          comment(4, { parentId: 1, depth: 1 }),
+          comment(9),
+          comment(3, { parentId: 1, depth: 1 }),
+          comment(1),
+          comment(8),
+        ],
+        nextCursor: null,
+        counts: SOME_COUNTS,
+      },
+    })
+
+    state = reduce(state, { type: 'decide/start', id: 1, status: 'spam' })
+    expect(state.comments.map((c) => c.id)).toEqual([9, 8])
+
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 2 })
+    state = reduce(state, { type: 'undo/start' })
+    state = reduce(state, { type: 'undo/ok', counts: SOME_COUNTS })
+
+    expect(state.comments.map((c) => c.id)).toEqual([9, 1, 8])
+    expect(state.currentId).toBe(1)
   })
 
   it('says plainly that it will not bring the replies back', () => {

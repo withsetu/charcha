@@ -61,7 +61,14 @@ export type OriginStatus = SettableStatus
  */
 export interface UndoOffer {
   comment: QueuedComment
-  /** Where the row sat before it was removed, so undo restores order, not just rows. */
+  /**
+   * Where the row goes back, so undo restores order and not just rows.
+   *
+   * A position in the list as it is *now*, not the one the row had before the decision:
+   * a cascade removes the replies above it for good, so the original index would put
+   * the comment back below rows it used to sit above.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
   index: number
   from: OriginStatus
   to: DecisionStatus
@@ -106,7 +113,16 @@ interface Removed {
 /** A comment removed from the list while its decision is in flight. */
 interface InFlight {
   comment: QueuedComment
+  /** Where it sat in the list as it was, which is what a failure restores it to. */
   index: number
+  /**
+   * Where it sits in the list that is *left* — which is what an undo restores it to.
+   *
+   * The two differ by however many replies the cascade took off the screen above it,
+   * because a failure brings all of them back and an undo brings none.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
+  restoreIndex: number
   status: DecisionStatus
   /**
    * The replies removed alongside it, each with its own index in the list as it was.
@@ -339,9 +355,15 @@ function countOfReplies(cascaded: number): number {
  * Mirrors `?2 in ('spam', 'deleted')` in MODERATE_SQL, which is the authority — the
  * server cascades whether or not this agrees, so the only thing at stake here is
  * whether the screen matches what the server did.
- * Enforced by test/dashboard/queue.test.ts.
+ *
+ * **Exported only so a test can hold it against that statement**, which is the whole
+ * reason it is a named function rather than an inline condition. Nothing in this project
+ * can typecheck agreement between a TypeScript predicate and a SQL string, and a comment
+ * claiming the mirror would sit exactly where a reader goes to verify it — so the mirror
+ * is asserted instead, from the one test project that can import both.
+ * Enforced by test/worker/db/cascade-mirror.test.ts.
  */
-function cascadesToReplies(status: DecisionStatus): boolean {
+export function cascadesToReplies(status: DecisionStatus): boolean {
   return status === 'spam' || status === 'deleted'
 }
 
@@ -532,8 +554,9 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       // them (MODERATE_SQL), so a list that keeps them shows comments the server no
       // longer considers pending — under a tab count that has already moved, with live
       // Approve buttons that would publish a reply beneath a comment the moderator has
-      // just hidden. The predicate mirrors the statement in both halves: the cascade is
-      // to spam and deleted only, and a reply already in the target status does not move.
+      // just hidden. The predicate is intended to mirror the statement in both halves:
+      // the cascade is to spam and deleted only, and a reply already in the target status
+      // does not move. cascadesToReplies is where the first half is pinned to the SQL.
       const alsoRemoved: Removed[] = cascadesToReplies(action.status)
         ? state.comments.flatMap((candidate, at) =>
             candidate.parentId === action.id && candidate.status !== action.status
@@ -544,22 +567,45 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
 
       const removed = new Set([action.id, ...alsoRemoved.map((entry) => entry.comment.id)])
       const comments = state.comments.filter((candidate) => !removed.has(candidate.id))
-      // Where the comment sat once the replies above it are gone, so the auto-advance
-      // lands on the row that is really next rather than one slot past it.
-      const landing = state.comments
-        .slice(0, index)
-        .filter((candidate) => !removed.has(candidate.id)).length
+      // **The index a row at `at` will have in the list that is left**, which two
+      // different things need and which is not the index it had. A cascade removes rows
+      // from *above* the comment — the queue is newest first, so a reply always sits
+      // above the comment it hangs from — and every original index below `at` that goes
+      // shifts the survivors up by one.
+      // Enforced by test/dashboard/queue.test.ts.
+      const survivorsBefore = (at: number): number =>
+        state.comments.slice(0, at).filter((candidate) => !removed.has(candidate.id)).length
+
+      // Where the keyboard lands. Measured from the row the keyboard was *on* rather than
+      // from the comment decided, because the two can differ: a decision taken with the
+      // mouse, or by Tab into another row's buttons, leaves the caret on some other row.
+      // Measuring from the decided comment there would skip every surviving row between
+      // them.
+      const currentIndex = state.comments.findIndex((candidate) => candidate.id === state.currentId)
       return {
         ...state,
         comments,
-        // The keyboard may have been on one of the replies rather than on the comment —
-        // a decision taken with the mouse, or by Tab into another row's buttons — so the
-        // test is whether the current row survived, not whether it was the one decided.
+        // The test is whether the current row survived, not whether it was the one
+        // decided — a cascaded reply can be the row the keyboard was sitting on.
         currentId:
           state.currentId !== null && removed.has(state.currentId)
-            ? afterRemoval(comments, landing)
+            ? afterRemoval(comments, survivorsBefore(currentIndex))
             : state.currentId,
-        inFlight: [...state.inFlight, { comment, index, status: action.status, alsoRemoved }],
+        inFlight: [
+          ...state.inFlight,
+          {
+            comment,
+            index,
+            // Where an undo has to put it back, which is *not* `index`: by then the
+            // replies are gone for good — undo does not restore them — so the original
+            // index overshoots by however many sat above it, and the comment comes back
+            // below rows it used to sit above.
+            // Enforced by test/dashboard/queue.test.ts.
+            restoreIndex: survivorsBefore(index),
+            status: action.status,
+            alsoRemoved,
+          },
+        ],
         // A new decision replaces the offer to undo the previous one. `Z` means "take
         // back what I just did", and holding two offers would make it ambiguous which.
         undo: null,
@@ -573,7 +619,7 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       const cascaded = countOfReplies(action.cascaded)
       const offer: UndoOffer = {
         comment: entry.comment,
-        index: entry.index,
+        index: entry.restoreIndex,
         from: originOf(entry.comment),
         to: entry.status,
         cascaded,

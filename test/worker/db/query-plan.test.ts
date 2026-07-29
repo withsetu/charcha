@@ -198,14 +198,10 @@ describe('the moderation write', () => {
     expect(plan).toMatch(/USING INTEGER PRIMARY KEY/)
   })
 
-  it('excludes a reply already in the status being set, so the count is honest', () => {
-    // The number this statement returns is shown to the moderator (#133) beside tab
-    // counts the server recomputes. A reply that did not move must not be in it, or the
-    // sentence and the badges contradict each other — which is the bug, one line down.
-    expect(MODERATE_SQL).toMatch(
-      /parent_id = \?1 and \?2 in \('spam', 'deleted'\) and status <> \?2/,
-    )
-  })
+  // The `status <> ?2` narrowing that keeps the reported count honest is asserted on
+  // behaviour instead, in test/worker/db/comments.test.ts — a regex over this constant
+  // would be the statement's source compared with a copy of itself, which cannot fail
+  // for any reason except a rewording.
 
   it('never returns a comment body, however many replies it cascades over', () => {
     // Selecting `body` would pull up to 10,000 characters per reply into a 128 MB
