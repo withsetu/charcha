@@ -123,12 +123,19 @@ function HowToSet({ names }: { names: readonly SetupSecret[] }) {
       </p>
       {/*
         `tabIndex` so the block can be scrolled without a mouse when a narrow window
-        clips it (WCAG 2.1.1). It is not an editable target, so the shortcut map still
-        sees keystrokes that land in it — which on this tab is `1`–`4`, `?` and Escape,
-        every one of them harmless. See the queue-command guard in triage.tsx.
+        clips it (WCAG 2.1.1) — and `role`/`aria-label` with it, because a focusable
+        element with neither is a tab stop that announces nothing, which trades 2.1.1
+        for 4.1.2 on the one piece of actionable content this tab has. The label is
+        derived from `names` so it cannot describe a block it no longer matches.
+
+        It is not an editable target, so the shortcut map still sees keystrokes that land
+        in it — which on this tab is `1`–`4`, `?` and Escape, every one of them harmless.
+        See the queue-command guard in triage.tsx.
       */}
       <pre
         tabIndex={0}
+        role="region"
+        aria-label={`Commands to set ${names.join(', ')}`}
         className="overflow-x-auto rounded-md border bg-muted p-3 font-mono text-xs text-foreground"
       >
         <code>{names.map((name) => `pnpm wrangler secret put ${name}`).join('\n')}</code>
@@ -303,9 +310,11 @@ function EmailSection({ secrets }: { secrets: Record<SetupSecret, boolean> }) {
     <Section title="Email notifications" status={missing.length === 0 ? <On /> : <Off />}>
       {missing.length === 0 ? (
         <p>
-          One short email per comment, to the address in <code>CHARCHA_NOTIFY_TO</code>. The queue
-          is the record either way — the email is a prompt to come and look, and it is never the
-          thing that missed one.
+          A short email to the address in <code>CHARCHA_NOTIFY_TO</code> as comments arrive — up to
+          five back to back, and then a slower rate, so a busy morning cannot spend a day’s sending
+          allowance in ten minutes. The next email that does go out says how many arrived while it
+          was quiet. The queue is the record either way: the email is a prompt to come and look, and
+          it is never the thing that missed one.
         </p>
       ) : (
         <>
@@ -352,7 +361,12 @@ function TurnstileSection({ set }: { set: boolean }) {
         <>
           <p>
             The invisible bot check is off, and comments are judged by the other spam layers. It is
-            free, unmetered, and puts no cookie in a reader’s browser.
+            free and unmetered. It is also the one thing Charcha can put a third party into a
+            reader’s browser — the widget is Cloudflare’s, in an iframe on{' '}
+            <code>challenges.cloudflare.com</code> — so read what it does before turning it on.
+            Charcha itself still stores nothing in a reader’s browser; Turnstile’s{' '}
+            <i>pre-clearance</i> setting is the one that would, and it is off unless you switch it
+            on yourself.
           </p>
           <ul className="space-y-1">
             <SecretRow name="TURNSTILE_SECRET_KEY" set={false} />
@@ -393,16 +407,18 @@ function IpHashSection({ set }: { set: boolean }) {
         <>
           <p>
             The per-IP half of rate limiting abstains: one address can post as often as it likes,
-            bounded only by the per-thread limit, which still runs. Nothing else on this deployment
-            says so.
+            bounded only by the per-thread limit, which still runs. Nothing on your site says so —
+            the Worker writes one line to its log about it, which you would have to be tailing to
+            see.
           </p>
           <ul className="space-y-1">
             <SecretRow name="IP_HASH_SECRET" set={false} />
           </ul>
           <p>
-            Any long random value will do — <code>openssl rand -base64 32</code>. It is the only
-            thing standing between the stored hashes and a map of who commented from where, so it is
-            per deployment and worth generating rather than choosing.
+            Any long random value will do — <code>openssl rand -hex 32</code>, the same line the
+            README and the deploy form give for it. It is the only thing standing between the stored
+            hashes and a map of who commented from where, so it is per deployment and worth
+            generating rather than choosing.
           </p>
           <HowToSet names={['IP_HASH_SECRET']} />
         </>
@@ -433,7 +449,10 @@ function OriginsSection({ load, onEdit }: { load: Load<Settings>; onEdit: () => 
       {load.kind === 'ready' && (
         <>
           <p>
-            Pages on these addresses may post comments to this deployment. Any other is refused.
+            A page on any of these addresses may post comments to this deployment; a page anywhere
+            else is refused. That is a browser rule, so what it stops is another site’s page posting
+            from a reader’s browser. It is not what stops a script — that is the spam layers and
+            this queue.
           </p>
           {load.value.allowedOrigins.length === 0 ? (
             <p>

@@ -194,25 +194,93 @@ describe('the shortcut listener', () => {
     expect(queueReads()).toHaveLength(1)
   })
 
-  it('acts on no comment while Setup is in front', async () => {
+  it('decides on no comment while Setup is in front', async () => {
     // **The guard.** The queue is still in state behind that tab, so without it `A` here
-    // approves a comment nobody can see and `Z` undoes something nobody can read.
+    // approves a comment nobody can see.
     const stub = await mountQueue()
-    fireEvent.keyDown(document.body, { key: 's' })
-    await waitFor(() => {
-      expect(decisions(stub)).toHaveLength(1)
-    })
-
     fireEvent.keyDown(document.body, { key: '4' })
     await screen.findByText('Email notifications')
 
     fireEvent.keyDown(document.body, { key: 'a' })
     fireEvent.keyDown(document.body, { key: 's' })
     fireEvent.keyDown(document.body, { key: 'd' })
-    fireEvent.keyDown(document.body, { key: 'j' })
-    fireEvent.keyDown(document.body, { key: 'z' })
 
+    expect(decisions(stub)).toHaveLength(0)
+  })
+
+  it('moves the cursor on no comment either, which the decision count cannot show', async () => {
+    // `move` is in QUEUE_COMMANDS too, and a test that only counted decisions passed with
+    // it removed: `J` would walk an invisible cursor, and the owner would come back to a
+    // queue whose current row had shifted under them. Asserted by returning and reading
+    // where the keyboard actually is.
+    await mountQueue()
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'j' })
+
+    fireEvent.keyDown(document.body, { key: '1' })
+    await screen.findByText('Author 1')
+    expect(screen.getAllByRole('group')[0]?.getAttribute('aria-current')).toBe('true')
+  })
+
+  it('offers no undo on Setup, by key or by button, for a decision that lands there', async () => {
+    // **The case the guard alone does not cover**, and the one two keystrokes reach: `S`
+    // and then `4` before the request answers. `decide/ok` resolves with the queue out of
+    // sight, so entering Setup having already cleared the bar is not enough — the offer
+    // arrives afterwards. Without the `hidden` prop the bar appears over the Setup tab
+    // with a live Undo button, which is the one route round a guard that only refuses
+    // keystrokes.
+    let resolveDecision: (response: Response) => void = () => undefined
+    const stub = stubFetch((call) => {
+      if (call.path.startsWith('/admin/api/queue')) {
+        return json(200, queuePage([comment({ id: 1 }), comment({ id: 2 })]))
+      }
+      if (/^\/admin\/api\/comments\/\d+\/status$/.test(call.path)) {
+        return new Promise<Response>((resolve) => {
+          resolveDecision = resolve
+        })
+      }
+      if (call.path === '/admin/api/setup') {
+        return json(200, {
+          secrets: {
+            RESEND_API_KEY: true,
+            CHARCHA_NOTIFY_FROM: true,
+            CHARCHA_NOTIFY_TO: true,
+            TURNSTILE_SECRET_KEY: true,
+            IP_HASH_SECRET: true,
+          },
+        })
+      }
+      if (call.path === '/admin/api/settings') {
+        return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+      }
+      return unhandled(call)
+    })
+    render(<Triage onExpired={noop} onSignOut={noop} />)
+    await screen.findByText('Author 1')
+
+    fireEvent.keyDown(document.body, { key: 's' })
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+
+    resolveDecision(json(200, decision(1, 'spam')))
+    await waitFor(() => {
+      // The decision is still reported — the live region is the half that must survive.
+      expect(screen.getByText(/Marked spam: Author 1/)).toBeTruthy()
+    })
+
+    expect(screen.queryByRole('button', { name: /Undo/ })).toBeNull()
+    // And the announcement does not promise a keystroke this tab refuses.
+    expect(screen.queryByText(/Press Z to undo/)).toBeNull()
+
+    fireEvent.keyDown(document.body, { key: 'z' })
     expect(decisions(stub)).toHaveLength(1)
+
+    // Back on the queue, both come back: the offer was suppressed, not thrown away.
+    fireEvent.keyDown(document.body, { key: '1' })
+    expect(await screen.findByRole('button', { name: /Undo/ })).toBeTruthy()
   })
 
   it('still opens the shortcut sheet from Setup, so the way back is documented', async () => {

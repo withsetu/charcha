@@ -636,6 +636,11 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
       </Tabs>
 
       <MessageBar
+        // Hidden, not unmounted: the live region inside it has to keep announcing a
+        // decision that resolves after the owner has switched to Setup. Its two buttons
+        // would otherwise be the way round the keyboard guard above — see `hidden` in
+        // src/dashboard/components/message-bar.tsx.
+        hidden={state.tab === 'setup'}
         undo={state.undo}
         failure={state.actionFailure}
         announcement={state.announcement}

@@ -318,11 +318,15 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
       if (action.tab === state.tab) return state
 
       // Setup is not a queue, so the loaded one is left exactly as it was and coming
-      // back costs no request and no lost position. The message bar does go: an undo
-      // offer names a row that is not on screen any more, which is the same reason the
-      // queue branch below throws one away.
+      // back costs no request and no lost position.
+      //
+      // `moreFailure` is deliberately **not** cleared with the other two. It is not a
+      // message-bar field — it renders inside the queue's own panel — and
+      // `shouldLoadMore` reads it as the latch that stops the next-page effect firing
+      // again after a failure. Clearing it here would re-arm that effect against a panel
+      // nobody is looking at, which the comment on `shouldLoadMore` calls load-bearing.
       if (action.tab === 'setup') {
-        return { ...state, tab: 'setup', undo: null, actionFailure: null, moreFailure: null }
+        return { ...state, tab: 'setup', undo: null, actionFailure: null }
       }
 
       // Back to the queue that is already loaded — after a trip to Setup, since any
@@ -440,7 +444,20 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
           offeredAt: action.at,
           running: false,
         },
-        ...say(state, `${DECIDED[entry.status]}: ${entry.comment.authorName}. Press Z to undo.`),
+        // **The `Z` prompt is dropped when the decision lands on the Setup tab.** `S`
+        // then `4` before the request answers is two keystrokes on a surface built for
+        // one per comment, and it resolves with the queue out of sight — where the bar
+        // is hidden and `Z` is one of the commands the tab refuses (see QUEUE_COMMANDS
+        // in src/dashboard/components/triage.tsx). Announcing a keystroke that does
+        // nothing is worse than announcing none. The offer itself survives, so the bar
+        // and the key both come back with the queue if the window has not closed.
+        // Enforced by test/dashboard/queue.test.ts.
+        ...say(
+          state,
+          state.tab === 'setup'
+            ? `${DECIDED[entry.status]}: ${entry.comment.authorName}.`
+            : `${DECIDED[entry.status]}: ${entry.comment.authorName}. Press Z to undo.`,
+        ),
       }
     }
 

@@ -402,6 +402,30 @@ describe('the setup tab (#158)', () => {
     expect(state.actionFailure).toBeNull()
   })
 
+  it('leaves a failed next page recorded, so the auto-fetch stays disarmed', () => {
+    // `moreFailure` is the latch `shouldLoadMore` reads. Clearing it on the way to Setup
+    // would re-arm the effect and fire the failed request again, at a panel nobody is
+    // looking at — the loop the comment on `shouldLoadMore` calls load-bearing.
+    let state = reduce(loaded([1, 2], '1.2'), { type: 'more/start' })
+    state = reduce(state, { type: 'more/failed', failure: FAILURE })
+    expect(shouldLoadMore(state)).toBe(false)
+
+    state = reduce(state, { type: 'tab', tab: 'setup' })
+    expect(state.moreFailure).toEqual(FAILURE)
+    expect(shouldLoadMore(state)).toBe(false)
+  })
+
+  it('does not promise Z for a decision that lands while Setup is showing', () => {
+    // The offer survives, so the bar and the key both return with the queue — but the
+    // announcement must not name a keystroke the Setup tab refuses.
+    let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'tab', tab: 'setup' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+
+    expect(state.announcement?.text).toBe('Marked spam: Author 1.')
+    expect(state.undo).not.toBeNull()
+  })
+
   it('comes back to the same queue without asking for it again', () => {
     // **The load-bearing one.** Resetting here would set `phase` back to `loading` while
     // leaving `view` untouched — and the effect that fetches is keyed on `view`, so

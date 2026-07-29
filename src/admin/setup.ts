@@ -8,12 +8,13 @@
 // keeps finding elsewhere.
 //
 // **Booleans, never values, and the shape of the code is what holds that.** The report
-// is built by mapping REPORTED_SECRETS through `isConfigured`, whose return type is the
-// result of a comparison. There is no expression in this file that evaluates to a
-// secret, so handing it the wrong object would produce a wrong boolean rather than a
-// leaked string. Nothing is masked or truncated either: a masked field is unproofreadable
-// — that is what #139 took off the deploy form — and a first-four-characters preview is a
-// disclosure with a smaller number attached, not a smaller disclosure.
+// is built by mapping REPORTED_SECRETS through `isConfigured`: the only expression here
+// that touches a secret is that call's argument, and its return type is `boolean`. So
+// nothing a caller hands this module can reach the response as a string — the wrong
+// object would produce a wrong boolean, which is a bug rather than a disclosure. Nothing
+// is masked or truncated either: a masked field is unproofreadable — that is what #139
+// took off the deploy form — and a first-four-characters preview is a disclosure with a
+// smaller number attached, not a smaller disclosure.
 // Enforced by test/worker/admin/setup.test.ts, which sets every reported secret to one
 // sentinel string and asserts the response body does not contain it.
 //
@@ -61,7 +62,13 @@ export const REPORTED_SECRETS = [
 
 export type ReportedSecret = (typeof REPORTED_SECRETS)[number]
 
-/** Just the parts of `Env` this endpoint is allowed to see. */
+/**
+ * The parts of `Env` this endpoint reads.
+ *
+ * A declaration of what is read, not an enforced restriction on what is passed:
+ * `handleReadSetup` hands over the whole `c.env` and structural typing accepts it. The
+ * guarantee that no value escapes is `isConfigured`'s return type, above — not this.
+ */
 export type SetupEnv = Pick<Env, ReportedSecret>
 
 /** The answer: one boolean per reported secret, and nothing else. */

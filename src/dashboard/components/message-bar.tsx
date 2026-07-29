@@ -31,6 +31,21 @@ export interface MessageBarProps {
   onUndo: () => void
   onRetry: () => void
   onDismiss: () => void
+  /**
+   * Suppress the visible bar, but not the live region (#158).
+   *
+   * The Setup tab is the caller for it: a decision started on the queue can resolve
+   * after the owner has switched, and both of the bar's controls act on comments that
+   * are no longer on screen — Undo on one the owner cannot read, Try again on a queue
+   * they cannot see. The keyboard route to those is already refused there, so a visible
+   * button would be the one way round the guard.
+   *
+   * Only the visible half goes. The announcement still has to happen: a decision that
+   * lands unreported is the failure the whole bar exists to prevent, and the wording is
+   * `decide/ok` in src/dashboard/queue.ts, which drops the "press Z" half on this tab.
+   * Enforced by test/dashboard/shortcuts.test.tsx.
+   */
+  hidden?: boolean
 }
 
 export function MessageBar({
@@ -40,6 +55,7 @@ export function MessageBar({
   onUndo,
   onRetry,
   onDismiss,
+  hidden = false,
 }: MessageBarProps) {
   return (
     <>
@@ -66,7 +82,7 @@ export function MessageBar({
         )}
       </div>
 
-      {(failure !== null || undo !== null) && (
+      {!hidden && (failure !== null || undo !== null) && (
         <div className="sticky bottom-0 z-10 -mx-1 bg-gradient-to-t from-background via-background px-1 pt-6 pb-4">
           {failure !== null ? (
             <Alert variant="destructive" className="border-destructive/40 shadow-lg">

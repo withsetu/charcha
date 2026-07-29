@@ -97,9 +97,19 @@ describe('the door', () => {
   })
 
   it('emits no CORS header, so no other origin can read the answer either', async () => {
-    const response = await read()
+    // **With an `Origin` on the request, because the realistic way this breaks is
+    // reflection.** A handler that echoed the caller's `Origin` would emit nothing at all
+    // for a request that carried none, and an assertion on that request would pass while
+    // any page on the internet read the report. Both origins are tried: `selfOrigin`
+    // gets special treatment on the public routes (src/cors.ts), and this surface must
+    // not have inherited it.
+    for (const candidate of ['https://evil.example', origin]) {
+      const response = await read({ origin: candidate })
 
-    expect(response.headers.get('access-control-allow-origin')).toBeNull()
+      expect(response.status, candidate).toBe(200)
+      expect(response.headers.get('access-control-allow-origin'), candidate).toBeNull()
+      expect(response.headers.get('access-control-allow-credentials'), candidate).toBeNull()
+    }
   })
 
   it('is never cached, like every other answer on this surface', async () => {

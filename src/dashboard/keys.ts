@@ -20,10 +20,13 @@ export type Command =
    *
    * By index and not by name because the map is a pure function that knows nothing
    * about the queue: naming `'setup'` here would put a second copy of the tab list in
-   * this file, and the two would eventually disagree about which key is the fourth. The
-   * union is the width of `TAB_VALUES`, so adding a fifth tab without a key for it is a
-   * type error rather than a silently unreachable tab.
-   * Enforced by test/dashboard/keys.test.ts.
+   * this file, and the two would eventually disagree about which key is the fourth.
+   *
+   * The union is *intended* to stay the width of `TAB_VALUES`, and the type does not
+   * enforce that — `TAB_VALUES` is annotated `readonly TabValue[]`, which carries no
+   * length, so a fifth entry would compile and be reachable only by mouse. What catches
+   * that is a runtime assertion instead: the loop over `TAB_VALUES.entries()` in
+   * test/dashboard/keys.test.ts fails on any tab this switch has no digit for.
    */
   | { kind: 'tab'; index: 0 | 1 | 2 | 3 }
 

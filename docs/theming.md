@@ -39,9 +39,14 @@ never checks a token and never makes the call; with no `data-turnstile-sitekey` 
 page, Cloudflare's script is never fetched. Nothing loads speculatively.
 
 **Set both or neither.** They are two halves of one switch, and setting only the secret
-refuses every comment on the site: the Worker requires a token that nothing on the page
-is producing. The sitekey is public by design — it appears in the page HTML of every
-site that uses Turnstile — so putting it in an attribute discloses nothing.
+stops every comment reaching the page: the Worker wants a token that nothing on the page
+is producing. Those comments are **held for review** rather than refused, until one real
+token has verified on the deployment — after that a comment with no token is refused. So
+the symptom of a missing sitekey is a moderation queue filling with comments that look
+perfectly fine, which is why your dashboard's **Setup** tab names the sitekey explicitly
+([#104](https://github.com/withsetu/charcha/issues/104)). The sitekey is public by design
+— it appears in the page HTML of every site that uses Turnstile — so putting it in an
+attribute discloses nothing.
 
 The Worker's half is **not** collected by the deploy form, deliberately: that form
 requires a value in every field it shows, and an invented Turnstile secret matches no
