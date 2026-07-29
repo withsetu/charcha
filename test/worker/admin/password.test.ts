@@ -48,9 +48,14 @@ describe('whether the configured password clears the length floor (#120)', () =>
   })
 
   it('calls the generated value the deploy form recommends long enough', () => {
-    // `openssl rand -base64 24` is 32 characters. If the floor ever rose above what
-    // this project's own instruction produces, that is a contradiction worth failing on.
-    expect(dashboardPasswordIsShort(secret)).toBe(false)
+    // `openssl rand -base64 24` is 24 bytes as base64, which is 32 characters — so the
+    // length asserted here is 32 and not `secret`'s 24. If the floor ever rose above
+    // what this project's own instruction produces, that is a contradiction worth
+    // failing on, and this is where it would fail.
+    const generated = 'm3K9vQrT8xL2wZ7pB4nC6jH1dF5sA0gY'
+
+    expect(generated).toHaveLength(32)
+    expect(dashboardPasswordIsShort(generated)).toBe(false)
   })
 
   it('counts characters, not UTF-16 code units', () => {
@@ -191,11 +196,16 @@ describe('the comparison itself', () => {
   })
 
   it('accepts a four-character password, and always will — #120', async () => {
-    // **The no-lockout assertion, at the level where a lockout would be written.**
-    // A floor enforced anywhere on this path would 401 every deployment already
-    // running on a short password, with no reset, no second factor and no account to
-    // recover through. Whatever `dashboardPasswordIsShort` says, this stays true.
-    expect(dashboardPasswordIsShort('abcd')).toBe(true)
+    // **Both halves of the credential path, because a floor would be written in the
+    // first one.** `usableDashboardPassword` is the shared helper every authenticator
+    // reads (src/admin/authenticate.ts), and returning `null` there for a short secret
+    // is the obvious, wrong fix — it would 401 every deployment already running on one,
+    // with no reset, no second factor and no account to recover through. Asserting only
+    // the comparison would miss that entirely, which a kill-shot confirmed.
+    //
+    // This is the unit-level half. The end-to-end proof — a real login and a working
+    // session on a four-character password — is test/worker/admin/setup.test.ts.
+    expect(usableDashboardPassword('abcd')).toBe('abcd')
     expect(await passwordMatches('abcd', 'abcd')).toBe(true)
   })
 

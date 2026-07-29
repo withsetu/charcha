@@ -26,6 +26,9 @@
 // hold it, and the alternative is a deployment running on a four-character password
 // that nothing anywhere ever mentions. Nothing here refuses anything on the strength
 // of it; see that function on why a floor on the login path would be a lockout.
+// Enforced by test/worker/admin/setup.test.ts — the sentinel test above covers only the
+// five in the map, so `never carries the password, whatever it is` is the case that
+// covers this field, and it sets the password to the sentinel rather than the secrets.
 //
 // **Behind the same door as the moderation queue.** An unauthenticated caller learning
 // which of a deployment's defences are switched off is a reconnaissance gift: "Turnstile
@@ -81,7 +84,7 @@ export type ReportedSecret = (typeof REPORTED_SECRETS)[number]
  * `handleReadSetup` hands over the whole `c.env` and structural typing accepts it. The
  * guarantee that no value escapes is `isConfigured`'s return type, above — not this.
  */
-export type SetupEnv = Pick<Env, ReportedSecret | 'CHARCHA_DASHBOARD_PASSWORD'>
+export type SetupEnv = Pick<Env, ReportedSecret>
 
 /** The answer: one boolean per reported secret, and nothing else. */
 export type SecretReport = Record<ReportedSecret, boolean>

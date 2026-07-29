@@ -223,11 +223,9 @@ describe('the dashboard password (#120)', () => {
   // this endpoint that is not a feature switch. It is reported as an advisory —
   // whether it clears the length floor — and never as a gate.
 
-  it('is not on the secret list, because reaching this proves it is set', async () => {
-    const body = await readBody()
-
-    expect(Object.keys(body.secrets)).not.toContain('CHARCHA_DASHBOARD_PASSWORD')
-  })
+  // It is deliberately not in `secrets` — `answers for every secret the tab reports on,
+  // and for no others` above already pins that key set exactly, so a row for the password
+  // appearing there fails that test rather than needing one of its own.
 
   it('says a short one is short', async () => {
     configurePassword('abcd')
@@ -307,9 +305,6 @@ describe('a deployment already running on a short password', () => {
     }
   })
 
-  it('is told it is short, which is the whole of what changes for it', async () => {
-    configurePassword('abcd')
-
-    expect((await reportFor('abcd')).shortPassword).toBe(true)
-  })
+  // What such a deployment *is* told is `says a short one is short` above. It is the
+  // same assertion, so it is not repeated here.
 })

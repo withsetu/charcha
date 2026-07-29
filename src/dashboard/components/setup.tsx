@@ -101,10 +101,25 @@ const README_URL = 'https://github.com/withsetu/charcha#turning-on-the-optional-
  * A number in a warning about somebody's credential invites "says who", and the honest
  * answer is a citable one: "Verifiers and CSPs SHALL require passwords that are used as
  * a single-factor authentication mechanism to be a minimum of 15 characters in length"
- * (checked 2026-07-29). The same constant is `MIN_DASHBOARD_PASSWORD_LENGTH` in
- * src/admin/password.ts, which is where it is decided.
+ * (checked 2026-07-29).
  */
 const NIST_PASSWORD_URL = 'https://pages.nist.gov/800-63-4/sp800-63b.html'
+
+/**
+ * The floor, restated because it cannot be imported.
+ *
+ * `MIN_DASHBOARD_PASSWORD_LENGTH` in src/admin/password.ts is where the number is
+ * *decided*; this is a second copy, for the reason `SETUP_SECRETS` in ../api.ts gives —
+ * that module names `Env` and imports Hono, neither of which exists in this TypeScript
+ * project. It is interpolated into the copy below rather than typed into a sentence,
+ * because a warning that says "shorter than 15 characters" while the Worker uses a
+ * different number is exactly the comment-that-suppresses-the-check failure, aimed at
+ * the one screen an owner goes to to find out.
+ *
+ * The two copies are asserted equal by test/node/password-floor.test.ts, which reads
+ * both files — the only cross-project check available when an import is not.
+ */
+const MIN_DASHBOARD_PASSWORD_LENGTH = 15
 
 /**
  * The three that make email notifications work, in the order the README sets them.
@@ -123,9 +138,16 @@ const EMAIL_SECRETS = [
  * A name this tab can print a `wrangler secret put` line for.
  *
  * `SetupSecret` plus the dashboard password, which is not on that list because it is not
- * a feature switch — reaching this screen proves it is set (src/admin/setup.ts). Still a
- * union of literals rather than `string`, so a typo or a rename is a compile error here
- * exactly as it is for the other five.
+ * a feature switch — reaching this screen proves it is set (src/admin/setup.ts).
+ *
+ * A literal rather than free text, which is *intended* to make a typo obvious — but it
+ * buys strictly less than the other five do, and the difference is worth knowing. Their
+ * drift shows up at runtime, because `readSetup` validates every `SETUP_SECRETS` key and
+ * a missing one becomes a visible `MALFORMED`. This name is outside that net: nothing
+ * here ties it to `Env`, and the dashboard is a separate TypeScript project that cannot
+ * import from `src/admin` (see the note on `SETUP_SECRETS` in ../api.ts). What catches a
+ * rename of this one is `pnpm check:deploy`, which fails a secret `src/` reads that is in
+ * neither `.dev.vars.example` nor README.md.
  */
 type SettableSecret = SetupSecret | 'CHARCHA_DASHBOARD_PASSWORD'
 
@@ -187,7 +209,9 @@ function HowToSet({ names, verb = 'Set' }: { names: readonly SettableSecret[]; v
         clips it (WCAG 2.1.1) — and `role`/`aria-label` with it, because a focusable
         element with neither is a tab stop that announces nothing, which trades 2.1.1
         for 4.1.2 on the one piece of actionable content this tab has. The label is
-        derived from `names` so it cannot describe a block it no longer matches.
+        derived from `verb` and `names` — both of them — so it cannot describe a block it
+        no longer matches, and cannot announce "set" over a block whose visible lead-in
+        says "Replace".
 
         It is not an editable target, so the shortcut map still sees keystrokes that land
         in it — which on this tab is `1`–`4`, `?` and Escape, every one of them harmless.
@@ -196,7 +220,7 @@ function HowToSet({ names, verb = 'Set' }: { names: readonly SettableSecret[]; v
       <pre
         tabIndex={0}
         role="region"
-        aria-label={`Commands to set ${names.join(', ')}`}
+        aria-label={`Commands to ${verb.toLowerCase()} ${names.join(', ')}`}
         className="overflow-x-auto rounded-md border bg-muted p-3 font-mono text-xs text-foreground"
       >
         <code>{names.map((name) => `pnpm wrangler secret put ${name}`).join('\n')}</code>
@@ -268,9 +292,16 @@ export function Setup({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        What this deployment has been given, and what it has not. The features below are optional —
-        a Charcha that takes comments and holds them for you needs none of them — and nothing here
-        is set from this screen, because a Worker cannot write its own secrets.
+        {/*
+          The badge words are deliberately not marked up here. An `<b>Off</b>` in this
+          sentence is an element whose whole text is "Off", which is what the badges are —
+          so it joins them in every `getAllByText('Off')` and quietly inflates the count
+          the tests use to assert how many features are switched off.
+        */}
+        What this deployment has been given, and what it has not. Everything below carrying an On or
+        Off badge is optional — a Charcha that takes comments and holds them for you needs none of
+        it — and nothing here is set from this screen, because a Worker cannot write its own
+        secrets.
       </p>
 
       {secrets.kind === 'loading' && (
@@ -354,9 +385,9 @@ function DashboardPasswordSection() {
   return (
     <Section title="Dashboard password" status={<Badge>Short</Badge>}>
       <p>
-        Your <code>CHARCHA_DASHBOARD_PASSWORD</code> is shorter than 15 characters. It is the only
-        credential for this dashboard — no second user, no second factor and no reset — and
-        everything behind it can approve, hide and delete comments on your site.
+        Your <code>CHARCHA_DASHBOARD_PASSWORD</code> is shorter than {MIN_DASHBOARD_PASSWORD_LENGTH}{' '}
+        characters. It is the only credential for this dashboard — no second user, no second factor
+        and no reset — and everything behind it can approve, hide and delete comments on your site.
       </p>
       <p>
         <b>Nothing has stopped working and nothing will.</b> The password you have keeps working,
@@ -365,7 +396,7 @@ function DashboardPasswordSection() {
         anything about it at all.
       </p>
       <p>
-        Fifteen is the minimum{' '}
+        The minimum{' '}
         <a
           className="underline underline-offset-4 hover:text-foreground"
           href={NIST_PASSWORD_URL}
@@ -376,9 +407,10 @@ function DashboardPasswordSection() {
           <ExternalLinkIcon aria-hidden="true" className="ml-1 inline size-3 align-baseline" />
           <span className="sr-only"> (opens in a new tab)</span>
         </a>{' '}
-        for a password used on its own, without a second factor. It is a length check and only a
-        length check: a long password that has been in a breach somewhere is no safer, and nothing
-        here has looked. Generating a new one is what settles both.
+        for a password used on its own, without a second factor, is {MIN_DASHBOARD_PASSWORD_LENGTH}{' '}
+        characters. It is a length check and only a length check: a long password that has been in a
+        breach somewhere is no safer, and nothing here has looked. Generating a new one is what
+        settles both.
       </p>
       <HowToSet names={['CHARCHA_DASHBOARD_PASSWORD']} verb="Replace" />
       <p>

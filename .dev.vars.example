@@ -59,9 +59,12 @@
 # Nothing refuses a shorter one, here or at the login. The deploy form has no
 # validation hook to refuse with (#139), and a floor at sign-in would lock every
 # deployment already running on a short password out of its own dashboard, with no
-# reset and no second factor to recover through. So this text and the dashboard's
-# Setup tab are the whole of the check: the tab grows a "Dashboard password"
-# section when the value is under 15 characters, and stays quiet otherwise.
+# reset and no second factor to recover through. Saying it is the whole of the
+# check, and it is said in four places: this file, the deploy form's help text in
+# package.json, README.md, and the dashboard's Setup tab — which grows a
+# "Dashboard password" section when the value is under 15 characters, and stays
+# quiet otherwise. A one-click deployer reads the second and the fourth; this file
+# is for whoever has a checkout.
 #
 # Leave it unset and the dashboard refuses every request, including the login.
 # That is deliberate: an unconfigured deployment is not an open one.

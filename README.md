@@ -174,8 +174,8 @@ deployment already running on a short password out of its own dashboard, permane
 with no way back in, and it would arrive as a routine update. So the check is an
 advisory in one place only: the dashboard's **Setup** tab grows a *Dashboard password*
 section when the configured value is under 15 characters, telling you this and giving
-you the command above. A deployment above the floor has no such section, so the absence
-of one is the answer rather than a missing feature.
+you the command above. A deployment that clears the floor — 15 characters counts — has no
+such section, so the absence of one is the answer rather than a missing feature.
 
 It is a length check and only a length check. A sixteen-character password that appears
 in a breach corpus passes it and is no safer; nothing in Charcha compares your password

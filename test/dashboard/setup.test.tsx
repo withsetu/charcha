@@ -176,16 +176,20 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     expect(panelText()).toContain('been in a breach')
   })
 
-  it('says nothing about the password itself — not a length, not a character of it', async () => {
-    // The endpoint answers a boolean (src/admin/setup.ts), so there is nothing on this
-    // side to leak. This asserts the copy does not invent a measurement anyway: no
-    // "your 4-character password", no strength meter, no preview.
-    answering(() => json(200, report({}, true)))
+  it('refuses a measurement where a verdict belongs, rather than rendering it', async () => {
+    // **The leak guard on this side, and the reason it is a *truthy* non-boolean.** The
+    // endpoint answers a boolean (src/admin/setup.ts), so today there is nothing here to
+    // leak. If a future one sent the length instead, the natural reading of `4` is
+    // truthy — the section would render, having been handed a measurement. A test
+    // asserting only that the copy contains no number could not fail, because the copy
+    // is static: the component takes no props and has nothing to print. So the assertion
+    // is on the client's refusal.
+    answering(() => json(200, { ...report(), shortPassword: 4 }))
     mount()
 
-    await screen.findByText('Dashboard password')
-    expect(panelText()).not.toMatch(/\b(?:4|four)[- ]character/i)
-    expect(panelText()).not.toContain('characters long')
+    await screen.findByText('Could not read what is configured')
+    expect(screen.queryByText('Dashboard password')).toBeNull()
+    expect(panelText()).not.toContain('4')
   })
 
   it('promises nothing will lock, because that is the fear this warning creates', async () => {
@@ -200,10 +204,24 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     answering(() => json(200, report({}, true)))
     mount()
 
-    await screen.findByText('Dashboard password')
-    const commands = [...document.querySelectorAll('pre')].map((block) => block.textContent ?? '')
-    expect(commands).toContain('pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD')
-    expect(screen.getAllByText(/Variables and Secrets/).length).toBeGreaterThan(0)
+    // **Scoped to this section, because the tab has four of them.** With everything
+    // unset the other three each render their own command block and their own
+    // "Variables and Secrets" line, so an unscoped query passes whether or not this
+    // section rendered anything at all.
+    const heading = await screen.findByText('Dashboard password')
+    const section = heading.closest('section')
+    expect(section).not.toBeNull()
+
+    expect(section?.querySelector('pre')?.textContent).toBe(
+      'pnpm wrangler secret put CHARCHA_DASHBOARD_PASSWORD',
+    )
+    expect(section?.textContent).toContain('Variables and Secrets')
+    // The lead-in and the block's accessible name have to agree, or a screen reader is
+    // told to "set" a secret the visible copy says to "replace".
+    expect(section?.textContent).toContain('Replace it from a checkout')
+    expect(section?.querySelector('pre')?.getAttribute('aria-label')).toBe(
+      'Commands to replace CHARCHA_DASHBOARD_PASSWORD',
+    )
   })
 
   it('warns that replacing it signs every session out, including this one', async () => {
