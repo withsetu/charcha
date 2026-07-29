@@ -78,14 +78,15 @@ h1 {
 }
 p { margin: 0 0 1rem; }
 .lede { color: var(--muted); }
-.foot { margin: 2.5rem 0 0; color: var(--muted); font-size: 0.875rem; }
 a { color: inherit; }
 a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 `.trim()
 
 /**
- * The page. Four lines: that this is a live Charcha, what Charcha is, where to read
- * more, and why there is nothing else here.
+ * The page. Three lines: that this is a live Charcha, what Charcha is, and where to
+ * read more. It does not explain itself — what it withholds is enforced by
+ * test/worker/root/page.test.ts and reasoned about in this module's header, which is
+ * where that argument belongs rather than on a page shipped to strangers.
  *
  * **`noindex, nofollow` is deliberate and should stay**, and the reasons are not the
  * usual ones:
@@ -140,8 +141,6 @@ export const ROOT_PAGE = `<!doctype html>
 <p>A comment section for a blog or a website that runs in your own Cloudflare account,
 asks your readers for no account and sets no cookie &mdash; read more at
 <a href="https://charcha.dev" rel="noopener noreferrer">charcha.dev</a>.</p>
-<p class="foot">Anyone with this address can see this page, so it says nothing about this
-deployment.</p>
 </main>
 </body>
 </html>
