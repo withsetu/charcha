@@ -152,8 +152,9 @@ export function decision(
   id: number,
   status: string,
   counts: QueueCounts = { pending: 0, spam: 0, approved: 0 },
+  cascaded = 0,
 ) {
-  return { id, status, moderatedAt: 1, counts }
+  return { id, status, moderatedAt: 1, counts, cascaded }
 }
 
 /** The rows currently on screen, by their accessible name's author. */

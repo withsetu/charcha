@@ -194,19 +194,143 @@ describe('a decision that does not apply', () => {
 
   it('announces a success politely, so it does not interrupt', () => {
     let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS, cascaded: 0 })
     expect(state.announcement?.urgency).toBe('polite')
     expect(state.announcement?.text).toContain('Approved')
     expect(state.announcement?.text).toContain('Z to undo')
   })
 
+  it('says how many replies went with the comment', () => {
+    // #133. The moderator learns that hiding one comment took four rows with it before
+    // they wonder why the badge moved by four.
+    let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS, cascaded: 3 })
+
+    expect(state.announcement?.text).toContain('3 replies')
+    // And what `Z` will and will not do, in the same breath as the offer of it.
+    expect(state.announcement?.text).toContain('Z to undo')
+    expect(state.announcement?.text).toContain('stay spam')
+  })
+
+  it('counts one reply as a reply', () => {
+    let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS, cascaded: 1 })
+
+    expect(state.announcement?.text).toContain('1 reply.')
+    expect(state.announcement?.text).toContain('The reply under it stays spam')
+  })
+
+  it('treats a missing count as none rather than announcing nonsense', () => {
+    // The server sends `cascaded` on every decision (src/admin/route.ts), so this is a
+    // proxy, a Worker mid-deploy or an older deployment. Under-claiming is the safe
+    // direction: the wrong answer here is "and undefined replies" in a live region.
+    let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, {
+      type: 'decide/ok',
+      id: 1,
+      at: 1_000,
+      counts: SOME_COUNTS,
+      cascaded: undefined as unknown as number,
+    })
+
+    expect(state.announcement?.text).not.toContain('repl')
+    expect(state.undo?.cascaded).toBe(0)
+  })
+
+  it('takes the replies off the screen with the comment they hang from', () => {
+    // The defect on #133: the server cascades, the row for the root leaves the list and
+    // the replies stay — styled as pending, under a tab that now says the queue is
+    // empty, with live Approve buttons that would publish a reply beneath a comment the
+    // moderator has just hidden.
+    let state = reduce(initialState('pending'), {
+      type: 'load/ok',
+      page: {
+        comments: [
+          comment(4, { parentId: 1, depth: 1 }),
+          comment(3, { parentId: 1, depth: 1 }),
+          comment(2, { parentId: 1, depth: 1 }),
+          comment(1),
+        ],
+        nextCursor: null,
+        counts: SOME_COUNTS,
+      },
+    })
+
+    state = reduce(state, { type: 'decide/start', id: 1, status: 'spam' })
+
+    expect(state.comments).toEqual([])
+    expect(state.currentId).toBeNull()
+  })
+
+  it('does the same for a delete, and not for an approval', () => {
+    // Mirrors MODERATE_SQL exactly: `?2 in ('spam', 'deleted')`. Approving is judged
+    // one comment at a time, so the replies stay in the queue to be judged.
+    const page = {
+      comments: [comment(2, { parentId: 1, depth: 1 }), comment(1)],
+      nextCursor: null,
+      counts: SOME_COUNTS,
+    }
+    const base = reduce(initialState('pending'), { type: 'load/ok', page })
+
+    expect(reduce(base, { type: 'decide/start', id: 1, status: 'deleted' }).comments).toEqual([])
+    expect(
+      reduce(base, { type: 'decide/start', id: 1, status: 'approved' }).comments.map((c) => c.id),
+    ).toEqual([2])
+  })
+
+  it('leaves a reply that is already in the status being set', () => {
+    // The other half of the mirror: MODERATE_SQL's `status <> ?2` means such a reply is
+    // not moved, so removing it here would take a row off the screen that the server
+    // still holds — the same lie in the other direction.
+    const state = reduce(
+      reduce(initialState('spam'), {
+        type: 'load/ok',
+        page: {
+          comments: [comment(2, { parentId: 1, depth: 1, status: 'spam' }), comment(1)],
+          nextCursor: null,
+          counts: SOME_COUNTS,
+        },
+      }),
+      { type: 'decide/start', id: 1, status: 'spam' },
+    )
+
+    expect(state.comments.map((c) => c.id)).toEqual([2])
+  })
+
+  it('puts every row back, in order, when the decision does not apply', () => {
+    // The cascade is optimistic like the decision itself, so the failure path owes the
+    // owner all of it back — a queue missing three replies nobody moderated is the
+    // failure `decide/failed` exists to prevent, three times over.
+    let state = reduce(initialState('pending'), {
+      type: 'load/ok',
+      page: {
+        comments: [
+          comment(4, { parentId: 1, depth: 1 }),
+          comment(9),
+          comment(3, { parentId: 1, depth: 1 }),
+          comment(1),
+          comment(8),
+        ],
+        nextCursor: null,
+        counts: SOME_COUNTS,
+      },
+    })
+
+    state = reduce(state, { type: 'decide/start', id: 1, status: 'spam' })
+    expect(state.comments.map((c) => c.id)).toEqual([9, 8])
+
+    state = reduce(state, { type: 'decide/failed', id: 1, failure: FAILURE })
+    expect(state.comments.map((c) => c.id)).toEqual([4, 9, 3, 1, 8])
+    expect(state.currentId).toBe(1)
+  })
+
   it('gives two identical sentences two sequence numbers, or the second is never read', () => {
     let state = loaded([1, 2])
     state = reduce(state, { type: 'decide/start', id: 1, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1_000, counts: SOME_COUNTS, cascaded: 0 })
     const first = state.announcement
     state = reduce(state, { type: 'decide/start', id: 2, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 2, at: 2_000, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 2, at: 2_000, counts: SOME_COUNTS, cascaded: 0 })
     expect(state.announcement?.seq).toBeGreaterThan(first?.seq ?? 0)
   })
 })
@@ -214,14 +338,20 @@ describe('a decision that does not apply', () => {
 describe('undo', () => {
   it('is offered after a decision lands, with the clock the caller passed', () => {
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 12_345, counts: SOME_COUNTS })
+    state = reduce(state, {
+      type: 'decide/ok',
+      id: 1,
+      at: 12_345,
+      counts: SOME_COUNTS,
+      cascaded: 0,
+    })
     expect(state.undo).toMatchObject({ from: 'pending', to: 'spam', offeredAt: 12_345 })
     expect(state.undo?.comment.id).toBe(1)
   })
 
   it('restores the row at the index it left, not at the top', () => {
     let state = reduce(loaded([1, 2, 3]), { type: 'decide/start', id: 2, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 2, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 2, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     state = reduce(state, { type: 'undo/start' })
     state = reduce(state, { type: 'undo/ok', counts: SOME_COUNTS })
     expect(state.comments.map((c) => c.id)).toEqual([1, 2, 3])
@@ -237,7 +367,7 @@ describe('undo', () => {
       page: { comments: [comment(7, { status: 'spam' })], nextCursor: null, counts: SOME_COUNTS },
     })
     state = reduce(state, { type: 'decide/start', id: 7, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 7, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 7, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     expect(state.undo?.from).toBe('spam')
   })
 
@@ -257,7 +387,7 @@ describe('undo', () => {
       },
     })
     state = reduce(state, { type: 'decide/start', id: 7, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 7, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 7, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     expect(state.undo?.from).toBe('pending')
 
     state = reduce(state, { type: 'undo/start' })
@@ -270,7 +400,7 @@ describe('undo', () => {
 
   it('reports a failed undo rather than pretending the row is back', () => {
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     state = reduce(state, { type: 'undo/start' })
     state = reduce(state, { type: 'undo/failed', failure: FAILURE })
     expect(state.comments.map((c) => c.id)).toEqual([2])
@@ -280,17 +410,40 @@ describe('undo', () => {
 
   it('expires, and an expiry mid-request does not cancel the request', () => {
     let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     const running = reduce(state, { type: 'undo/start' })
     expect(reduce(running, { type: 'undo/expire' })).toBe(running)
     expect(reduce(state, { type: 'undo/expire' }).undo).toBeNull()
+  })
+
+  it('says plainly that it will not bring the replies back', () => {
+    // #133's second half. `Z` re-issues one status write for the parent, and
+    // MODERATE_SQL only cascades *to* spam and deleted — so the replies stay where the
+    // decision put them. "Undone" on its own claims more than that.
+    let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 3 })
+    state = reduce(state, { type: 'undo/start' })
+    state = reduce(state, { type: 'undo/ok', counts: SOME_COUNTS })
+
+    expect(state.announcement?.text).toContain('pending again')
+    expect(state.announcement?.text).toContain('3 replies')
+    expect(state.announcement?.text).toContain('still spam')
+  })
+
+  it('says nothing about replies when there were none', () => {
+    let state = reduce(loaded([1]), { type: 'decide/start', id: 1, status: 'spam' })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
+    state = reduce(state, { type: 'undo/start' })
+    state = reduce(state, { type: 'undo/ok', counts: SOME_COUNTS })
+
+    expect(state.announcement?.text).not.toContain('repl')
   })
 
   it('holds one offer only: a new decision replaces the last one', () => {
     // `Z` means "take back what I just did". Two offers would make it ambiguous which.
     let state = loaded([1, 2])
     state = reduce(state, { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     state = reduce(state, { type: 'decide/start', id: 2, status: 'approved' })
     expect(state.undo).toBeNull()
   })
@@ -355,7 +508,7 @@ describe('paging past the cap', () => {
 describe('switching view', () => {
   it('starts a new queue and drops everything about the old one', () => {
     let state = reduce(loaded([1, 2], '1.2'), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     state = reduce(state, { type: 'tab', tab: 'spam' })
     expect(state.view).toBe('spam')
     expect(state.phase).toBe('loading')
@@ -394,7 +547,7 @@ describe('the setup tab (#158)', () => {
 
   it('takes the message bar with it, because the row it names is not on screen', () => {
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
     expect(state.undo).not.toBeNull()
 
     state = reduce(state, { type: 'tab', tab: 'setup' })
@@ -420,7 +573,7 @@ describe('the setup tab (#158)', () => {
     // announcement must not name a keystroke the Setup tab refuses.
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'spam' })
     state = reduce(state, { type: 'tab', tab: 'setup' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS })
+    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: SOME_COUNTS, cascaded: 0 })
 
     expect(state.announcement?.text).toBe('Marked spam: Author 1.')
     expect(state.undo).not.toBeNull()
@@ -487,13 +640,25 @@ describe('the per-status counts (#135)', () => {
     // change is not always one — see src/admin/route.ts and
     // test/worker/admin/queue.test.ts. The reducer takes the recount and does no sums.
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: counts(4, 8, 12) })
+    state = reduce(state, {
+      type: 'decide/ok',
+      id: 1,
+      at: 1,
+      counts: counts(4, 8, 12),
+      cascaded: 0,
+    })
     expect(state.counts).toEqual({ pending: 4, spam: 8, approved: 12 })
   })
 
   it('follows an undo the same way', () => {
     let state = reduce(loaded([1, 2]), { type: 'decide/start', id: 1, status: 'approved' })
-    state = reduce(state, { type: 'decide/ok', id: 1, at: 1, counts: counts(4, 8, 12) })
+    state = reduce(state, {
+      type: 'decide/ok',
+      id: 1,
+      at: 1,
+      counts: counts(4, 8, 12),
+      cascaded: 0,
+    })
     state = reduce(state, { type: 'undo/start' })
     state = reduce(state, { type: 'undo/ok', counts: counts(5, 8, 11) })
     expect(state.counts).toEqual({ pending: 5, spam: 8, approved: 11 })

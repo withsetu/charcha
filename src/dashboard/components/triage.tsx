@@ -299,7 +299,13 @@ export function Triage({ onExpired, onSignOut }: { onExpired: () => void; onSign
             expiredCheck(result)
             return
           }
-          dispatch({ type: 'decide/ok', id, at: Date.now(), counts: result.value.counts })
+          dispatch({
+            type: 'decide/ok',
+            id,
+            at: Date.now(),
+            counts: result.value.counts,
+            cascaded: result.value.cascaded,
+          })
         },
         () => {
           dispatch({ type: 'decide/failed', id, failure: DASHBOARD_BUG })

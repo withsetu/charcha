@@ -185,6 +185,28 @@ describe('the moderation write', () => {
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 
+  // #133 added `status <> ?2` to the cascade branch, and it had to not cost the seek
+  // above: the two arms of the OR are separately indexed, so the extra predicate is a
+  // filter on rows the index has already narrowed to one parent's replies rather than
+  // a reason to look at the whole table. The plan is unchanged — asserted here rather
+  // than assumed, because a predicate that defeats MULTI-INDEX OR would turn a
+  // bounded write into a full scan on the busiest thread on the site, silently.
+  it('still seeks both arms of the OR separately with the status filter on it', async () => {
+    const plan = await planOf(MODERATE_SQL, 1, 'spam', 1_753_300_000)
+
+    expect(plan).toMatch(/MULTI-INDEX OR/)
+    expect(plan).toMatch(/USING INTEGER PRIMARY KEY/)
+  })
+
+  it('excludes a reply already in the status being set, so the count is honest', () => {
+    // The number this statement returns is shown to the moderator (#133) beside tab
+    // counts the server recomputes. A reply that did not move must not be in it, or the
+    // sentence and the badges contradict each other — which is the bug, one line down.
+    expect(MODERATE_SQL).toMatch(
+      /parent_id = \?1 and \?2 in \('spam', 'deleted'\) and status <> \?2/,
+    )
+  })
+
   it('never returns a comment body, however many replies it cascades over', () => {
     // Selecting `body` would pull up to 10,000 characters per reply into a 128 MB
     // isolate on the way to discarding all but one row, so hiding one popular
