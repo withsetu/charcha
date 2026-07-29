@@ -44,12 +44,14 @@ function unit(index: number): Float32Array {
  * `spamAxis`. The weights are fitted rather than written by hand, so no test here
  * depends on an encoding the production code does not also use.
  */
-async function storeModel(options: {
-  hamCount?: number
-  spamCount?: number
-  model?: string
-  dims?: number
-} = {}): Promise<void> {
+async function storeModel(
+  options: {
+    hamCount?: number
+    spamCount?: number
+    model?: string
+    dims?: number
+  } = {},
+): Promise<void> {
   let fitted = emptyModel(options.model ?? EMBEDDING_MODEL, options.dims ?? DIMS)
   for (let i = 0; i < 40; i++) {
     fitted = trainedWith(fitted, unit(0), 'spam')

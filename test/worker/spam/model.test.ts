@@ -98,7 +98,9 @@ describe('toUnitVector', () => {
     // at the commenter: one NaN would make every later dot product NaN, and
     // `NaN >= threshold` is false, so the layer would abstain forever and silently.
     expect(toUnitVector(new Float32Array([Number.NaN, 1, 0, 0, 0, 0, 0, 0]))).toBeNull()
-    expect(toUnitVector(new Float32Array([Number.POSITIVE_INFINITY, 1, 0, 0, 0, 0, 0, 0]))).toBeNull()
+    expect(
+      toUnitVector(new Float32Array([Number.POSITIVE_INFINITY, 1, 0, 0, 0, 0, 0, 0])),
+    ).toBeNull()
   })
 })
 
@@ -110,12 +112,8 @@ describe('isTrained — the cold-start gate', () => {
   it('stays false one example short in either class, counted separately', () => {
     // Both counts gate independently. A site with hundreds of spam decisions and
     // four ham ones has no ham model, and a single total would let that pass.
-    expect(
-      isTrained(modelWith({ hamCount: MIN_LABELS_PER_CLASS - 1, spamCount: 500 })),
-    ).toBe(false)
-    expect(
-      isTrained(modelWith({ hamCount: 500, spamCount: MIN_LABELS_PER_CLASS - 1 })),
-    ).toBe(false)
+    expect(isTrained(modelWith({ hamCount: MIN_LABELS_PER_CLASS - 1, spamCount: 500 }))).toBe(false)
+    expect(isTrained(modelWith({ hamCount: 500, spamCount: MIN_LABELS_PER_CLASS - 1 }))).toBe(false)
   })
 
   it('becomes true at the threshold in both classes', () => {
@@ -154,9 +152,7 @@ describe('trainedWith — the online update', () => {
       model = trainedWith(model, nearAxis(1, 0.2, i + 1), 'ham')
     }
 
-    expect(spamProbability(model, nearAxis(0, 0.2, 99))).toBeGreaterThan(
-      SPAM_PROBABILITY_THRESHOLD,
-    )
+    expect(spamProbability(model, nearAxis(0, 0.2, 99))).toBeGreaterThan(SPAM_PROBABILITY_THRESHOLD)
     expect(spamProbability(model, nearAxis(1, 0.2, 99))).toBeLessThan(0.5)
   })
 

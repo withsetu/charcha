@@ -252,11 +252,7 @@ export function spamProbability(model: SpamModel, vector: Float32Array): number 
  * space and there is no arithmetic that makes them one.
  * Enforced by test/worker/spam/model.test.ts.
  */
-export function trainedWith(
-  model: SpamModel,
-  vector: Float32Array,
-  label: SpamLabel,
-): SpamModel {
+export function trainedWith(model: SpamModel, vector: Float32Array, label: SpamLabel): SpamModel {
   if (vector.length !== model.weights.length) return model
 
   const target = label === 'spam' ? 1 : 0

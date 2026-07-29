@@ -40,8 +40,7 @@ function unit(index: number): Float32Array {
 }
 
 /** An embedder that maps a body to an axis by its first character. Deterministic, no AI. */
-const embed: Embedder = (text) =>
-  Promise.resolve(unit(text.charCodeAt(0) % DIMS))
+const embed: Embedder = (text) => Promise.resolve(unit(text.charCodeAt(0) % DIMS))
 
 let threadId: number
 
@@ -375,6 +374,8 @@ describe('the trained classifier, end to end', () => {
       spamCount: MIN_LABELS_PER_CLASS,
     })
     expect(await layer.run(spammy)).toMatchObject({ action: 'review' })
-    expect(await layer.run(contextFor({ body: 'Za considered reply about the article' }))).toBeNull()
+    expect(
+      await layer.run(contextFor({ body: 'Za considered reply about the article' })),
+    ).toBeNull()
   })
 })

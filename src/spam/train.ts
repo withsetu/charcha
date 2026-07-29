@@ -75,11 +75,7 @@ export const PRUNE_EVERY = 50
  * "does not learn" needs. `not-a-decision` is the common one and is not a failure.
  */
 export type TrainingOutcome =
-  | 'trained'
-  | 'not-a-decision'
-  | 'already-labelled'
-  | 'no-such-comment'
-  | 'no-embedding'
+  'trained' | 'not-a-decision' | 'already-labelled' | 'no-such-comment' | 'no-embedding'
 
 /**
  * Which statuses are a judgement about spam, and which are only a judgement.
@@ -118,10 +114,7 @@ export interface TrainingDeps {
  * on the strength of a history it can no longer read.
  * Enforced by test/worker/spam/train.test.ts.
  */
-function modelToTrain(
-  stored: Awaited<ReturnType<typeof readSpamModel>>,
-  dims: number,
-): SpamModel {
+function modelToTrain(stored: Awaited<ReturnType<typeof readSpamModel>>, dims: number): SpamModel {
   if (stored === null) return emptyModel(EMBEDDING_MODEL, dims)
   if (stored.model !== EMBEDDING_MODEL || stored.dims !== dims) {
     return emptyModel(EMBEDDING_MODEL, dims)
