@@ -116,6 +116,70 @@ describe('the layered run', () => {
 
     expect(verdict.action).toBe('allow')
   })
+
+  it('skips a reviewOnly layer once a review is held, because its answer is discarded', async () => {
+    // #10. The first review's reason is the one kept and a reviewOnly layer cannot
+    // reject, so asking one after a review can no longer change the verdict — it can
+    // only cost. For layer 6 that cost is a metered Workers AI call on the public
+    // write endpoint, spent on an answer nobody reads, and omitting one form field is
+    // enough to make layer 2 hold every submission.
+    const seen: string[] = []
+    const verdict = await runLayers(
+      [
+        spy('holder', { action: 'review', reason: 'unsure' }, seen),
+        {
+          ...spy('expensive', { action: 'review', reason: 'never-asked' }, seen),
+          reviewOnly: true,
+        },
+      ],
+      contextFor(),
+    )
+
+    expect(seen).toEqual(['holder'])
+    if (verdict.action !== 'review') throw new Error('expected review')
+    expect(verdict.reason).toContain('unsure')
+  })
+
+  it('still runs a reviewOnly layer when nothing has been held', async () => {
+    const seen: string[] = []
+    const verdict = await runLayers(
+      [
+        spy('quiet', null, seen),
+        { ...spy('expensive', { action: 'review', reason: 'spoke' }, seen), reviewOnly: true },
+      ],
+      contextFor(),
+    )
+
+    expect(seen).toEqual(['quiet', 'expensive'])
+    expect(verdict.action).toBe('review')
+  })
+
+  it('never skips a layer that can reject, because a reject overrules a review', async () => {
+    // The boundary of the rule above. A rejecting layer's answer still matters after
+    // a review, so marking one `reviewOnly` would let a held comment skip the layer
+    // that would have refused it — which is the rate limit, among others.
+    const seen: string[] = []
+    const verdict = await runLayers(
+      [
+        spy('holder', { action: 'review', reason: 'unsure' }, seen),
+        spy('refuser', { action: 'reject', reason: 'caught' }, seen),
+      ],
+      contextFor(),
+    )
+
+    expect(seen).toEqual(['holder', 'refuser'])
+    expect(verdict.action).toBe('reject')
+  })
+
+  it('marks exactly the layers that never reject, and no others', () => {
+    // `reviewOnly` is a promise about a layer's strongest answer, and getting it
+    // wrong on a rejecting layer would silently disable that layer for any held
+    // comment. Only the classifier makes the promise today.
+    const check = createSpamCheck({})
+    const reviewOnly = check.layers.filter((layer) => layer.reviewOnly === true)
+
+    expect(reviewOnly.map((layer) => layer.name)).toEqual(['classifier'])
+  })
 })
 
 describe('createSpamCheck — the assembled ordering', () => {

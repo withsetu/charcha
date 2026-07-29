@@ -319,7 +319,14 @@ export async function handleCommentStatus(
       embed: config.embed,
       now,
     })
-    if (trained === 'failed' || trained === 'no-such-comment') {
+    // **`no-embedding` is on this list, and leaving it off was the bug.** It is the
+    // outcome that means "the classifier is not learning from this" — Workers AI
+    // unreachable, the allowance spent, the binding absent — and it is the one an
+    // owner most needs to see, because nothing else changes: the decision succeeds,
+    // the counts move, the dashboard looks identical. `trained` and
+    // `not-a-decision` are the ordinary cases and stay silent, so this is one line
+    // per decision that went wrong rather than one per decision.
+    if (trained !== 'trained' && trained !== 'not-a-decision') {
       console.log(JSON.stringify({ event: 'classifier_training', outcome: trained, id }))
     }
 

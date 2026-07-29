@@ -33,6 +33,7 @@ import type { LayerOutcome, SpamLayer } from './layer'
 import { announceOnce } from './log'
 import {
   EMBEDDING_MODEL,
+  MIN_LABELS_PER_CLASS,
   SPAM_PROBABILITY_THRESHOLD,
   decodeWeights,
   isTrained,
@@ -73,6 +74,10 @@ export function classifierLayer(config: ClassifierConfig = {}): SpamLayer {
 
   return {
     name: 'classifier',
+    // This layer's strongest answer is `review`, so once another layer has held the
+    // comment its answer is discarded — and it is the only layer whose answer costs
+    // a metered inference call. See `SpamLayer.reviewOnly`.
+    reviewOnly: true,
     async run(context: SpamCheckContext): Promise<LayerOutcome> {
       // **Total, and it is the second catch rather than the first.**
       // `workersAiEmbedder` already turns every Workers AI failure into `null`, so
@@ -109,6 +114,37 @@ export function classifierLayer(config: ClassifierConfig = {}): SpamLayer {
     const stored = await readSpamModel(context.db)
     if (stored === null) return null
 
+    // **Both cheap checks happen before the decode, and the order is the point.**
+    // Decoding is up to 4,096 floats out of a JavaScript array of 16,384 byte
+    // values, and it is the largest piece of CPU this layer spends — while neither
+    // of these two questions needs a single weight. On a site trained in one class
+    // and not the other, every public submission would otherwise pay that decode to
+    // reach an answer the counts alone already gave.
+    //
+    // The cold-start gate itself is CLAUDE.md's rule: "Cold start must abstain, not
+    // guess." Below MIN_LABELS_PER_CLASS human decisions in *each* class there is no
+    // model worth consulting. Sitting above the embedding as well as above the
+    // decode is what makes an untrained deployment cost one rowid seek and nothing
+    // else — no CPU, no subrequest, no neurons.
+    // Enforced by test/worker/spam/classifier.test.ts.
+    if (stored.hamCount < MIN_LABELS_PER_CLASS || stored.spamCount < MIN_LABELS_PER_CLASS) {
+      return null
+    }
+
+    // Weights fitted in one embedding space say nothing about a vector from another,
+    // and the id is recorded on the row precisely so this is checkable rather than
+    // assumed. Abstain and say so; ./train.ts is what refits.
+    if (stored.model !== EMBEDDING_MODEL) {
+      announceOnce('classifier:model-changed', {
+        event: 'spam_layer_inactive',
+        layer: 'classifier',
+        reason: 'model-changed',
+        fitted: stored.model,
+        current: EMBEDDING_MODEL,
+      })
+      return null
+    }
+
     const weights = decodeWeights(stored.weights, stored.dims)
     if (weights === null) return null
 
@@ -120,29 +156,10 @@ export function classifierLayer(config: ClassifierConfig = {}): SpamLayer {
       hamCount: stored.hamCount,
       spamCount: stored.spamCount,
     }
-
-    // The cold-start gate, and it is checked before anything is spent. CLAUDE.md:
-    // "Cold start must abstain, not guess." Below MIN_LABELS_PER_CLASS human
-    // decisions in *each* class there is no model worth consulting, and asking one
-    // anyway would be guessing with a decimal point on it. Being above the embedding
-    // rather than below it is what makes an untrained deployment cost one row read
-    // and no inference at all.
-    // Enforced by test/worker/spam/classifier.test.ts.
+    // Restated through the shared predicate, so the counts test above cannot drift
+    // from the gate the rest of the project reads. It is the same condition, and it
+    // is free here.
     if (!isTrained(model)) return null
-
-    // Weights fitted in one embedding space say nothing about a vector from another,
-    // and the id is recorded on the row precisely so this is checkable rather than
-    // assumed. Abstain and say so; ./train.ts is what refits.
-    if (model.model !== EMBEDDING_MODEL) {
-      announceOnce('classifier:model-changed', {
-        event: 'spam_layer_inactive',
-        layer: 'classifier',
-        reason: 'model-changed',
-        fitted: model.model,
-        current: EMBEDDING_MODEL,
-      })
-      return null
-    }
 
     const vector = await embed(context.comment.body)
     if (vector === null) return null

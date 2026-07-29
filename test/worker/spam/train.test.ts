@@ -16,7 +16,8 @@
 // No test here touches the real `AI` binding; see test/worker/spam/classifier.test.ts
 // for why it cannot.
 
-import { env, exports } from 'cloudflare:workers'
+import { Hono } from 'hono'
+import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   getOrCreateThread,
@@ -26,6 +27,7 @@ import {
   setCommentStatus,
   writeCommentVector,
 } from '../../../src/db'
+import { COMMENT_STATUS_PATH, handleCommentStatus } from '../../../src/admin/route'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import { classifierLayer } from '../../../src/spam/classifier'
 import type { Embedder } from '../../../src/spam/embed'
@@ -58,6 +60,19 @@ function unit(index: number): Float32Array {
 
 /** An embedder that maps a body to an axis by its first character. Deterministic, no AI. */
 const embed: Embedder = (text) => Promise.resolve(unit(text.charCodeAt(0) % DIMS))
+
+/**
+ * The real moderation handler, on the real path, with an embedder injected.
+ *
+ * `src/index.ts` registers the same handler with no config, which is why driving it
+ * through `exports.default.fetch` cannot exercise training at all — that route
+ * reaches the live `AI` binding. `AdminRouteConfig.embed` exists for exactly this,
+ * and until this test used it, nothing did.
+ */
+const moderationApp = new Hono<{ Bindings: Env }>()
+moderationApp.post(COMMENT_STATUS_PATH, (c) =>
+  handleCommentStatus(c, { embed, now: () => t0 + 10 }),
+)
 
 let threadId: number
 
@@ -121,33 +136,45 @@ describe('#28 — the cascade must not become training data', () => {
     expect(model).toMatchObject({ spamCount: 1, hamCount: 0 })
   })
 
-  it('records the same one label through the real moderation endpoint', async () => {
-    // Through the Worker rather than the function, because the guard is structural:
+  it('records the same one label through the real moderation handler', async () => {
+    // Through the handler rather than the function, because the guard is structural:
     // the handler has only the id from the request path to give, and the cascade's
     // reach comes back as a count rather than as ids. There is no reply id at that
     // call site to pass by mistake.
+    //
+    // **It passes an embedder, and that is what makes the assertion mean anything.**
+    // Driving the endpoint through `fetch` reaches the real `AI` binding, which
+    // cannot be used in tests — so training abstains, *nothing* is written, and the
+    // test would pass identically if the handler looped over every cascaded reply
+    // and labelled each one. That version of this test read as coverage of the
+    // branch's headline property and enforced nothing; found in review. With a
+    // stand-in the training really runs, so exactly one row is the real assertion.
     configurePassword(TEST_PASSWORD)
     try {
       const root = await comment('a comment somebody will reply to before it is judged')
       for (let i = 0; i < 3; i++) await comment(`a reply number ${String(i)}`, root)
       const { token } = await issueSession(TEST_PASSWORD, Math.floor(Date.now() / 1000))
-      const cookie = `${SESSION_COOKIE_NAME}=${token}`
 
-      const response = await exports.default.fetch(
-        `https://charcha.example/admin/api/comments/${String(root)}/status`,
-        {
+      const response = await moderationApp.fetch(
+        new Request(`https://charcha.example/admin/api/comments/${String(root)}/status`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', cookie },
+          headers: {
+            'content-type': 'application/json',
+            cookie: `${SESSION_COOKIE_NAME}=${token}`,
+          },
           body: JSON.stringify({ status: 'spam' }),
-        },
+        }),
+        env,
       )
 
       expect(response.status).toBe(200)
       expect(await response.json()).toMatchObject({ cascaded: 3 })
-      // Zero rows, not one: this deployment's AI binding cannot be reached in tests,
-      // so training abstained. What matters is that the decision still succeeded and
-      // that no reply was labelled on the way past.
-      expect((await vectorRows()).filter((row) => row.comment_id !== root)).toEqual([])
+
+      // Training ran — so the one row is a guard that fired, not an absence.
+      expect(await vectorRows()).toEqual([
+        { comment_id: root, label: 'spam', model: EMBEDDING_MODEL },
+      ])
+      expect(await readSpamModel(db)).toMatchObject({ spamCount: 1, hamCount: 0 })
     } finally {
       restorePassword()
     }

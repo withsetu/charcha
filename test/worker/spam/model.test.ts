@@ -194,6 +194,45 @@ describe('spamProbability', () => {
   })
 })
 
+describe('the schema and the code agree about the width cap', () => {
+  it('refuses a row the TypeScript cap would have allowed through', async () => {
+    // `MAX_MODEL_DIMS` is written twice — here in TypeScript and as
+    // `CHECK (dims BETWEEN 1 AND 4096)` in migrations/0003_spam_model.sql — and
+    // nothing typechecks a constant against a SQL string. This is the same hazard
+    // src/cascade.ts exists to prevent, answered with an assertion rather than a
+    // shared definition, because a migration is frozen once it has been applied and
+    // cannot import anything.
+    const { env } = await import('cloudflare:workers')
+
+    await expect(
+      env.DB.prepare(
+        `insert into spam_model (id, model, dims, weights, bias, ham_count, spam_count, updated_at)
+         values (1, ?1, ?2, ?3, 0, 0, 0, 0)`,
+      )
+        .bind('@cf/test/model', MAX_MODEL_DIMS + 1, new ArrayBuffer(4))
+        .run(),
+    ).rejects.toThrow(/CHECK constraint failed/i)
+  })
+
+  it('accepts the widest row the cap allows, so the bound is not off by one', async () => {
+    const { env } = await import('cloudflare:workers')
+    await env.DB.exec('DELETE FROM spam_model')
+
+    await env.DB.prepare(
+      `insert into spam_model (id, model, dims, weights, bias, ham_count, spam_count, updated_at)
+       values (1, ?1, ?2, ?3, 0, 0, 0, 0)`,
+    )
+      .bind('@cf/test/model', MAX_MODEL_DIMS, new ArrayBuffer(4))
+      .run()
+
+    const row = await env.DB.prepare('select dims from spam_model where id = 1').first<{
+      dims: number
+    }>()
+    expect(row?.dims).toBe(MAX_MODEL_DIMS)
+    await env.DB.exec('DELETE FROM spam_model')
+  })
+})
+
 describe('the constants this layer is judged on', () => {
   it('holds the learning rate and threshold inside ranges that mean something', () => {
     expect(LEARNING_RATE).toBeGreaterThan(0)

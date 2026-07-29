@@ -16,6 +16,7 @@
 // POST into a 500. Card rule 5: fail closed, and closed here means silent.
 // Enforced by test/worker/spam/embed.test.ts.
 
+import { announceOnce } from './log'
 import { EMBEDDING_MODEL, MAX_MODEL_DIMS, toUnitVector } from './model'
 
 /**
@@ -30,10 +31,19 @@ import { EMBEDDING_MODEL, MAX_MODEL_DIMS, toUnitVector } from './model'
  * to fit?", so the default behaviour on a long comment is an error on the reader's
  * submission.
  *
- * The schema allows a 10,000-character body. Four thousand characters is under
- * 8,192 tokens even in the worst case of a script that tokenises near one token per
- * character, and it is far more of a comment than any spam signal needs. Cutting
- * here makes the truncation this project's decision, at a boundary written down.
+ * The schema allows a 10,000-character body. Four thousand characters is well under
+ * 8,192 tokens for ordinary prose in any script, and it is far more of a comment
+ * than any spam signal needs. Cutting here makes the truncation this project's
+ * decision, at a boundary written down.
+ *
+ * **It is not a token bound, and this is deliberately not claimed as one.** bge-m3
+ * tokenises with XLM-R SentencePiece, which has byte fallback: a codepoint the
+ * vocabulary does not know becomes several tokens rather than one, so adversarial
+ * input can exceed 8,192 tokens well inside this character cap. Correctness survives
+ * that — `truncate_inputs: true` below means the model shortens rather than errors —
+ * but the *cost* does not: a worst-case submission spends several times the neurons
+ * of a typical one. The bound on that is layer 4, which rejects before this layer is
+ * reached (see src/spam/index.ts), and #181, which is the accounting this has none of.
  * Enforced by test/worker/spam/embed.test.ts.
  */
 export const MAX_EMBED_CHARS = 4000
@@ -123,11 +133,29 @@ export function workersAiEmbedder(ai: Ai): Embedder {
       })
       return parseEmbedding(response)
     } catch (error) {
-      // Logged rather than swallowed: a binding that fails on every comment leaves
-      // the layer with no symptom at all — it abstains, which is also what it does
-      // when it is working and unsure. The owner's log is the only place the two
-      // are distinguishable.
-      console.error('classifier: embedding failed', error)
+      // **Once per isolate, and the message rather than the error.** Both halves are
+      // about src/spam/log.ts's rule rather than about tidiness:
+      //
+      //   - *Once*, because this is on the public submission path. When the daily
+      //     neuron allowance is spent the binding fails on **every** comment for the
+      //     rest of the day, so a line per failure is one log line per submission,
+      //     at a rate an attacker chooses. "One line per stopped comment is a signal;
+      //     one line per comment is an invoice."
+      //   - *The message*, because the error object comes from outside this Worker
+      //     and this project has no contract with its shape. Serialising it could put
+      //     the request — which is the commenter's body — into a log that log.ts
+      //     promises carries no comment body, and that #19's retention sweep cannot
+      //     reach.
+      //
+      // The cost is that a second, different failure later in the isolate's life is
+      // not reported. That is the right way round: the first cause is the one worth
+      // having, and an unbounded log on a public endpoint is a defect of its own.
+      announceOnce('classifier:embed-failed', {
+        event: 'spam_layer_degraded',
+        layer: 'classifier',
+        reason: 'embedding-failed',
+        message: error instanceof Error ? error.message : 'unknown',
+      })
       return null
     }
   }

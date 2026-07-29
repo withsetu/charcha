@@ -21,6 +21,23 @@ export type LayerOutcome = { action: 'review' | 'reject'; reason: string } | nul
 export interface SpamLayer {
   /** Short, stable, and safe to log — it names the layer, never the comment. */
   readonly name: string
+  /**
+   * True for a layer whose strongest answer is `review` (#10).
+   *
+   * **It is a cost declaration, not a policy.** `runLayers` keeps the *first*
+   * review's reason and a later review changes nothing, so once some layer has held
+   * a comment, asking a review-only layer can no longer alter the verdict — its
+   * answer is discarded whatever it is. For a layer that is free that is merely
+   * pointless; for layer 6, which spends a metered Workers AI call on the public
+   * write endpoint, it is an unauthenticated caller making a deployment spend
+   * neurons on an answer nobody reads. Omitting the elapsed field is enough to
+   * produce a `review` from layer 2 (src/spam/timing.ts) on every submission.
+   *
+   * A layer that can `reject` must never set this: its answer still matters after a
+   * review, because a reject overrules one.
+   * Enforced by test/worker/spam/order.test.ts.
+   */
+  readonly reviewOnly?: boolean
   run(context: SpamCheckContext): LayerOutcome | Promise<LayerOutcome>
 }
 
@@ -38,6 +55,10 @@ export interface SpamLayer {
  *   A later `reject` therefore overrules an earlier `review`; the first review's
  *   reason is the one kept, because it names the layer that doubted the comment
  *   first.
+ * - **A `reviewOnly` layer is skipped once a review is held.** That is the one
+ *   exception to the rule above, and it follows from it rather than qualifying it:
+ *   such a layer cannot reject and cannot replace the kept reason, so its answer is
+ *   already discarded — running it can only cost. See `SpamLayer.reviewOnly`.
  */
 export async function runLayers(
   layers: readonly SpamLayer[],
@@ -46,6 +67,8 @@ export async function runLayers(
   let held: { layer: string; reason: string } | null = null
 
   for (const layer of layers) {
+    if (held !== null && layer.reviewOnly === true) continue
+
     const outcome = await layer.run(context)
     if (outcome === null) continue
 

@@ -34,6 +34,7 @@ import {
 import type { CommentStatus } from '../db'
 import type { Embedder } from './embed'
 import { workersAiEmbedder } from './embed'
+import { announceOnce } from './log'
 import {
   EMBEDDING_MODEL,
   type SpamLabel,
@@ -104,10 +105,38 @@ export interface TrainingDeps {
 }
 
 /**
+ * One line per model reset, naming what was discarded.
+ *
+ * Not `announceOnce`: a reset is an event rather than a fact about the deployment,
+ * it happens at most once per moderation decision on an authenticated endpoint, and
+ * the counts it reports are the whole point — "discarded 412 ham and 380 spam" is
+ * what tells an owner their classifier did not merely go quiet.
+ * Enforced by test/worker/spam/train.test.ts.
+ */
+function reportReset(
+  reason: string,
+  stored: NonNullable<Awaited<ReturnType<typeof readSpamModel>>>,
+  liveDims: number,
+): void {
+  console.warn(
+    JSON.stringify({
+      event: 'classifier_model_reset',
+      reason,
+      fitted: stored.model,
+      current: EMBEDDING_MODEL,
+      storedDims: stored.dims,
+      liveDims,
+      discardedHam: stored.hamCount,
+      discardedSpam: stored.spamCount,
+    }),
+  )
+}
+
+/**
  * The model to train from, given what is stored and how wide the live embedding is.
  *
- * Three cases, and the middle one is the reason this is a function. A model fitted
- * on a different embedding model, or at a different width, holds weights that mean
+ * Three cases, and the middle one is the reason this is a function. A model fitted on
+ * a different embedding model, or at a different width, holds weights that mean
  * nothing about this vector — so it is *replaced*, counts and all, rather than
  * carried forward. Keeping the counts would be worse than useless: they are the
  * cold-start gate, so a model that had learned nothing would be trusted immediately
@@ -116,12 +145,25 @@ export interface TrainingDeps {
  */
 function modelToTrain(stored: Awaited<ReturnType<typeof readSpamModel>>, dims: number): SpamModel {
   if (stored === null) return emptyModel(EMBEDDING_MODEL, dims)
+
+  // **The most destructive branch in this feature, so it announces itself.** A reset
+  // discards every weight and both counts — potentially thousands of decisions — and
+  // the site is then untrained until MIN_LABELS_PER_CLASS *new* comments are judged
+  // in each class, with the `already-labelled` guard declining to re-feed the old
+  // ones. It is still the right answer (see the doc comment above), but a reset
+  // nobody is told about is indistinguishable from a classifier that never worked,
+  // and the trigger can be one anomalous response width rather than a deliberate
+  // change of model. #182 is the recovery path this does not have.
   if (stored.model !== EMBEDDING_MODEL || stored.dims !== dims) {
+    reportReset(stored.model === EMBEDDING_MODEL ? 'width-changed' : 'model-changed', stored, dims)
     return emptyModel(EMBEDDING_MODEL, dims)
   }
 
   const weights = decodeWeights(stored.weights, stored.dims)
-  if (weights === null) return emptyModel(EMBEDDING_MODEL, dims)
+  if (weights === null) {
+    reportReset('weights-unreadable', stored, dims)
+    return emptyModel(EMBEDDING_MODEL, dims)
+  }
 
   return {
     model: stored.model,
@@ -158,17 +200,35 @@ export async function trainOnDecision(
 
   const embed: Embedder | null =
     deps.embed ?? (deps.ai === undefined ? null : workersAiEmbedder(deps.ai))
-  if (embed === null) return 'no-embedding'
+  if (embed === null) {
+    // Once per isolate, and it is the counterpart to `classifier:no-binding` rather
+    // than a duplicate of it. On a deployment whose `ai` binding did not provision,
+    // **every moderation decision silently fails to train, forever** — and unlike a
+    // classifier that is merely quiet, there is no other signal at all: no verdict is
+    // missing, no comment is affected, nothing on the dashboard changes. Without this
+    // line the owner's only evidence would be that the feature never started working.
+    announceOnce('classifier:training-no-binding', {
+      event: 'spam_layer_inactive',
+      layer: 'classifier',
+      reason: 'no-ai-binding-for-training',
+    })
+    return 'no-embedding'
+  }
 
   const subject = await readTrainingSubject(deps.db, commentId)
   if (subject === null) return 'no-such-comment'
 
-  // **The same decision twice trains nothing.** Without this, a double-clicked
-  // Approve button — or a dashboard retrying a request it thought had failed —
-  // applies the same gradient again, so one comment counts as two examples and the
-  // cold-start gate can be walked past by clicking. A *changed* mind still trains:
-  // the labels differ, and that is a moderator correcting the record.
-  // Enforced by test/worker/spam/train.test.ts.
+  // **The same decision twice is intended to train nothing.** Without this, a
+  // double-clicked Approve button — or a dashboard retrying a request it thought had
+  // failed — applies the same gradient again, so one comment counts as two examples
+  // and the cold-start gate can be walked past by clicking. A *changed* mind still
+  // trains: the labels differ, and that is a moderator correcting the record.
+  //
+  // Worded as intent rather than as fact, because it has a limit the code does not
+  // enforce: the prior label is read from `comment_vectors`, and the prune deletes
+  // those rows past MAX_VECTORS_PER_LABEL. Past that many decisions in a class,
+  // re-clicking the same status on an old comment trains again. Recorded on #182.
+  // Enforced by test/worker/spam/train.test.ts, within that bound.
   if (subject.priorLabel === label) return 'already-labelled'
 
   const vector = await embed(subject.body)
