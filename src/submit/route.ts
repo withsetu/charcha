@@ -1,16 +1,17 @@
-// The HTTP boundary for POST /comments. It owns exactly two things the pipeline
-// does not: bounding the raw request body before anything parses it, and mapping a
-// SubmitResult onto a status code and content type. The pipeline owns the order of
-// everything in between.
+// The HTTP boundary for POST /comments. It owns the three things the pipeline does
+// not: bounding the raw request body before anything parses it, mapping a
+// SubmitResult onto a status code and content type, and assembling the two
+// per-request dependencies that exist only on the Context — the notifier built from
+// `c.env`, and the `waitUntil` that runs it after the response (#125). The pipeline
+// owns the order of everything in between.
 // Enforced by test/worker/submit/route.test.ts.
 
 import type { Context } from 'hono'
 import { createNotifier } from '../notify'
 import { readCappedText } from '../request-body'
 import { withFragmentHeaders } from '../response-headers'
-// `announceOnce` lives under src/spam because that is where it was first needed; it
-// is generic isolate-scoped observability and src/admin and src/notify already reuse
-// it. Its dedupe set is shared across callers, so the key here is namespaced.
+// Generic isolate-scoped observability, despite the path — see src/spam/log.ts. Its
+// dedupe set is shared across callers, so the key used here is namespaced.
 import { announceOnce } from '../spam/log'
 import { runSubmission } from './pipeline'
 import type { SubmitResult } from './pipeline'

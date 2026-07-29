@@ -11,12 +11,13 @@
 // the stub is what the assertions read — a test that let a request out would be
 // mailing a third party from CI.
 //
-// **The isolate's send budget is a real constraint on this file.** The production
-// notifier draws on the module-scope bucket in src/notify/index.ts — NOTIFY_BURST,
-// five tokens, refilling once every fifteen minutes — and nothing here can reset it,
-// which is exactly the property src/notify/throttle.ts is for. Four tests below reach
-// it, in file order; a fifth would spend the last token, and a sixth would test the
-// rate limiter while reading as a test of the wiring.
+// **The isolate's send budget is a real constraint on this file, and it is spent.**
+// The production notifier draws on the module-scope bucket in src/notify/index.ts —
+// NOTIFY_BURST, five tokens, refilling once every fifteen minutes — and nothing here
+// can reset it, which is exactly the property src/notify/throttle.ts is for. Five
+// tests below attempt a send, in file order, which is the whole burst. A sixth would
+// be rate-limited and would fail while reading as a broken wiring, so a new test that
+// needs a send **replaces** one rather than joining them.
 
 import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -218,18 +219,30 @@ describe('POST /comments — unconfigured means off, not broken', () => {
 })
 
 describe('POST /comments — a comment the spam layers rejected never mails', () => {
-  it('sends nothing for a submission the honeypot caught', async () => {
-    // A spam flood becoming an email flood at the owner's expense is the failure
-    // this rules out. The seam sits after the write and the reject path returns
-    // before it, so the cost of a stopped flood is zero emails and zero quota.
+  it('mails for the comment that got through and not for the one the honeypot caught', async () => {
+    // A spam flood becoming an email flood at the owner's expense is the failure this
+    // rules out. The seam sits after the write and the reject path returns before it,
+    // so a stopped flood costs zero emails and zero of the owner's Resend quota.
+    //
+    // The accepted comment is in the same test deliberately, and is not decoration: a
+    // bare "nothing was sent" passes just as well when nothing is wired, when the
+    // secrets are unset, and when the stub was never installed. One send and exactly
+    // one is the assertion that can tell those apart from the property.
     configureNotify()
     const calls = stubFetch(accepted)
 
-    const response = await post({ [HONEYPOT_FIELD]: 'https://buy-pills.example' })
+    const rejected = await post({ [HONEYPOT_FIELD]: 'https://buy-pills.example' })
+    const accepted202 = await post({ body: 'A comment written by somebody who is not a robot.' })
 
-    expect(response.status).toBe(403)
-    expect(await countComments()).toBe(0)
-    expect(calls).toHaveLength(0)
+    expect(rejected.status).toBe(403)
+    expect(accepted202.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(1)
+    })
+    // The one send is the accepted comment's, not the rejected one's.
+    expect(calls[0]?.body).toContain('somebody who is not a robot')
+    expect(calls[0]?.body).not.toContain('buy-pills')
   })
 })
 
@@ -342,7 +355,18 @@ describe('POST /comments — no ExecutionContext, no notification', () => {
     // no way to run work after the response, and the pipeline's answer is to do
     // nothing: awaiting the send would put Resend in front of the reader's POST, and
     // dropping the promise would discard its failures. The comment still arrives.
+    //
+    // The announcement is asserted rather than assumed, because "no send" alone
+    // cannot tell this apart from the shape where Hono returned undefined instead of
+    // throwing: `deferFor` would hand back a live closure, the pipeline's own
+    // try/catch would swallow the resulting TypeError, and this test would stay green
+    // while production logged a dispatch failure on every single comment. Found in
+    // review.
     configureNotify()
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '))
+    })
     const calls = stubFetch(accepted)
 
     const response = await app.fetch(
@@ -357,5 +381,6 @@ describe('POST /comments — no ExecutionContext, no notification', () => {
     expect(response.status).toBe(202)
     expect(await countComments()).toBe(1)
     expect(calls).toHaveLength(0)
+    expect(logs.join('\n')).toContain('no ExecutionContext')
   })
 })
