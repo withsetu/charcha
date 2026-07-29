@@ -36,7 +36,12 @@ import {
   encodeWeights,
   toUnitVector,
 } from '../../../src/spam/model'
-import { MAX_VECTORS_PER_LABEL, PRUNE_EVERY, trainOnDecision } from '../../../src/spam/train'
+import {
+  MAX_VECTORS_PER_LABEL,
+  PRUNE_EVERY,
+  trainOnDecision,
+  trainOnDecisionSafely,
+} from '../../../src/spam/train'
 import { createSpamCheck } from '../../../src/spam'
 import { contextFor } from './context'
 import { TEST_PASSWORD, configurePassword, restorePassword } from '../admin/env'
@@ -238,6 +243,46 @@ describe('when the embedding cannot be taken', () => {
 
     expect(await trainOnDecision(id, 'spam', { db, now: t0 })).toBe('no-embedding')
     expect(await vectorRows()).toEqual([])
+  })
+})
+
+describe('training must never fail a decision that is already committed', () => {
+  // The moderation write happens before this runs, so nothing here may propagate —
+  // and nothing here may vanish either. Found by review: `trainOnDecisionSafely`
+  // carried an "Enforced by" naming this file while no test in it called the
+  // function at all, which is the #107 failure exactly — a comment sitting where a
+  // reader goes to verify the property, suppressing the check.
+  function brokenDb(): D1Database {
+    return {
+      ...db,
+      prepare() {
+        throw new Error('D1 is having a day')
+      },
+    } as unknown as D1Database
+  }
+
+  it('reports failure rather than throwing', async () => {
+    await expect(
+      trainOnDecisionSafely(1, 'spam', { db: brokenDb(), embed, now: t0 }),
+    ).resolves.toBe('failed')
+  })
+
+  it('is the wrapper doing the work, not the function underneath', async () => {
+    // The contrast is the assertion. `trainOnDecision` propagates, and the handler
+    // calls the wrapper — so if the two were ever swapped at the call site, a
+    // classifier fault would become a 500 for the one person doing the moderating.
+    await expect(trainOnDecision(1, 'spam', { db: brokenDb(), embed, now: t0 })).rejects.toThrow(
+      /D1 is having a day/,
+    )
+  })
+
+  it('still reports the ordinary outcomes through the safe wrapper', async () => {
+    const id = await comment('a comment judged while everything is working')
+
+    expect(await trainOnDecisionSafely(id, 'approved', { db, embed, now: t0 })).toBe('trained')
+    expect(await trainOnDecisionSafely(id, 'deleted', { db, embed, now: t0 })).toBe(
+      'not-a-decision',
+    )
   })
 })
 
