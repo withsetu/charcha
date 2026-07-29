@@ -152,6 +152,16 @@
   // is noise on a line nobody can act on. Saying it out loud is also the more honest
   // record: `wrangler dev` against this file reaches the owner's real account and
   // spends real neurons.
+  //
+  // **Which is why package.json's `dev` script is `wrangler dev --local`.** Plain
+  // `wrangler dev` now refuses to start at all without a CLOUDFLARE_API_TOKEN —
+  // "Failed to start the remote proxy session" before the first request — because it
+  // opens the remote session for this binding eagerly. That would make a Cloudflare
+  // account a prerequisite for running this project locally, which it has never been.
+  // `--local` is documented as "Run locally with remote bindings disabled", and under
+  // it `env.AI.run` throws, src/spam/embed.ts catches, and layer 6 abstains — which is
+  // the same path a deployment with no Workers AI takes and is covered by tests.
+  // Drop the flag, with credentials, to exercise the classifier for real.
   "ai": {
     "binding": "AI",
     "remote": true
