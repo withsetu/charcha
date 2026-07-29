@@ -26,7 +26,7 @@ from there.
 | `data-thread` | the mount element | Pins the conversation to a slug of your choosing instead of the page's path. Use it when the same conversation appears at more than one address, or when your CDN rewrites paths |
 | `data-api` | the mount element | The deployment address, if it is not where `embed.js` was served from |
 | `data-charcha` | any element | An alternative to `id="charcha"`, for pages that mount more than one widget |
-| `data-turnstile-sitekey` | the mount element | Your [Turnstile](https://developers.cloudflare.com/turnstile/) sitekey. Set it **only** if you also set `TURNSTILE_SECRET_KEY` on the Worker — see below |
+| `data-turnstile-sitekey` | the mount element | Your [Turnstile](https://developers.cloudflare.com/turnstile/) sitekey — half of a pair. Set it **exactly when** `TURNSTILE_SECRET_KEY` is set on the Worker, and not otherwise; the bot check is the one optional thing worth turning on, and either half alone misbehaves — see below |
 
 `embed.js` is served as a **static asset**, so fetching it costs your deployment nothing
 against the Cloudflare request budget — only the comment read does. It is
@@ -34,7 +34,17 @@ against the Cloudflare request budget — only the comment read does. It is
 
 ## Turnstile
 
-Turnstile is optional and off. With no `TURNSTILE_SECRET_KEY` on the Worker, Charcha
+Turnstile is optional and off until you set it up — and it is the one optional thing
+here worth going out of your way for. It is the only layer of the spam pipeline that asks
+for evidence rather than for the absence of a problem: the honeypot, the typing-speed
+floor and the link count all measure what a comment is *not*, and a script written
+against this form passes every one of them. It is free — Cloudflare's free plan is
+[unlimited verification requests](https://developers.cloudflare.com/turnstile/plans/), up
+to 20 widgets, checked 2026-07-29 — and it runs on the same Cloudflare account the Worker
+is already deployed to. The [README](../README.md#turning-on-the-optional-features) has
+the two steps.
+
+With no `TURNSTILE_SECRET_KEY` on the Worker, Charcha
 never checks a token and never makes the call; with no `data-turnstile-sitekey` on the
 page, Cloudflare's script is never fetched. Nothing loads speculatively.
 
@@ -50,7 +60,8 @@ attribute discloses nothing.
 
 The Worker's half is **not** collected by the deploy form, deliberately: that form
 requires a value in every field it shows, and an invented Turnstile secret matches no
-widget and refuses every comment. Set it afterwards, with
+widget — so nothing can produce a token it accepts, and every comment on the site is held
+for review. Set it afterwards, with
 `pnpm wrangler secret put TURNSTILE_SECRET_KEY` —
 [the README has the whole step](../README.md#turning-on-the-optional-features).
 

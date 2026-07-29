@@ -191,6 +191,24 @@ function Off() {
 }
 
 /**
+ * The one item on this tab worth going out of your way for (#174).
+ *
+ * **A second badge rather than a replacement for `Off`, because they answer different
+ * questions.** *Off* is the state and *Recommended* is the advice; collapsing them into
+ * one word would leave a reader working out from the absence of "On" whether the thing
+ * is running. It sits before `Off` so the strong status badge keeps the right-hand edge
+ * it holds in every other section, and the four badges still line up down the tab.
+ *
+ * **It renders only in the unconfigured state, and that is the whole of how this stays
+ * inside #158's no-nagging rule.** A deployment that has already done this sees `On` and
+ * a status line. Advice that survives being taken is a nag.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function Recommended() {
+  return <Badge variant="secondary">Recommended</Badge>
+}
+
+/**
  * The exact command, and the exact route for somebody who has no terminal.
  *
  * Both, always, and that is the point rather than thoroughness: the person most likely
@@ -327,8 +345,16 @@ export function Setup({
             deployment goes through, so it does not sit under three feature switches.
           */}
           {secrets.value.shortPassword && <DashboardPasswordSection />}
-          <EmailSection secrets={secrets.value.secrets} />
+          {/*
+            Turnstile leads the optional three, because it is the one this tab
+            recommends (#174) and reading order is the only prominence a tab of equal
+            sections has to give. It is also the only one of the three whose absence
+            costs anything on the surface this project exists to defend — the other two
+            are a notification and a rate-limit half. Costs nothing when it is already
+            on: the section goes quiet, and a quiet section at the top is not a nag.
+          */}
           <TurnstileSection set={secrets.value.secrets.TURNSTILE_SECRET_KEY} />
+          <EmailSection secrets={secrets.value.secrets} />
           <IpHashSection set={secrets.value.secrets.IP_HASH_SECRET} />
         </>
       )}
@@ -473,17 +499,49 @@ function EmailSection({ secrets }: { secrets: Record<SetupSecret, boolean> }) {
 }
 
 /**
- * Turnstile, whose two halves are set in two different places.
+ * Turnstile, whose two halves are set in two different places, and the one item on this
+ * tab that is recommended rather than merely reported (#174).
  *
- * **The sitekey paragraph is shown whether or not the secret is set, and that is the
+ * **The sitekey paragraphs are shown whether or not the secret is set, and that is the
  * whole reason this section is on the tab.** Charcha cannot see the site's pages, so it
  * cannot tell a correctly configured deployment from #104 — a secret with no
  * `data-turnstile-sitekey` anywhere, where every comment arrived with no token and was
  * held. This is the screen on which somebody would find that out.
+ *
+ * **They also sit above the command block rather than below it, and that ordering is
+ * load-bearing rather than tidy.** #104 is what a *half-followed* recommendation
+ * produces, so the surface doing the recommending is the surface most likely to cause
+ * it: a reader who has been told this is worth doing starts on the command, and never
+ * reaches a paragraph underneath it. Same reason the third-party disclosure stays above
+ * the command — "what is sent and to whom, before the switch that turns it on" is a
+ * product rule, and a recommendation is exactly the pressure that would push it down.
+ * Enforced by test/dashboard/setup.test.tsx.
+ *
+ * **The argument is in the copy, not in the badge.** *Recommended* on its own is taste;
+ * what earns it is the fact that separates this layer from the other five, which is that
+ * every one of those measures the absence of something wrong and a script written for
+ * this form passes all of them. Turnstile is the only one that asks for evidence.
+ *
+ * The claim that it is free and unmetered is Cloudflare's:
+ * https://developers.cloudflare.com/turnstile/plans/ lists the free plan as "Unlimited
+ * challenges (traffic or verification requests)", up to 20 widgets and 10 hostnames per
+ * widget — checked 2026-07-29 (card rule 7).
  */
 function TurnstileSection({ set }: { set: boolean }) {
   return (
-    <Section title="Turnstile bot check" status={set ? <On /> : <Off />}>
+    <Section
+      title="Turnstile bot check"
+      status={
+        set ? (
+          <On />
+        ) : (
+          <>
+            <Recommended />
+            <Off />
+          </>
+        )
+      }
+    >
       {set ? (
         <p>
           <code>TURNSTILE_SECRET_KEY</code> is set, which is the half that lives here.
@@ -491,22 +549,24 @@ function TurnstileSection({ set }: { set: boolean }) {
       ) : (
         <>
           <p>
-            The invisible bot check is off, and comments are judged by the other spam layers. It is
-            free and unmetered. It is also the one thing Charcha can put a third party into a
-            reader’s browser — the widget is Cloudflare’s, in an iframe on{' '}
-            <code>challenges.cloudflare.com</code> — so read what it does before turning it on.
-            Charcha itself still stores nothing in a reader’s browser; Turnstile’s{' '}
-            <i>pre-clearance</i> setting is the one that would, and it is off unless you switch it
-            on yourself.
+            The invisible bot check is off, and it is the layer worth having. Every other one
+            measures the absence of something wrong — a honeypot left empty, more than two seconds
+            spent typing, not too many links — and a script written for this form passes all of
+            them. Turnstile is the only layer that asks for something a script cannot make up: a
+            token from a browser that solved a real challenge. Without it, everything reaching your
+            queue has only managed not to look wrong.
           </p>
-          <ul className="space-y-1">
-            <SecretRow name="TURNSTILE_SECRET_KEY" set={false} />
-          </ul>
           <p>
-            Create a widget at <b>Cloudflare dashboard</b> → <b>Turnstile</b> → <b>Add widget</b>,
-            and use its <i>secret key</i> below — not its sitekey.
+            It is free and unmetered, and it is on the Cloudflare account you already have —
+            deploying Charcha needed one. Two values, from one screen.
           </p>
-          <HowToSet names={['TURNSTILE_SECRET_KEY']} />
+          <p>
+            It is also the one thing Charcha can put a third party into a reader’s browser — the
+            widget is Cloudflare’s, in an iframe on <code>challenges.cloudflare.com</code> — so read
+            what it does before turning it on. Charcha itself still stores nothing in a reader’s
+            browser; Turnstile’s <i>pre-clearance</i> setting is the one that would, and it is off
+            unless you switch it on yourself.
+          </p>
         </>
       )}
       <p>
@@ -521,6 +581,19 @@ function TurnstileSection({ set }: { set: boolean }) {
         and nothing anywhere saying why. A sitekey with no secret key means the widget renders and
         nothing checks its answer.
       </p>
+      {!set && (
+        <>
+          <ul className="space-y-1">
+            <SecretRow name="TURNSTILE_SECRET_KEY" set={false} />
+          </ul>
+          <p>
+            Create a widget at <b>Cloudflare dashboard</b> → <b>Turnstile</b> → <b>Add widget</b>.
+            It hands you both keys: the <i>secret key</i> is the one that goes below, and the
+            sitekey is the one that goes on your page.
+          </p>
+          <HowToSet names={['TURNSTILE_SECRET_KEY']} />
+        </>
+      )}
     </Section>
   )
 }

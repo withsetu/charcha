@@ -119,6 +119,9 @@ describe('a deployment with everything switched on', () => {
     expect(screen.getAllByText('On')).toHaveLength(3)
     expect(screen.queryByText('Off')).toBeNull()
     expect(panelText()).not.toContain('wrangler secret put')
+    // Including the one item this tab recommends (#174): a recommendation that still
+    // shows after it has been taken is the nag #158 ruled out.
+    expect(panelText()).not.toContain('Recommended')
   })
 })
 
@@ -159,8 +162,8 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     const headings = screen.getAllByRole('heading', { level: 2 })
     expect(headings.map((heading) => heading.textContent)).toEqual([
       'Dashboard password',
-      'Email notifications',
       'Turnstile bot check',
+      'Email notifications',
       'Per-commenter rate limiting',
       'Allowed origins',
     ])
@@ -259,7 +262,83 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
   })
 })
 
-describe('Turnstile, whose two halves live in two places', () => {
+describe('Turnstile, which this tab recommends rather than merely lists (#174)', () => {
+  /** The Turnstile section on its own — the tab has four, and three of them also print
+   * a command block and a "Variables and Secrets" line. */
+  async function turnstileSection(): Promise<HTMLElement> {
+    const heading = await screen.findByText('Turnstile bot check')
+    const section = heading.closest('section')
+    if (section === null) throw new Error('the Turnstile heading is not inside a section')
+    return section
+  }
+
+  it('comes first of the optional three, because it is the one being recommended', async () => {
+    answering(() => json(200, report()))
+    mount()
+
+    await screen.findByText('Email notifications')
+    expect(
+      screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
+    ).toEqual([
+      'Turnstile bot check',
+      'Email notifications',
+      'Per-commenter rate limiting',
+      'Allowed origins',
+    ])
+  })
+
+  it('says it is recommended, and makes the argument rather than the adjective', async () => {
+    // "Recommended" on its own is an assertion of taste. What earns it is the one fact
+    // that separates this layer from the rest of the pipeline (#174), so the copy has to
+    // carry it: every other layer measures an absence, and this one asks for evidence.
+    answering(() => json(200, report()))
+    mount()
+
+    const section = await turnstileSection()
+    expect(section.textContent).toContain('Recommended')
+    expect(section.textContent).toContain('the absence of something wrong')
+    expect(section.textContent).toContain('free and unmetered')
+  })
+
+  it('goes quiet the moment the secret is set, rather than nagging', async () => {
+    // #158's constraint, and the one a recommendation is most likely to break: a
+    // deployment that has already done this must find a status line, not a pitch.
+    answering(() => json(200, report({ TURNSTILE_SECRET_KEY: true })))
+    mount()
+
+    const section = await turnstileSection()
+    expect(section.textContent).not.toContain('Recommended')
+    expect(section.textContent).not.toContain('the absence of something wrong')
+    expect(section.querySelector('pre')).toBeNull()
+  })
+
+  it('names both halves before it gives the command that sets one', async () => {
+    // A half-followed recommendation is #104 exactly. So the sitekey cannot sit in a
+    // paragraph below the command block, where a reader who has already started typing
+    // will never reach it.
+    answering(() => json(200, report()))
+    mount()
+
+    const text = (await turnstileSection()).textContent ?? ''
+    expect(text).toContain('data-turnstile-sitekey')
+    expect(text.indexOf('data-turnstile-sitekey')).toBeLessThan(text.indexOf('wrangler secret put'))
+  })
+
+  it('discloses the third party before the command, not after it', async () => {
+    // The product rule for anything that transmits: say what is sent and to whom before
+    // the control that turns it on. Turnstile is the one layer that puts somebody else's
+    // script in a reader's browser, and a recommendation is exactly the pressure that
+    // would push that sentence below the fold.
+    answering(() => json(200, report()))
+    mount()
+
+    const text = (await turnstileSection()).textContent ?? ''
+    expect(text).toContain('challenges.cloudflare.com')
+    expect(text.indexOf('challenges.cloudflare.com')).toBeLessThan(
+      text.indexOf('wrangler secret put'),
+    )
+  })
+
   it('spells the sitekey out even when the secret is set — which is #104', async () => {
     // The deployment that refused every comment silently had the secret and no
     // `data-turnstile-sitekey` anywhere. Charcha cannot see the site's pages, so this

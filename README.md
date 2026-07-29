@@ -64,9 +64,13 @@ documented way to mark one optional
 ([cloudflare/workers-sdk#14075](https://github.com/cloudflare/workers-sdk/issues/14075)).
 For `TURNSTILE_SECRET_KEY` that is a trap rather than an inconvenience: the only thing
 a deployer can do with a mandatory field they have no value for is invent one, and an
-invented Turnstile secret matches no widget, so **every verification fails and every
-comment on the site is refused** — silently, and for good, until someone thinks to
-look at that field again.
+invented Turnstile secret matches no widget — so no page on their site can produce a
+token, and **every comment arrives with nothing to check and is held for review**. The
+queue fills with comments that look perfectly fine, nothing anywhere says why, and it
+stays that way until someone thinks to look at that field again
+([#104](https://github.com/withsetu/charcha/issues/104)). Holding rather than refusing is
+the deliberate behaviour — it loses nobody's comment — but it is quieter than a refusal
+and no easier to diagnose.
 
 So the form asks only for the two secrets above, which are the two where a value is
 genuinely needed *and* any value you supply is safe. The optional features are set
@@ -82,7 +86,16 @@ during it. Run these from a checkout of your deployed repository — or set the 
 names in the Cloudflare dashboard, in your Worker under **Settings → Variables and
 Secrets**. Each takes effect on the next request; there is nothing to redeploy.
 
-**The invisible bot check ([Turnstile](https://developers.cloudflare.com/turnstile/get-started/)).**
+**The invisible bot check ([Turnstile](https://developers.cloudflare.com/turnstile/get-started/)) — the one worth doing.**
+It is the only layer in the spam pipeline that asks for evidence rather than for the
+absence of a problem. The honeypot, the two-second typing floor and the link count all
+measure what a comment is *not*, and a script written against this form passes every one
+of them; Turnstile asks for a token that only a browser which solved a real challenge can
+produce. It is also free — Cloudflare's free plan is
+[unlimited verification requests](https://developers.cloudflare.com/turnstile/plans/),
+up to 20 widgets, checked 2026-07-29 — and it is on the Cloudflare account you already
+have, because deploying Charcha needed one.
+
 A Turnstile widget has **two keys, and they are not interchangeable**:
 
 - the **sitekey**, which is public, goes in your page's HTML as
@@ -90,10 +103,16 @@ A Turnstile widget has **two keys, and they are not interchangeable**:
 - the **secret key**, which is private, goes in the Worker, and is what lets the Worker
   check the widget's answer.
 
-Create a widget at **Cloudflare dashboard → Turnstile → Add widget**, then:
+Create a widget at **Cloudflare dashboard → Turnstile → Add widget**. It gives you both,
+and both have to be set — one command, and one attribute on the page you already pasted
+the embed into:
 
 ```sh
 pnpm wrangler secret put TURNSTILE_SECRET_KEY
+```
+
+```html
+<div id="charcha" data-turnstile-sitekey="your-sitekey"></div>
 ```
 
 Set both halves or neither. A secret key with no sitekey on the page means every
@@ -220,9 +239,22 @@ Then three things, none of which take long:
 3. **Paste [the snippet](#adding-it-to-a-page) into your page**, with your Worker's
    address in place of the example one.
 
-That is a working install. The bot check and the email notifications are separate and
-optional — [Turning on the optional features](#turning-on-the-optional-features) has the
-one command each, and skipping them leaves a site that takes comments rather than a
+That is a working install. There is a fourth step, and it is the only optional thing here
+worth treating as a step:
+
+4. **Turn on [Turnstile](#turning-on-the-optional-features).** It is the only spam layer
+   that asks a commenter's browser to prove something, rather than checking that nothing
+   about the comment looks wrong — and it is free, unmetered, and on the Cloudflare
+   account you have just deployed to. **Cloudflare dashboard → Turnstile → Add widget**
+   gives you two keys, and it needs both: the **secret key** goes on the Worker
+   (`pnpm wrangler secret put TURNSTILE_SECRET_KEY`), and the **sitekey** goes on your
+   page as `data-turnstile-sitekey`, on the same element you pasted in step 3. One
+   without the other is [#104](https://github.com/withsetu/charcha/issues/104), which
+   holds every comment on your site for review and tells you nothing.
+
+Email notifications are separate and genuinely optional.
+[Turning on the optional features](#turning-on-the-optional-features) has them, and the
+longer version of step 4. Skipping either leaves a site that takes comments rather than a
 broken form.
 
 If you want to check the deployment from a script rather than a browser, `/health`
