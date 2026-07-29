@@ -252,15 +252,21 @@ export const UNDO_WINDOW_MS = 12_000
 /**
  * The two ways this surface names a decision, in one place because both the
  * announcement built below and the visible bar in
- * src/dashboard/components/message-bar.tsx need them.
+ * src/dashboard/components/message-bar.tsx say them.
  *
  * They were briefly two copies, and the copies disagreed: the bar said "Could not mark
  * spam on the comment by X" and the announcement said "Could not mark spam the comment
  * by X". A screen-reader user got the ungrammatical one, and the test asserting
- * `toContain('mark spam')` passed either way — which is why they are exported from here
- * rather than retyped there.
+ * `toContain('mark spam')` passed either way — which is why they live here rather than
+ * being retyped there.
+ *
+ * `ATTEMPTED` is exported and `DECIDED` is not, and the asymmetry is the point: since
+ * #133 a decision is never named without also naming the replies it took, so the bar
+ * goes through `decisionSummary` below and reaching for `DECIDED` on its own would be
+ * the way to reintroduce a line that says less than the truth. The failure alert has no
+ * such second half and takes its verb directly.
  */
-export const DECIDED: Record<DecisionStatus, string> = {
+const DECIDED: Record<DecisionStatus, string> = {
   approved: 'Approved',
   spam: 'Marked spam',
   deleted: 'Deleted',

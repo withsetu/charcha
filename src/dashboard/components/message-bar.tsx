@@ -57,6 +57,11 @@ export function MessageBar({
   onDismiss,
   hidden = false,
 }: MessageBarProps) {
+  // What undo will not do, or null when the decision took nothing else with it (#133).
+  // Read once rather than twice in the JSX below, where the same call decided both
+  // whether the line renders and what it says.
+  const leftBehind = undo === null ? null : repliesStay(undo)
+
   return (
     <>
       {/*
@@ -131,9 +136,9 @@ export function MessageBar({
                       is the difference between an undo that does less and an undo that
                       claims more than it did.
                     */}
-                    {repliesStay(undo) !== null && (
+                    {leftBehind !== null && (
                       <p className="mt-0.5 text-sm text-muted-foreground">
-                        Undo restores {undo.comment.authorName}. {repliesStay(undo)}
+                        Undo restores {undo.comment.authorName}. {leftBehind}
                       </p>
                     )}
                   </div>
