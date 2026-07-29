@@ -40,6 +40,9 @@ export const EMBED_CLASS_NAMES = [
   'charcha-reply-header',
   'charcha-reply-to',
   'charcha-cancel-reply',
+  'charcha-tabs',
+  'charcha-tab',
+  'charcha-write',
   'charcha-toolbar',
   'charcha-toolbar-button',
   'charcha-fields',
@@ -47,6 +50,7 @@ export const EMBED_CLASS_NAMES = [
   'charcha-label',
   'charcha-input',
   'charcha-textarea',
+  'charcha-preview',
   'charcha-hint',
   'charcha-error',
   'charcha-turnstile',
@@ -73,6 +77,10 @@ export function fieldIds(prefix: string) {
     email: `${prefix}-email`,
     hint: `${prefix}-hint`,
     error: `${prefix}-error`,
+    write: `${prefix}-write`,
+    writeTab: `${prefix}-write-tab`,
+    preview: `${prefix}-preview`,
+    previewTab: `${prefix}-preview-tab`,
   }
 }
 
@@ -117,6 +125,39 @@ function toolbarMarkup(bodyId: string): string {
 }
 
 /**
+ * The Write and Preview tabs (#78).
+ *
+ * A real tablist, because `role="tablist"` is a promise about how the control is
+ * operated — arrow keys, one stop in the tab order, a selected state a screen reader
+ * can read — and the alternative to implementing it is not a simpler control but one
+ * that lies about itself. mount.ts holds up the other end.
+ *
+ * `type="button"` on both, for the same reason the toolbar has it: a button inside a
+ * form defaults to submit, and one left as the default posts a half-written comment
+ * the moment the reader asks to look at it.
+ *
+ * The shipped state is Write selected and Preview hidden, so the composer is a plain
+ * `<textarea>` in a plain `<form>` before a single listener has been attached.
+ * Preview is the enhancement; it is never the way to post.
+ * Enforced by test/worker/embed/markup.test.ts.
+ */
+function tabsMarkup(id: ReturnType<typeof fieldIds>): string {
+  const tab = (name: string, panel: string, label: string, selected: boolean): string =>
+    `<button type="button" class="charcha-tab" id="${name}" role="tab"` +
+    ` aria-controls="${panel}" aria-selected="${String(selected)}"` +
+    // Roving tabindex: the whole tablist is one stop in the tab order, so the tabs
+    // do not sit between the reader and the field they are trying to reach.
+    `${selected ? '' : ' tabindex="-1"'}>${label}</button>`
+
+  return (
+    `<div class="charcha-tabs" role="tablist" aria-label="Comment">` +
+    tab(id.writeTab, id.write, 'Write', true) +
+    tab(id.previewTab, id.preview, 'Preview', false) +
+    `</div>`
+  )
+}
+
+/**
  * The composer.
  *
  * A real `<form>` with real `<label>`s and a real submit button, so that Enter
@@ -137,12 +178,35 @@ export function composerMarkup(prefix: string): string {
   return (
     `<form class="charcha-form" novalidate>` +
     honeypotMarkup() +
+    tabsMarkup(id) +
+    // The Write panel holds the toolbar and the field, and nothing else. The tabs
+    // switch what is *displayed*, never what the field is — it stays a plain
+    // textarea, which is what keeps the toolbar from becoming an editor (#5).
+    `<div class="charcha-write" id="${id.write}" role="tabpanel"` +
+    ` aria-labelledby="${id.writeTab}">` +
     toolbarMarkup(id.body) +
     `<div class="charcha-field">` +
     `<label class="charcha-label" for="${id.body}">Comment</label>` +
     `<textarea class="charcha-textarea" id="${id.body}" name="body" rows="5"` +
     ` maxlength="10000" required aria-describedby="${id.error}"></textarea>` +
     `</div>` +
+    `</div>` +
+    // Where the Worker's rendering of the draft lands. Empty in the markup and
+    // filled by mount.ts, because its contents are the one thing in this file that
+    // is not literal — and it is HTML from src/render/, exactly as the read path's
+    // is (#1).
+    //
+    // `aria-live` because the rendering arrives after the reader has stopped
+    // pressing the tab, so nothing announces it otherwise.
+    //
+    // `tabindex="0"` is the deliberate trade of the two APG allows. A previewed
+    // comment usually holds no focusable element and would then be unreachable from
+    // the keyboard entirely; it sometimes holds a link, and the panel is then one
+    // redundant stop before it. Unreachable content is the worse of the two, and
+    // which one applies is decided by what the reader wrote, so it cannot be
+    // decided here.
+    `<div class="charcha-preview" id="${id.preview}" role="tabpanel"` +
+    ` aria-labelledby="${id.previewTab}" aria-live="polite" tabindex="0" hidden></div>` +
     `<div class="charcha-fields">` +
     `<div class="charcha-field">` +
     `<label class="charcha-label" for="${id.name}">Name</label>` +

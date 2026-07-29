@@ -152,6 +152,9 @@ name here is emitted and that nothing outside it is.
 | `charcha-reply-header` | The "Replying to …" row inside the composer |
 | `charcha-reply-to` | The "Replying to …" text |
 | `charcha-cancel-reply` | The button that dismisses the reply |
+| `charcha-tabs` | The Write/Preview tablist, a real `role="tablist"` |
+| `charcha-tab` | One tab. The selected one carries `aria-selected="true"` — style that, there is no separate class |
+| `charcha-write` | The Write panel: the toolbar and the comment field |
 | `charcha-toolbar` | The formatting toolbar, a real `role="toolbar"` |
 | `charcha-toolbar-button` | One formatting button |
 | `charcha-fields` | The name-and-email row |
@@ -159,6 +162,7 @@ name here is emitted and that nothing outside it is.
 | `charcha-label` | A field's `<label>` |
 | `charcha-input` | The name and email `<input>`s |
 | `charcha-textarea` | The comment `<textarea>` |
+| `charcha-preview` | The Preview panel. Holds a `charcha-comment-body` once the Worker has rendered the draft |
 | `charcha-hint` | The line under the email field |
 | `charcha-error` | The message shown when a comment was not accepted |
 | `charcha-actions` | The row holding the submit button |
@@ -172,6 +176,11 @@ Notes that will save you a surprise:
   `.charcha-comments > .charcha-comment`.
 - **Threading stops at one level.** There is no third level to style; the database
   refuses it.
+- **The preview is the published comment.** Its contents are wrapped in
+  `charcha-comment-body` — the renderer's own class, the same one a posted comment
+  carries — so anything you style there shows up in the preview without a second
+  rule. That is the point: the preview is rendered by the Worker, by the same
+  function that renders the published page.
 - **Each comment has a stable `id`** (`charcha-comment-<id>`), so links to individual
   comments work.
 - **The timestamp is UTC**, and says so in the visible text. The `datetime` attribute

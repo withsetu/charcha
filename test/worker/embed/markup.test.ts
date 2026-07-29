@@ -57,6 +57,9 @@ describe('the embed class-name contract', () => {
       'charcha-reply-header',
       'charcha-reply-to',
       'charcha-cancel-reply',
+      'charcha-tabs',
+      'charcha-tab',
+      'charcha-write',
       'charcha-toolbar',
       'charcha-toolbar-button',
       'charcha-fields',
@@ -64,6 +67,7 @@ describe('the embed class-name contract', () => {
       'charcha-label',
       'charcha-input',
       'charcha-textarea',
+      'charcha-preview',
       'charcha-hint',
       'charcha-error',
       'charcha-turnstile',
@@ -361,5 +365,101 @@ describe('the widget shell', () => {
   it('has somewhere for the fetched comments to land', async () => {
     const classes = await classNamesIn(widgetMarkup('c1'))
     expect(classes.has('charcha-thread')).toBe(true)
+  })
+})
+
+describe('the Write and Preview tabs', () => {
+  it('is a real tablist with two tabs', async () => {
+    // `role="tablist"` is a promise about how the control is operated — arrow
+    // keys, one stop in the tab order, a selected state a screen reader can read.
+    // The alternative to implementing it is not a simpler control; it is a control
+    // that lies about itself.
+    const elements = await parseElements(composerMarkup('c1'))
+    const tablist = elements.find((element) => element.attributes['role'] === 'tablist')
+    expect(tablist).toBeDefined()
+    expect(tablist?.attributes['aria-label']).toBeTruthy()
+
+    const tabs = elements.filter((element) => element.attributes['role'] === 'tab')
+    expect(tabs).toHaveLength(2)
+    for (const tab of tabs) {
+      // Inside a form, a button left as the default is a submit button — a reader
+      // pressing Preview would post their half-written comment.
+      expect(tab.tag).toBe('button')
+      expect(tab.attributes['type']).toBe('button')
+    }
+  })
+
+  it('starts on Write, with the preview hidden', async () => {
+    const elements = await parseElements(composerMarkup('c1'))
+    const tabs = elements.filter((element) => element.attributes['role'] === 'tab')
+    expect(tabs.map((tab) => tab.attributes['aria-selected'])).toEqual(['true', 'false'])
+    // Roving tabindex: one stop in the tab order, not two.
+    expect(tabs[1]?.attributes['tabindex']).toBe('-1')
+
+    const panels = elements.filter((element) => element.attributes['role'] === 'tabpanel')
+    expect(panels).toHaveLength(2)
+    expect(panels[0]?.attributes['hidden']).toBeUndefined()
+    // The shipped state is the one that works before a single listener is wired:
+    // Write, with a plain textarea in it. Preview is the enhancement.
+    expect(panels[1]?.attributes['hidden']).toBeDefined()
+  })
+
+  it('names each panel by its tab, and each tab controls a panel that exists', async () => {
+    const elements = await parseElements(composerMarkup('c1'))
+    const ids = new Set(
+      elements.flatMap((element) => {
+        const id = element.attributes['id']
+        return id === undefined ? [] : [id]
+      }),
+    )
+
+    const tabs = elements.filter((element) => element.attributes['role'] === 'tab')
+    const panels = elements.filter((element) => element.attributes['role'] === 'tabpanel')
+    for (const tab of tabs) {
+      expect(ids.has(tab.attributes['aria-controls'] ?? '')).toBe(true)
+      expect(tab.attributes['id']).toBeDefined()
+    }
+    // Each tab points at the panel that points back at it.
+    expect(panels.map((panel) => panel.attributes['id'])).toEqual(
+      tabs.map((tab) => tab.attributes['aria-controls']),
+    )
+    expect(tabs.map((tab) => tab.attributes['id'])).toEqual(
+      panels.map((panel) => panel.attributes['aria-labelledby']),
+    )
+  })
+
+  it('keeps the field a plain textarea, inside the Write panel', async () => {
+    // The tabs switch what is displayed, not what the field is (#5). A rich-text
+    // model here would be a second renderer, a paste-sanitising problem, and a
+    // budget nobody has.
+    const html = composerMarkup('c1')
+    const elements = await parseElements(html)
+    expect(elements.filter((element) => element.tag === 'textarea')).toHaveLength(1)
+    for (const element of elements) {
+      expect('contenteditable' in element.attributes).toBe(false)
+    }
+
+    expect(html.indexOf('charcha-write')).toBeLessThan(html.indexOf('charcha-textarea'))
+    expect(html.indexOf('charcha-textarea')).toBeLessThan(html.indexOf('charcha-preview'))
+  })
+
+  it('announces the preview when it changes, and is reachable by keyboard', async () => {
+    const elements = await parseElements(composerMarkup('c1'))
+    const preview = elements.find((element) =>
+      (element.attributes['class'] ?? '').includes('charcha-preview'),
+    )
+    // The rendering arrives after the reader has already stopped pressing the tab,
+    // so nothing announces it unless the region says it is live.
+    expect(preview?.attributes['aria-live']).toBe('polite')
+    // Mostly non-interactive text, so it needs its own stop in the tab order or
+    // the content cannot be reached from the keyboard at all.
+    expect(preview?.attributes['tabindex']).toBe('0')
+  })
+
+  it('leaves the Post button outside both panels, so previewing never blocks posting', () => {
+    const html = composerMarkup('c1')
+    // Preview is an enhancement. A Post button inside the Write panel would
+    // disappear the moment a reader looked at their own comment.
+    expect(html.indexOf('charcha-actions')).toBeGreaterThan(html.indexOf('charcha-preview'))
   })
 })

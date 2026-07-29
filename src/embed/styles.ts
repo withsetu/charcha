@@ -167,6 +167,24 @@ function base(): string {
 .charcha-reply-header{display:flex;align-items:baseline;justify-content:space-between;gap:.5em;margin-bottom:var(--cc-pad);padding-bottom:var(--cc-pad);border-bottom:1px solid var(--cc-line)}
 .charcha-reply-to{font-weight:600}
 
+.charcha-tabs{display:flex;gap:.25em;margin-bottom:var(--cc-pad);border-bottom:1px solid var(--cc-line)}
+/* The selected tab is drawn by [aria-selected], not by a class of its own: the state
+   is already in the DOM for assistive technology, and a second copy of it is a
+   second thing to keep in step. It is a border and a surface rather than a colour —
+   the widget cannot see the host's palette to pick one (#6). */
+.charcha-tab{margin-bottom:-1px;padding:.35em .7em;border:1px solid transparent;border-bottom-color:transparent;border-radius:var(--cc-radius) var(--cc-radius) 0 0;background:transparent;color:inherit;font:inherit;font-size:.8125em;font-weight:600;line-height:1.4;cursor:pointer}
+.charcha-tab[aria-selected="true"]{border-color:var(--cc-control-line);border-bottom-color:transparent;background:var(--cc-surface)}
+/* Matched to the textarea's own min-height, so switching tabs does not move the
+   Post button out from under the reader's pointer. */
+.charcha-preview{min-height:7em;padding:.5em .6em}
+/* The panels are hidden by the hidden attribute, which only the UA stylesheet acts
+   on — and any author-level display rule beats the UA sheet whatever its
+   specificity. A host reset, a utility framework's base layer, or an owner styling
+   .charcha-preview from docs/theming.md would otherwise show both panels at once
+   while the tablist says one of them is hidden. Same reasoning as the honeypot's
+   two mechanisms in markup.ts; bare mode keeps the UA sheet alone, as it does for
+   everything else. */
+.charcha-write[hidden],.charcha-preview[hidden]{display:none}
 .charcha-toolbar{display:flex;flex-wrap:wrap;gap:.25em;margin-bottom:.5em}
 .charcha-field{display:block;margin-bottom:var(--cc-pad)}
 .charcha-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:var(--cc-pad)}
@@ -177,7 +195,7 @@ function base(): string {
 .charcha-hint{margin:.35em 0 0;font-size:.75em;color:var(--cc-muted)}
 
 .charcha-toolbar-button,.charcha-retry,.charcha-reply-button,.charcha-cancel-reply,.charcha-submit{padding:.35em .7em;border:1px solid var(--cc-control-line);border-radius:var(--cc-radius);background:var(--cc-surface);color:inherit;font:inherit;font-size:.8125em;line-height:1.4;cursor:pointer;transition:background-color .12s}
-.charcha-toolbar-button:hover,.charcha-retry:hover,.charcha-reply-button:hover,.charcha-cancel-reply:hover,.charcha-submit:hover{background:var(--cc-surface-strong)}
+.charcha-toolbar-button:hover,.charcha-retry:hover,.charcha-reply-button:hover,.charcha-cancel-reply:hover,.charcha-submit:hover,.charcha-tab:hover{background:var(--cc-surface-strong)}
 .charcha-toolbar-button{min-width:2.25em;font-weight:600}
 .charcha-submit{padding:.55em 1.1em;border-color:currentColor;font-size:1em;font-weight:600}
 .charcha-submit[disabled]{cursor:default;opacity:.6}
