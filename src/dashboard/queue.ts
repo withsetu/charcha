@@ -14,6 +14,7 @@
 //
 // Enforced by test/dashboard/queue.test.ts.
 
+import { VIEW_STATUSES } from './api'
 import type {
   ApiFailure,
   DecisionStatus,
@@ -23,6 +24,23 @@ import type {
   SettableStatus,
   ViewStatus,
 } from './api'
+
+/**
+ * A tab in the strip: the three queues, and Setup (#158).
+ *
+ * `'setup'` is not a `ViewStatus` and deliberately never becomes one — it is not a
+ * status a comment can be in, nothing is ever fetched with `?status=setup`, and widening
+ * `ViewStatus` to hold it would put a value the server rejects into the type the queue
+ * request is built from.
+ */
+export type TabValue = ViewStatus | 'setup'
+
+/**
+ * The tabs, in the order they are shown — which is also the order `1`…`4` select them
+ * in, since src/dashboard/keys.ts resolves those keys to an index into this.
+ * Enforced by test/dashboard/shortcuts.test.tsx.
+ */
+export const TAB_VALUES: readonly TabValue[] = [...VIEW_STATUSES, 'setup']
 
 /**
  * The status a comment is being moved *from*, which is what undo moves it back to.
@@ -76,7 +94,22 @@ interface InFlight {
 }
 
 export interface QueueState {
+  /**
+   * Which queue is loaded, which is not the same question as which tab is showing.
+   *
+   * It stays put while the Setup tab is in front, because Setup is not a queue: coming
+   * back to Pending must not re-read a page the owner was halfway through. Every field
+   * below except `tab` describes *this* queue.
+   */
   view: ViewStatus
+  /**
+   * Which tab is showing (#158).
+   *
+   * Separate from `view` rather than widening it, so that the effect which loads a queue
+   * — keyed on `view` — cannot fire for a tab that has no queue to load.
+   * Enforced by test/dashboard/queue.test.ts.
+   */
+  tab: TabValue
   /**
    * The first page's outcome, and the reason loading and empty cannot be confused:
    * `loading` has no answer yet, `ready` with no comments *is* the answer, and
@@ -128,6 +161,7 @@ export interface QueueState {
 export function initialState(view: ViewStatus = 'pending'): QueueState {
   return {
     view,
+    tab: view,
     phase: 'loading',
     comments: [],
     counts: null,
@@ -146,7 +180,7 @@ export function initialState(view: ViewStatus = 'pending'): QueueState {
 }
 
 export type QueueAction =
-  | { type: 'view'; view: ViewStatus }
+  | { type: 'tab'; tab: TabValue }
   | { type: 'load/start' }
   | { type: 'load/ok'; page: QueuePage }
   | { type: 'load/failed'; failure: ApiFailure }
@@ -280,14 +314,37 @@ function insertAt(
 
 export function reduce(state: QueueState, action: QueueAction): QueueState {
   switch (action.type) {
-    case 'view':
-      // A view change is a new queue, and everything about the old one goes with it —
-      // including a pending undo, which names a row that is no longer on screen.
+    case 'tab': {
+      if (action.tab === state.tab) return state
+
+      // Setup is not a queue, so the loaded one is left exactly as it was and coming
+      // back costs no request and no lost position.
+      //
+      // `moreFailure` is deliberately **not** cleared with the other two. It is not a
+      // message-bar field — it renders inside the queue's own panel — and
+      // `shouldLoadMore` reads it as the latch that stops the next-page effect firing
+      // again after a failure. Clearing it here would re-arm that effect against a panel
+      // nobody is looking at, which the comment on `shouldLoadMore` calls load-bearing.
+      if (action.tab === 'setup') {
+        return { ...state, tab: 'setup', undo: null, actionFailure: null }
+      }
+
+      // Back to the queue that is already loaded — after a trip to Setup, since any
+      // other route here would have changed `view`. **Not a reset, and that is
+      // load-bearing rather than an optimisation**: resetting would set `phase` to
+      // `loading` while leaving `view` untouched, and the effect that fetches is keyed
+      // on `view` — so nothing would ask for the page and the skeleton would stand for
+      // ever, which is precisely the unreported-failure shape CLAUDE.md names.
+      if (action.tab === state.view) return { ...state, tab: action.tab }
+
+      // A different queue is a new queue, and everything about the old one goes with it
+      // — including a pending undo, which names a row that is no longer on screen.
       // `helpOpen` survives because the sheet is about the surface, not the queue, and
       // `counts` survives because they are the whole database's numbers: dropping them
       // would blank all three tab badges on every switch and then refill them with the
       // values that were true throughout.
-      return { ...initialState(action.view), helpOpen: state.helpOpen, counts: state.counts }
+      return { ...initialState(action.tab), helpOpen: state.helpOpen, counts: state.counts }
+    }
 
     case 'load/start':
       return { ...state, phase: 'loading', loadFailure: null, moreFailure: null }
@@ -387,7 +444,20 @@ export function reduce(state: QueueState, action: QueueAction): QueueState {
           offeredAt: action.at,
           running: false,
         },
-        ...say(state, `${DECIDED[entry.status]}: ${entry.comment.authorName}. Press Z to undo.`),
+        // **The `Z` prompt is dropped when the decision lands on the Setup tab.** `S`
+        // then `4` before the request answers is two keystrokes on a surface built for
+        // one per comment, and it resolves with the queue out of sight — where the bar
+        // is hidden and `Z` is one of the commands the tab refuses (see QUEUE_COMMANDS
+        // in src/dashboard/components/triage.tsx). Announcing a keystroke that does
+        // nothing is worse than announcing none. The offer itself survives, so the bar
+        // and the key both come back with the queue if the window has not closed.
+        // Enforced by test/dashboard/queue.test.ts.
+        ...say(
+          state,
+          state.tab === 'setup'
+            ? `${DECIDED[entry.status]}: ${entry.comment.authorName}.`
+            : `${DECIDED[entry.status]}: ${entry.comment.authorName}. Press Z to undo.`,
+        ),
       }
     }
 

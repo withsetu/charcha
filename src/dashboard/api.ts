@@ -314,3 +314,66 @@ export function readSettings(): Promise<ApiResult<Settings>> {
 export function writeAllowedOrigins(allowedOrigins: string[]): Promise<ApiResult<Settings>> {
   return request<Settings>({ method: 'PUT', path: '/settings', body: { allowedOrigins } })
 }
+
+/**
+ * The secrets the Setup tab reports on (#158), in the order it reports them.
+ *
+ * The same five names `REPORTED_SECRETS` in src/admin/setup.ts answers for. They are
+ * written out again rather than imported because that module is in the Worker's
+ * TypeScript project — it names `Env` and imports Hono, neither of which exists in this
+ * one (src/dashboard/tsconfig.json), the same reason `QueuedComment` is redeclared above.
+ *
+ * A drift between the two lists is therefore possible, and `readSetup` is what makes it
+ * loud: a name this file expects and the server does not send comes back as a
+ * `MALFORMED` failure the tab shows, rather than as a confident "not set" for a feature
+ * that is on.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+export const SETUP_SECRETS = [
+  'RESEND_API_KEY',
+  'CHARCHA_NOTIFY_FROM',
+  'CHARCHA_NOTIFY_TO',
+  'TURNSTILE_SECRET_KEY',
+  'IP_HASH_SECRET',
+] as const
+
+export type SetupSecret = (typeof SETUP_SECRETS)[number]
+
+/**
+ * Which optional features have what they need — booleans, and never a value.
+ *
+ * `Record<SetupSecret, boolean>` rather than an interface for the reason `QueueCounts`
+ * gives: a secret the tab renders a section for but never asks about does not typecheck,
+ * instead of merely being unlikely.
+ */
+export interface SetupReport {
+  secrets: Record<SetupSecret, boolean>
+}
+
+/**
+ * `GET /admin/api/setup` — what is configured on this deployment.
+ *
+ * **The answer is validated rather than cast**, which no other call in this file does.
+ * Everywhere else a malformed body produces a visible failure on its own: a queue with
+ * no comments in it renders as an empty queue and the owner can see that is wrong. Here
+ * the natural reading of a missing field is `undefined`, which renders as *not set* —
+ * an answer indistinguishable from the real one, telling an owner to go and configure
+ * something they configured months ago. So a report missing any expected boolean is a
+ * failure, not a report.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+export async function readSetup(): Promise<ApiResult<SetupReport>> {
+  const result = await request<unknown>({ method: 'GET', path: '/setup' })
+  if (!result.ok) return result
+
+  const secrets = (result.value as { secrets?: unknown } | null)?.secrets
+  if (secrets === null || typeof secrets !== 'object') {
+    return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+  }
+  for (const name of SETUP_SECRETS) {
+    if (typeof (secrets as Record<string, unknown>)[name] !== 'boolean') {
+      return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+    }
+  }
+  return { ok: true, value: { secrets: secrets as Record<SetupSecret, boolean> } }
+}

@@ -97,11 +97,17 @@ pnpm wrangler secret put TURNSTILE_SECRET_KEY
 ```
 
 Set both halves or neither. A secret key with no sitekey on the page means every
-comment arrives with no token to verify and is refused; a sitekey with no secret key
-means the widget renders and nothing checks it
-([#104](https://github.com/withsetu/charcha/issues/104)). Turnstile is also the one
-thing that can put a third party in your reader's browser, which is why it is off until
-you do this and [documented plainly](docs/theming.md#turnstile) when you do.
+comment arrives with no token to verify: those are **held for review** rather than
+refused, so the symptom is a moderation queue filling with comments that look perfectly
+fine ([#104](https://github.com/withsetu/charcha/issues/104)). Once one real token has
+verified on your deployment, a comment arriving without one is refused instead. A sitekey
+with no secret key means the widget renders and nothing checks it. Your dashboard's
+**Setup** tab reports which half the Worker has — it cannot see your pages, so the sitekey
+half is yours to confirm.
+
+Turnstile is also the one thing that can put a third party in your reader's browser, which
+is why it is off until you do this and [documented plainly](docs/theming.md#turnstile)
+when you do.
 
 **An email when a comment arrives.** All three of these together, or the feature is
 simply off — a key with no recipient has nowhere to send, and Charcha has no owner

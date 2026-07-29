@@ -36,6 +36,22 @@ async function mountQueue(): Promise<FetchStub> {
     if (/^\/admin\/api\/comments\/\d+\/status$/.test(call.path)) {
       return json(200, decision(1, 'spam'))
     }
+    // The Setup tab's two reads (#158). Answered rather than refused, because `4` is now
+    // a binding this file drives and the panel behind it fetches on mount.
+    if (call.path === '/admin/api/setup') {
+      return json(200, {
+        secrets: {
+          RESEND_API_KEY: false,
+          CHARCHA_NOTIFY_FROM: false,
+          CHARCHA_NOTIFY_TO: false,
+          TURNSTILE_SECRET_KEY: false,
+          IP_HASH_SECRET: false,
+        },
+      })
+    }
+    if (call.path === '/admin/api/settings') {
+      return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+    }
     return unhandled(call)
   })
   render(<Triage onExpired={noop} onSignOut={noop} />)
@@ -98,12 +114,18 @@ describe('the shortcut listener', () => {
     expect(rows()[0]?.getAttribute('aria-current')).toBe('true')
 
     fireEvent.keyDown(document.body, { key: 'j' })
-    await waitFor(() => {
-      expect(rows()[1]?.getAttribute('aria-current')).toBe('true')
-    })
     // Focus follows, which is what makes a screen reader announce the new row without
     // any live region at all.
-    expect(document.activeElement).toBe(rows()[1])
+    //
+    // **Inside the `waitFor`, with the attribute it accompanies.** It moves in an effect,
+    // which flushes after the commit that sets `aria-current` — so as a bare assertion
+    // after the wait it was a race that lost under full-suite load, roughly once in ten
+    // runs, and reported a correct component as broken. This is the flake the harness's
+    // `asyncUtilTimeout` note is about, found again while adding to this file.
+    await waitFor(() => {
+      expect(rows()[1]?.getAttribute('aria-current')).toBe('true')
+      expect(document.activeElement).toBe(rows()[1])
+    })
 
     fireEvent.keyDown(document.body, { key: 'ArrowUp' })
     await waitFor(() => {
@@ -159,6 +181,122 @@ describe('the shortcut listener', () => {
     // A keystroke acting on a list the owner cannot see, behind a modal that claims the
     // rest of the page is hidden, is the failure this prevents.
     expect(decisions(stub)).toHaveLength(0)
+  })
+
+  it('opens Setup on 4, and comes back to the loaded queue on 1 without refetching it', async () => {
+    // The fourth tab (#158) is reachable exactly like the other three, and the queue
+    // behind it is left alone: a trip to Setup that cost a refetch would throw away the
+    // owner's place in a 50-row page every time they checked a secret.
+    const stub = await mountQueue()
+    const queueReads = () => stub.paths().filter((path) => path.startsWith('/admin/api/queue'))
+    expect(queueReads()).toHaveLength(1)
+
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+    expect(screen.queryByText('Author 1')).toBeNull()
+
+    fireEvent.keyDown(document.body, { key: '1' })
+    await screen.findByText('Author 1')
+    expect(queueReads()).toHaveLength(1)
+  })
+
+  it('decides on no comment while Setup is in front', async () => {
+    // **The guard.** The queue is still in state behind that tab, so without it `A` here
+    // approves a comment nobody can see.
+    const stub = await mountQueue()
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+
+    fireEvent.keyDown(document.body, { key: 'a' })
+    fireEvent.keyDown(document.body, { key: 's' })
+    fireEvent.keyDown(document.body, { key: 'd' })
+
+    expect(decisions(stub)).toHaveLength(0)
+  })
+
+  it('moves the cursor on no comment either, which the decision count cannot show', async () => {
+    // `move` is in QUEUE_COMMANDS too, and a test that only counted decisions passed with
+    // it removed: `J` would walk an invisible cursor, and the owner would come back to a
+    // queue whose current row had shifted under them. Asserted by returning and reading
+    // where the keyboard actually is.
+    await mountQueue()
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'j' })
+
+    fireEvent.keyDown(document.body, { key: '1' })
+    await screen.findByText('Author 1')
+    expect(screen.getAllByRole('group')[0]?.getAttribute('aria-current')).toBe('true')
+  })
+
+  it('offers no undo on Setup, by key or by button, for a decision that lands there', async () => {
+    // **The case the guard alone does not cover**, and the one two keystrokes reach: `S`
+    // and then `4` before the request answers. `decide/ok` resolves with the queue out of
+    // sight, so entering Setup having already cleared the bar is not enough — the offer
+    // arrives afterwards. Without the `hidden` prop the bar appears over the Setup tab
+    // with a live Undo button, which is the one route round a guard that only refuses
+    // keystrokes.
+    let resolveDecision: (response: Response) => void = () => undefined
+    const stub = stubFetch((call) => {
+      if (call.path.startsWith('/admin/api/queue')) {
+        return json(200, queuePage([comment({ id: 1 }), comment({ id: 2 })]))
+      }
+      if (/^\/admin\/api\/comments\/\d+\/status$/.test(call.path)) {
+        return new Promise<Response>((resolve) => {
+          resolveDecision = resolve
+        })
+      }
+      if (call.path === '/admin/api/setup') {
+        return json(200, {
+          secrets: {
+            RESEND_API_KEY: true,
+            CHARCHA_NOTIFY_FROM: true,
+            CHARCHA_NOTIFY_TO: true,
+            TURNSTILE_SECRET_KEY: true,
+            IP_HASH_SECRET: true,
+          },
+        })
+      }
+      if (call.path === '/admin/api/settings') {
+        return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+      }
+      return unhandled(call)
+    })
+    render(<Triage onExpired={noop} onSignOut={noop} />)
+    await screen.findByText('Author 1')
+
+    fireEvent.keyDown(document.body, { key: 's' })
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+
+    resolveDecision(json(200, decision(1, 'spam')))
+    await waitFor(() => {
+      // The decision is still reported — the live region is the half that must survive.
+      expect(screen.getByText(/Marked spam: Author 1/)).toBeTruthy()
+    })
+
+    expect(screen.queryByRole('button', { name: /Undo/ })).toBeNull()
+    // And the announcement does not promise a keystroke this tab refuses.
+    expect(screen.queryByText(/Press Z to undo/)).toBeNull()
+
+    fireEvent.keyDown(document.body, { key: 'z' })
+    expect(decisions(stub)).toHaveLength(1)
+
+    // Back on the queue, both come back: the offer was suppressed, not thrown away.
+    fireEvent.keyDown(document.body, { key: '1' })
+    expect(await screen.findByRole('button', { name: /Undo/ })).toBeTruthy()
+  })
+
+  it('still opens the shortcut sheet from Setup, so the way back is documented', async () => {
+    await mountQueue()
+    fireEvent.keyDown(document.body, { key: '4' })
+    await screen.findByText('Email notifications')
+
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true })
+    const sheet = await screen.findByRole('dialog')
+    expect(sheet.textContent).toContain('Pending, spam, approved, setup')
   })
 
   it('switches view on 1, 2 and 3', async () => {

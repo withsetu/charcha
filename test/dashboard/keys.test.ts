@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 
 import { SHORTCUTS, isEditableTarget, resolveCommand } from '../../src/dashboard/keys'
 import type { KeyStroke } from '../../src/dashboard/keys'
+import { TAB_VALUES } from '../../src/dashboard/queue'
 
 function stroke(key: string, overrides: Partial<KeyStroke> = {}): KeyStroke {
   return {
@@ -90,13 +91,27 @@ describe('resolveCommand', () => {
     expect(resolveCommand(stroke('d'))).toEqual({ kind: 'decide', status: 'deleted' })
   })
 
-  it('maps undo, help, dismiss and the three views', () => {
+  it('maps undo, help, dismiss and the four tabs', () => {
     expect(resolveCommand(stroke('z'))).toEqual({ kind: 'undo' })
     expect(resolveCommand(stroke('?', { shiftKey: true }))).toEqual({ kind: 'help' })
     expect(resolveCommand(stroke('Escape'))).toEqual({ kind: 'dismiss' })
-    expect(resolveCommand(stroke('1'))).toEqual({ kind: 'view', index: 0 })
-    expect(resolveCommand(stroke('2'))).toEqual({ kind: 'view', index: 1 })
-    expect(resolveCommand(stroke('3'))).toEqual({ kind: 'view', index: 2 })
+    expect(resolveCommand(stroke('1'))).toEqual({ kind: 'tab', index: 0 })
+    expect(resolveCommand(stroke('2'))).toEqual({ kind: 'tab', index: 1 })
+    expect(resolveCommand(stroke('3'))).toEqual({ kind: 'tab', index: 2 })
+    // Setup (#158). By index, into TAB_VALUES in src/dashboard/queue.ts — this map is
+    // pure and knows nothing about which tab that is.
+    expect(resolveCommand(stroke('4'))).toEqual({ kind: 'tab', index: 3 })
+  })
+
+  it('gives every tab a key, so none of them is reachable only by mouse', () => {
+    // The pairing #13's brief asks for, asserted rather than assumed: a fifth tab added
+    // without a digit for it fails here instead of being quietly mouse-only.
+    for (const [index] of TAB_VALUES.entries()) {
+      expect(resolveCommand(stroke(String(index + 1))), String(index + 1)).toEqual({
+        kind: 'tab',
+        index,
+      })
+    }
   })
 
   it('ignores a key it has no binding for', () => {

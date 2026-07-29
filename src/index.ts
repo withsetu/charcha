@@ -13,6 +13,7 @@ import {
   handleSession,
 } from './admin/route'
 import { SETTINGS_PATH, handleReadSettings, handleWriteSettings } from './admin/settings'
+import { SETUP_PATH, handleReadSetup } from './admin/setup'
 import { DASHBOARD_HEADERS, DASHBOARD_HTML } from './dashboard/document'
 import { databaseStatus, getIpHashRetentionDays, purgeExpiredIpHashes } from './db'
 import {
@@ -118,6 +119,14 @@ app.post(COMMENT_STATUS_PATH, (c) => handleCommentStatus(c))
 // Enforced by test/worker/admin/settings.test.ts.
 app.get(SETTINGS_PATH, (c) => handleReadSettings(c))
 app.put(SETTINGS_PATH, (c) => handleWriteSettings(c))
+
+// What is and is not configured on this deployment (#158). Read-only and booleans only:
+// a Worker cannot write its own secrets, so there is no PUT here to pair with the GET,
+// and the Setup tab's instructions are the substitute for the save button that could not
+// work. It sits on this surface for the same reason the allowlist does — an
+// unauthenticated caller learning which defences are off is reconnaissance.
+// Enforced by test/worker/admin/setup.test.ts.
+app.get(SETUP_PATH, (c) => handleReadSetup(c))
 
 // The dashboard itself (#13): the HTML shell the React app boots from.
 //
