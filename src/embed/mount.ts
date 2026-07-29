@@ -16,7 +16,14 @@
 //     only reaches the console is a spinner that never stops, and CLAUDE.md counts
 //     that as an unreported failure rather than as a loading state.
 
-import { messageForWriteFailure, readUrl, submitUrl, submissionBody } from './api'
+import {
+  messageForPreviewFailure,
+  messageForWriteFailure,
+  previewUrl,
+  readUrl,
+  submitUrl,
+  submissionBody,
+} from './api'
 import type { EmbedConfig, StylesMode } from './config'
 import {
   REPLYING_CLASS,
@@ -59,6 +66,15 @@ const POSTED_UNSHOWN =
   'Your text is still in the box below — posting it again would send it twice.'
 const POSTING = 'Posting…'
 const POST = 'Post comment'
+const PREVIEW_LOADING = 'Rendering the preview…'
+/**
+ * What an empty Preview tab says, and why it is not the failure sentence.
+ *
+ * "Nothing written yet" and "we could not render what you wrote" look identical as a
+ * blank panel, and only one of them is worth a retry — the same distinction the read
+ * path draws between its empty state and its error.
+ */
+const PREVIEW_EMPTY = 'Nothing to preview yet — write your comment in the Write tab.'
 
 /**
  * The stylesheet is written into the document once per mode, not once per widget.
@@ -103,6 +119,37 @@ interface Widget {
   email: HTMLInputElement
   error: HTMLElement
   submit: HTMLButtonElement
+  /**
+   * The Write/Preview tabs and the two panels they select (#78).
+   *
+   * All four are *inside* the form, which is not incidental: the composer is one
+   * live element that gets moved beneath the comment being replied to, and anything
+   * built outside it would be left behind — so previewing inside a reply would
+   * quietly drive a tablist belonging to a form that is somewhere else on the page.
+   * Enforced by test/dom/embed/preview.test.ts.
+   */
+  writeTab: HTMLButtonElement
+  previewTab: HTMLButtonElement
+  write: HTMLElement
+  preview: HTMLElement
+  /**
+   * The exact draft the preview panel is currently showing a rendering of, or null
+   * when it is showing anything else — an error, the empty state, nothing yet.
+   *
+   * It is what stops a reader flicking between the tabs from spending a Worker
+   * request per flick, and null is deliberately the value after a failure so that
+   * the retry has something to retry.
+   */
+  previewed: string | null
+  /**
+   * Which preview request is the current one.
+   *
+   * Answers arrive in whatever order the network gives them back, and the reader
+   * has usually edited the draft by then. Without a run number the slow answer to
+   * an old draft overwrites the fast answer to the new one, and the reader is
+   * reading a rendering of something they no longer have with no way to tell.
+   */
+  previewRun: number
   /** Where the composer lives when it is not mounted under a comment. */
   home: HTMLElement
   config: EmbedConfig
@@ -128,17 +175,33 @@ interface Widget {
 /* Reading                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Replaces an element's contents with one sentence, and optionally a way to try
+ * again.
+ *
+ * `textContent` first, which is what empties it: every string that reaches here has
+ * been on the network, and both call sites are places a reader is told what went
+ * wrong. The retry is the read path's own button, reused rather than reinvented —
+ * two failure affordances that look different would read as two different kinds of
+ * failure.
+ */
+function message(target: HTMLElement, text: string, retry: (() => void) | null): void {
+  target.textContent = text
+  if (retry === null) return
+  target.appendChild(fragment(retryMarkup()))
+  requireElement<HTMLButtonElement>(target, '.charcha-retry').addEventListener('click', retry)
+}
+
 function showStatus(widget: Widget, text: string, withRetry: boolean): void {
-  widget.status.textContent = text
-  if (withRetry) {
-    widget.status.appendChild(fragment(retryMarkup()))
-    requireElement<HTMLButtonElement>(widget.status, '.charcha-retry').addEventListener(
-      'click',
-      () => {
-        void load(widget)
-      },
-    )
-  }
+  message(
+    widget.status,
+    text,
+    withRetry
+      ? () => {
+          void load(widget)
+        }
+      : null,
+  )
 }
 
 /**
@@ -519,6 +582,13 @@ async function submit(widget: Widget): Promise<void> {
       // does not type them twice. Nothing is written anywhere — close the tab and
       // it is gone (card rule 8).
       widget.body.value = ''
+      // And the composer goes back to Write. The draft that preview was a rendering
+      // of has just been published, so leaving the reader on the Preview tab would
+      // show them their own posted comment a second time, in the box they write in.
+      // `moveFocus` is false: insertOwnComment has already taken focus to the
+      // comment that was just placed, and that is where the reader should be.
+      widget.previewed = null
+      selectTab(widget, false, false)
       endReply(widget)
       showStatus(widget, pending ? POSTED_PENDING : POSTED_PUBLISHED, false)
       return
@@ -535,6 +605,132 @@ async function submit(widget: Widget): Promise<void> {
     widget.submit.disabled = false
     widget.submit.textContent = POST
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Write and Preview                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Shows one of the composer's two panels.
+ *
+ * `hidden` on the panel the reader is not looking at, `aria-selected` and a roving
+ * `tabindex` on the tabs. Nothing here touches the textarea's value, and nothing
+ * rebuilds anything: the field is the same plain `<textarea>` in both states, which
+ * is the whole of the "the toolbar is not an editor" decision on #5.
+ *
+ * Focus stays on the tab the reader pressed, which is what a tablist does. The one
+ * exception is going back to Write, where the reader has asked to carry on writing.
+ * Enforced by test/dom/embed/preview.test.ts.
+ */
+function selectTab(widget: Widget, preview: boolean, moveFocus: boolean): void {
+  widget.writeTab.setAttribute('aria-selected', String(!preview))
+  widget.previewTab.setAttribute('aria-selected', String(preview))
+  widget.writeTab.tabIndex = preview ? -1 : 0
+  widget.previewTab.tabIndex = preview ? 0 : -1
+  widget.write.hidden = preview
+  widget.preview.hidden = !preview
+
+  if (preview) {
+    void showPreview(widget)
+  } else if (moveFocus) {
+    widget.body.focus()
+  }
+}
+
+/**
+ * Renders the draft by asking the Worker, which is the only renderer there is.
+ *
+ * **No Markdown parser ships in the embed** — one is 10–40 KB against 10 KB for the
+ * whole widget (card rule 4), and a second implementation disagrees with the first
+ * exactly when it matters, which is after the reader has posted. So the preview is
+ * the published output rather than an approximation of it, sanitising included:
+ * src/preview/route.ts runs the same `renderMarkdown` the publish runs (#78, #1).
+ *
+ * The draft goes as the raw body with **no headers at all**. A `fetch` given a
+ * string and no headers sends `text/plain`, which is a CORS-simple request no
+ * browser preflights — one billable Worker request per preview rather than two.
+ */
+async function showPreview(widget: Widget): Promise<void> {
+  const draft = widget.body.value
+
+  if (draft.trim() === '') {
+    // Nothing is sent. An empty draft is a 400 the reader would have waited for and
+    // a request somebody would have paid for, and the panel can say so instantly.
+    widget.previewed = null
+    message(widget.preview, PREVIEW_EMPTY, null)
+    return
+  }
+
+  // Already on screen. A reader flicking between the tabs is not a reason to spend
+  // requests against the 100,000/day that bounds a site on the free tier.
+  if (widget.previewed === draft) return
+
+  const run = (widget.previewRun += 1)
+  message(widget.preview, PREVIEW_LOADING, null)
+  widget.preview.setAttribute('aria-busy', 'true')
+
+  try {
+    const response = await fetch(previewUrl(widget.config.api), {
+      method: 'POST',
+      credentials: 'omit',
+      body: draft,
+    })
+    if (run !== widget.previewRun) return
+
+    const html = await response.text()
+    if (run !== widget.previewRun) return
+
+    if (response.status !== 200) {
+      // Not rendered comment HTML — a sentence, a proxy's error page, or whatever
+      // an endpoint that is not this Worker chose to send. It reaches the DOM
+      // through `message`, as text, and never through `innerHTML`.
+      widget.previewed = null
+      message(widget.preview, messageForPreviewFailure(response.status, html), () => {
+        void showPreview(widget)
+      })
+      return
+    }
+
+    // The one place network HTML enters this panel, and only on a 200. It is the
+    // same trust the read path places in src/render/, which escapes — there is no
+    // second rendering path here and there must not be. The wrapper carries the
+    // renderer's own class so the preview is styled exactly as the published
+    // comment will be; the name is a literal for the same reason every other
+    // renderer class name in this file is.
+    const body = document.createElement('div')
+    body.className = 'charcha-comment-body'
+    body.innerHTML = html
+    widget.preview.textContent = ''
+    widget.preview.appendChild(body)
+    widget.previewed = draft
+  } catch (error) {
+    if (run !== widget.previewRun) return
+    // The catch owns a visible state, or the panel sits on "Rendering…" forever and
+    // reports the failure to nobody (CLAUDE.md). `previewed` stays null so that the
+    // retry has something to retry.
+    console.error('charcha: could not render the preview', error)
+    widget.previewed = null
+    message(widget.preview, messageForPreviewFailure(0, ''), () => {
+      void showPreview(widget)
+    })
+  } finally {
+    // Only the current run may say the panel has stopped working; a stale one
+    // clearing this would unset a flag a newer request had just set.
+    if (run === widget.previewRun) widget.preview.removeAttribute('aria-busy')
+  }
+}
+
+/**
+ * Puts the reader in the composer, wherever the composer currently is.
+ *
+ * Focusing the textarea unconditionally is wrong once the panels exist: on the
+ * Preview tab the field is hidden, `focus()` on it does nothing at all, and a reader
+ * who pressed Reply is left standing wherever they were.
+ */
+function focusComposer(widget: Widget): void {
+  if (widget.write.hidden) widget.previewTab.focus()
+  else widget.body.focus()
 }
 
 /* -------------------------------------------------------------------------- */
@@ -573,8 +769,11 @@ function startReply(widget: Widget, comment: HTMLElement): void {
   widget.form.insertBefore(header, widget.form.firstChild)
   comment.appendChild(widget.form)
   // Focus moves into the mounted composer, or a keyboard user is left at a Reply
-  // button while the form they asked for is somewhere further down the page.
-  widget.body.focus()
+  // button while the form they asked for is somewhere further down the page. Which
+  // control that is depends on the tab the reader left the composer on — the tabs
+  // travel with the form and their state is preserved across the move, so the
+  // textarea may well be hidden right now.
+  focusComposer(widget)
 }
 
 function endReply(widget: Widget): void {
@@ -590,12 +789,52 @@ function endReply(widget: Widget): void {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Arrow-key movement across the toolbar, with one stop in the tab order.
+ * Arrow-key movement across a group that is one stop in the tab order.
  *
- * `role="toolbar"` promises this to a screen-reader user, so the alternative to
- * implementing it is not "a simpler toolbar" — it is a toolbar that lies about how
- * it is operated. Six buttons would otherwise sit between the reader and the field
- * they are trying to reach.
+ * `role="toolbar"` and `role="tablist"` both promise exactly this to a screen-reader
+ * user, so the alternative to implementing it is not "a simpler control" — it is a
+ * control that lies about how it is operated. One implementation for both, because
+ * two would be the same code twice with only one of them maintained.
+ */
+function wireRoving(
+  container: HTMLElement,
+  items: readonly HTMLElement[],
+  onMove: (next: HTMLElement) => void,
+): void {
+  container.addEventListener('keydown', (event) => {
+    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+    if (step === 0) return
+    const current = items.findIndex((item) => item === document.activeElement)
+    if (current === -1) return
+    event.preventDefault()
+    const next = items[(current + step + items.length) % items.length]
+    if (next === undefined) return
+    onMove(next)
+    next.focus()
+  })
+}
+
+/**
+ * The tabs. Selecting is what activating one means — there is nothing further to
+ * confirm, and a second keystroke to see your own comment would be a step for
+ * nothing.
+ */
+function wireTabs(widget: Widget): void {
+  const tabs = requireElement<HTMLElement>(widget.form, '.charcha-tabs')
+  const show = (tab: Element): void => {
+    selectTab(widget, tab === widget.previewTab, true)
+  }
+  wireRoving(tabs, [widget.writeTab, widget.previewTab], show)
+  tabs.addEventListener('click', (event) => {
+    const tab = (event.target as Element | null)?.closest('.charcha-tab')
+    if (tab === null || tab === undefined) return
+    show(tab)
+  })
+}
+
+/**
+ * The formatting toolbar. Six buttons would otherwise sit between the reader and the
+ * field they are trying to reach.
  */
 function wireToolbar(widget: Widget): void {
   const toolbar = requireElement<HTMLElement>(widget.form, '.charcha-toolbar')
@@ -604,15 +843,8 @@ function wireToolbar(widget: Widget): void {
     button.tabIndex = index === 0 ? 0 : -1
   })
 
-  toolbar.addEventListener('keydown', (event) => {
-    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
-    if (step === 0) return
-    const current = buttons.findIndex((button) => button === document.activeElement)
-    if (current === -1) return
-    event.preventDefault()
-    const next = buttons[(current + step + buttons.length) % buttons.length]
+  wireRoving(toolbar, buttons, (next) => {
     for (const button of buttons) button.tabIndex = button === next ? 0 : -1
-    next?.focus()
   })
 
   toolbar.addEventListener('click', (event) => {
@@ -636,6 +868,7 @@ function wireToolbar(widget: Widget): void {
 }
 
 function wire(widget: Widget): void {
+  wireTabs(widget)
   wireToolbar(widget)
 
   widget.form.addEventListener('submit', (event) => {
@@ -682,6 +915,12 @@ export function mountWidget(element: HTMLElement, config: EmbedConfig, index: nu
     email: requireElement<HTMLInputElement>(root, `#${id.email}`),
     error: requireElement<HTMLElement>(root, `#${id.error}`),
     submit: requireElement<HTMLButtonElement>(root, '.charcha-submit'),
+    writeTab: requireElement<HTMLButtonElement>(root, `#${id.writeTab}`),
+    previewTab: requireElement<HTMLButtonElement>(root, `#${id.previewTab}`),
+    write: requireElement<HTMLElement>(root, `#${id.write}`),
+    preview: requireElement<HTMLElement>(root, `#${id.preview}`),
+    previewed: null,
+    previewRun: 0,
     home: root,
     config,
     parentId: null,

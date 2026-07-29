@@ -4,10 +4,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_SERVER_MESSAGE_LENGTH,
+  messageForPreviewFailure,
   messageForWriteFailure,
+  previewUrl,
   readUrl,
   submissionBody,
 } from '../../../src/embed/api'
+import { PREVIEW_PATH } from '../../../src/preview/route'
 
 describe('readUrl', () => {
   it('asks for the page it is on', () => {
@@ -34,6 +37,26 @@ describe('readUrl', () => {
     expect(url).toContain('%3Fb%3D1%26c%3D2')
     // One `?` in the whole URL: the page's own query cannot become ours.
     expect(url.split('?').length).toBe(2)
+  })
+})
+
+describe('previewUrl', () => {
+  it('is the path the Worker actually registered', () => {
+    // The one place the two halves of #78 are pinned to each other. The embed
+    // cannot import PREVIEW_PATH — that would pull the route, Hono and the
+    // renderer into a bundle with 10 KB to spend (card rule 4) — so the constant
+    // is written out in src/embed/api.ts and this is what stops the copy drifting
+    // from the original. A rename on either side fails here rather than 404ing on
+    // a reader's page.
+    expect(previewUrl('https://charcha.example.com')).toBe(
+      'https://charcha.example.com' + PREVIEW_PATH,
+    )
+  })
+
+  it('keeps a deployment served from a subpath working', () => {
+    expect(previewUrl('https://maya.build/charcha')).toBe(
+      'https://maya.build/charcha' + PREVIEW_PATH,
+    )
   })
 })
 
@@ -135,5 +158,45 @@ describe('messageForWriteFailure', () => {
     // writes this through textContent, so this is the second lock, not the first.
     const message = messageForWriteFailure(400, '<b>hi</b>')
     expect(message).not.toContain('<')
+  })
+})
+
+describe('messageForPreviewFailure', () => {
+  it('shows the reader what the server said about their own draft', () => {
+    // The preview refuses exactly what the write refuses, in the same words —
+    // src/preview/route.ts validates with `commentBodySchema`, the write's own
+    // field — so a 400 here is worth repeating for the same reason a 400 on the
+    // write is.
+    expect(messageForPreviewFailure(400, 'Your comment is too long.')).toBe(
+      'Your comment is too long.',
+    )
+    expect(messageForPreviewFailure(413, 'That request was too large.')).toBe(
+      'That request was too large.',
+    )
+  })
+
+  it('never says the comment failed to post, because nothing was posted', () => {
+    // The write's generic sentence would be a lie on this path: the reader
+    // pressed Preview, not Post, and their draft is untouched.
+    const message = messageForPreviewFailure(500, 'Internal error')
+    expect(message).not.toContain('Internal error')
+    expect(message.toLowerCase()).not.toContain('could not be posted')
+    expect(message.length).toBeGreaterThan(10)
+  })
+
+  it('says the comment can still be posted, because preview is never a prerequisite', () => {
+    expect(messageForPreviewFailure(0, '').toLowerCase()).toContain('post')
+  })
+
+  it('applies the same normalisation the write failure does', () => {
+    const long = 'x'.repeat(MAX_SERVER_MESSAGE_LENGTH + 500)
+    expect(messageForPreviewFailure(400, long).length).toBeLessThanOrEqual(
+      MAX_SERVER_MESSAGE_LENGTH + 1,
+    )
+    expect(messageForPreviewFailure(400, 'Too\x07\x00 long.')).toBe('Too long.')
+    // Markup is not the plain sentence the contract promises, so it is refused
+    // rather than repeated. The embed writes this through `textContent`, so this
+    // is the second lock and not the first.
+    expect(messageForPreviewFailure(400, '<b>hi</b>')).not.toContain('<')
   })
 })

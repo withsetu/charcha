@@ -167,6 +167,16 @@ function base(): string {
 .charcha-reply-header{display:flex;align-items:baseline;justify-content:space-between;gap:.5em;margin-bottom:var(--cc-pad);padding-bottom:var(--cc-pad);border-bottom:1px solid var(--cc-line)}
 .charcha-reply-to{font-weight:600}
 
+.charcha-tabs{display:flex;gap:.25em;margin-bottom:var(--cc-pad);border-bottom:1px solid var(--cc-line)}
+/* The selected tab is drawn by [aria-selected], not by a class of its own: the state
+   is already in the DOM for assistive technology, and a second copy of it is a
+   second thing to keep in step. It is a border and a surface rather than a colour —
+   the widget cannot see the host's palette to pick one (#6). */
+.charcha-tab{margin-bottom:-1px;padding:.35em .7em;border:1px solid transparent;border-bottom-color:transparent;border-radius:var(--cc-radius) var(--cc-radius) 0 0;background:transparent;color:inherit;font:inherit;font-size:.8125em;font-weight:600;line-height:1.4;cursor:pointer}
+.charcha-tab[aria-selected="true"]{border-color:var(--cc-control-line);border-bottom-color:transparent;background:var(--cc-surface)}
+/* Matched to the textarea's own min-height, so switching tabs does not move the
+   Post button out from under the reader's pointer. */
+.charcha-preview{min-height:7em;padding:.5em .6em}
 .charcha-toolbar{display:flex;flex-wrap:wrap;gap:.25em;margin-bottom:.5em}
 .charcha-field{display:block;margin-bottom:var(--cc-pad)}
 .charcha-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:var(--cc-pad)}

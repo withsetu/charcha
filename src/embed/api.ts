@@ -9,6 +9,17 @@
 const COMMENTS_PATH = '/comments'
 
 /**
+ * The composer's Preview tab, one segment further down (#78).
+ *
+ * Written out rather than imported from src/preview/route.ts, which is where the
+ * original lives: importing it would pull the route, Hono and the renderer into a
+ * bundle with 10 KB to spend (card rule 4). The copy is pinned to the original by
+ * test/worker/embed/api.test.ts, which imports both and compares them — so a rename
+ * on either side is a red test rather than a 404 on a reader's page.
+ */
+const PREVIEW_PATH = COMMENTS_PATH + '/preview'
+
+/**
  * How much of the server's own answer the embed will repeat to a reader.
  *
  * The Worker's error bodies are one short plain-text sentence by design
@@ -27,6 +38,18 @@ export const MAX_SERVER_MESSAGE_LENGTH = 200
  * on while sounding like they broke something.
  */
 const GENERIC_WRITE_FAILURE = 'Your comment could not be posted. Please try again.'
+
+/**
+ * The same, for a preview — and deliberately not the same sentence.
+ *
+ * Nothing was posted on this path, so the write's words would be a lie pointed the
+ * other way: the reader pressed Preview, their draft is exactly where they left it,
+ * and the only thing that failed is a convenience. The second half says so, because
+ * a reader who believes preview is a step they have to complete is a reader who
+ * gives up on a comment they had already written.
+ */
+const GENERIC_PREVIEW_FAILURE =
+  'The preview could not be rendered. You can still post your comment.'
 
 /**
  * The statuses whose bodies are written for the reader.
@@ -50,6 +73,17 @@ export function readUrl(api: string, pageUrl: string, thread: string | null): st
 
 export function submitUrl(api: string): string {
   return api + COMMENTS_PATH
+}
+
+/**
+ * Where a draft goes to be rendered without being stored (#78).
+ *
+ * The answer is the HTML the published comment will carry — the same renderer, the
+ * same sanitiser — which is what lets the embed show a preview without shipping a
+ * Markdown parser it has no budget for.
+ */
+export function previewUrl(api: string): string {
+  return api + PREVIEW_PATH
 }
 
 export interface SubmissionInput {
@@ -123,7 +157,30 @@ export function submissionBody(input: SubmissionInput): Record<string, unknown> 
  * assumption rather than a fact.
  */
 export function messageForWriteFailure(status: number, text: string): string {
-  if (!READER_FACING_STATUSES.has(status)) return GENERIC_WRITE_FAILURE
+  return repeatable(status, text) ?? GENERIC_WRITE_FAILURE
+}
+
+/**
+ * The same, for a refused preview.
+ *
+ * It shares `repeatable` with the write rather than restating it, because the two
+ * are one rule: src/preview/route.ts validates the draft with `commentBodySchema`,
+ * which is the write's own Zod field, so a 400 from either is the same sentence
+ * about the same input. Only the fallback differs, and it differs because on this
+ * path nothing was posted.
+ */
+export function messageForPreviewFailure(status: number, text: string): string {
+  return repeatable(status, text) ?? GENERIC_PREVIEW_FAILURE
+}
+
+/**
+ * The server's own words, when they are safe to repeat — otherwise null.
+ *
+ * Null means "not one of our plain-text errors", and each caller answers it with a
+ * sentence of its own rather than with somebody else's page.
+ */
+function repeatable(status: number, text: string): string | null {
+  if (!READER_FACING_STATUSES.has(status)) return null
 
   const cleaned = text
     // eslint-disable-next-line no-control-regex -- matching them is the point; they are what is being removed
@@ -131,8 +188,8 @@ export function messageForWriteFailure(status: number, text: string): string {
     .replace(/\s+/g, ' ')
     .trim()
 
-  if (cleaned === '') return GENERIC_WRITE_FAILURE
-  if (/[<>]/.test(cleaned)) return GENERIC_WRITE_FAILURE
+  if (cleaned === '') return null
+  if (/[<>]/.test(cleaned)) return null
   if (cleaned.length > MAX_SERVER_MESSAGE_LENGTH) {
     return cleaned.slice(0, MAX_SERVER_MESSAGE_LENGTH) + '…'
   }
