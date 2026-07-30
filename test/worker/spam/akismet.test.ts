@@ -87,8 +87,13 @@ describe('configuration', () => {
     // built on it would spend a metered check per comment to be told `invalid`.
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
 
+    // A bare host does not parse; `javascript:` parses with no hostname. **`ftp:`
+    // is the one that isolates the scheme check** — it parses, it has a hostname,
+    // and only the protocol allowlist refuses it. Without it, deleting that
+    // allowlist broke nothing, which a kill-shot found.
     expect(akismetProvider({ apiKey, siteUrl: 'maya.build' })).toBeNull()
     expect(akismetProvider({ apiKey, siteUrl: 'javascript:alert(1)' })).toBeNull()
+    expect(akismetProvider({ apiKey, siteUrl: 'ftp://maya.build' })).toBeNull()
 
     log.mockRestore()
   })

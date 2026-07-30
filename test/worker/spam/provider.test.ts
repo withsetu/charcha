@@ -94,10 +94,18 @@ describe('what the seam hands a provider', () => {
     // `pageUrl` carries an attacker-chosen origin (src/page-key.ts drops the origin
     // from identity precisely because it is not trustworthy), so passing it on would
     // let any caller put any URL into the owner's account at a third party.
+    //
+    // **The site URL here deliberately differs from the fixture's `pageUrl`
+    // origin.** With both set to `https://maya.build` this assertion holds either
+    // way, so it would read as coverage of a guard it was not exercising — which a
+    // kill-shot found it doing.
     const provider = stub('ham')
-    await providerLayer({ provider, siteUrl }).run(contextFor({ pageKey: '/notes/leaving' }))
+    const context = contextFor({ pageKey: '/notes/leaving' })
+    expect(context.pageUrl).toBe('https://maya.build/notes/leaving')
 
-    expect(provider.seen[0]?.permalink).toBe('https://maya.build/notes/leaving')
+    await providerLayer({ provider, siteUrl: 'https://elsewhere.example' }).run(context)
+
+    expect(provider.seen[0]?.permalink).toBe('https://elsewhere.example/notes/leaving')
   })
 
   it('sends no permalink for a data-thread key, which is not a path', async () => {
