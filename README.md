@@ -338,13 +338,14 @@ gap).
 ### Moderation policy, and what "already approved" actually means
 
 Every comment is held for you to look at. That is the **default**, not a rule of the
-software: your dashboard's **Setup** tab has a *Moderation policy* setting with two
-choices.
+software: your dashboard's **Setup** tab has a *Moderation policy* setting with three
+choices, each one keeping what the one above it does.
 
 | | |
 |---|---|
 | **Hold every comment** | The default. Nothing appears on your site until you approve it. |
 | **Trust a commenter you have approved before** | A first comment is held, as always. Once you approve it, that person's later comments go straight onto the page. |
+| **Also publish comments your spam service says are clean** | Everything above, and: when a third-party spam service you connected checks a comment and comes back clean, it is published without waiting for you. |
 
 The second one is not a guess about a comment. It is **your own decision, replayed** —
 the same rule blog comments have worked by for twenty years, and the reason the queue
@@ -378,13 +379,20 @@ A household or an office sharing one connection can inherit each other's standin
 they also know the email address. That is the residual, it is stated rather than glossed,
 and it is the price of having no reader accounts and no cookies.
 
-There is deliberately **no** "publish anything the spam layers allowed" option. Those
-layers mostly measure the *absence* of something wrong — an untouched honeypot, more than
-two seconds spent typing, not too many links — so passing them is not evidence a comment
-is real. The one layer that is real evidence is
-[Turnstile](#turning-on-the-optional-features), and it is off until you turn it on.
-[#189](https://github.com/withsetu/charcha/issues/189) is where that option is tracked,
-for when the classifier can supply a confidence rather than an absence.
+**The third choice needs a spam service connected, and does nothing without one.** It
+acts only on a service *affirmatively* saying a comment is clean — not on the comment
+merely getting through. So a service that is switched off, that is having an outage, that
+rejected your key or that could not make up its mind publishes nothing, and on a
+deployment with no `AKISMET_API_KEY` the setting behaves exactly like the one above it.
+The Setup tab says so where you choose it.
+
+There is deliberately **no** "publish anything the spam layers allowed" option, and the
+third choice is not that under another name. Those layers mostly measure the *absence* of
+something wrong — an untouched honeypot, more than two seconds spent typing, not too many
+links — so getting through them is not evidence a comment is real, and on a deployment
+that configured nothing it mostly means those layers never ran. A spam service checking
+the text against a real corpus and answering "clean" is a different statement, and it is
+the only one that counts here.
 
 ### Allowed origins, and why a comment can be refused
 

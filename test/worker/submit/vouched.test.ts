@@ -104,6 +104,20 @@ describe('trust-vouched', () => {
     // clean run, it never lowers the floor on a doubted one. `runLayers` already makes
     // a doubt beat a vouch (test/worker/spam/vouch.test.ts); this asserts the pipeline
     // does not undo that.
+    //
+    // **The commenter is one this policy would otherwise publish, and that is the whole
+    // test.** Written against a stranger it passes with the guard deleted — a stranger
+    // is held anyway, by the trust read finding nothing — so it would have read as
+    // coverage while asserting nothing. Establishing them first is what makes the
+    // doubt, rather than their anonymity, the only thing holding the comment.
+    await post({ verdict: ALLOWED })
+    await db
+      .prepare(
+        `update comments set status = 'approved', moderated_at = ?1 where status = 'pending'`,
+      )
+      .bind(t0 + 60)
+      .run()
+
     expect((await post({ verdict: HELD })).outcome).toBe('pending')
   })
 
