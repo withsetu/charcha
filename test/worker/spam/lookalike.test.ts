@@ -153,13 +153,29 @@ describe('the signal over a comment body', () => {
   })
 })
 
-describe('layer 5 carries the signal', () => {
+describe('layer 6 carries the signal', () => {
   it('holds a comment whose only fault is a lookalike link', async () => {
     const outcome = await contentLayer().run(
       contextFor({ body: `Worth a look: https://${CYRILLIC_A}pple.example/deal` }),
     )
 
     expect(outcome).toEqual({ action: 'review', reason: LOOKALIKE_REASON })
+  })
+
+  it('yields to a link in the author’s name, which is the more specific reason (#184)', async () => {
+    // The precedence inside layer 6 is by how much the reason tells the moderator that
+    // they could not see for themselves, and both of these are reviews — so which one
+    // survives is decided here and nowhere else. Without this the ordering in
+    // `contentLayer` is a comment rather than a property, which is how #184 shipped it
+    // and what this test exists to fix.
+    const outcome = await contentLayer().run(
+      contextFor({
+        authorName: 'www.cheap-pills.example',
+        body: `Worth a look: https://${CYRILLIC_A}pple.example/deal`,
+      }),
+    )
+
+    expect(outcome).toEqual({ action: 'review', reason: 'link-in-name' })
   })
 
   it('still rejects a link flood that happens to contain a lookalike', async () => {

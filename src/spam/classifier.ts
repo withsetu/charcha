@@ -1,4 +1,4 @@
-// Layer 6 — the classifier, trained on this site's own moderation decisions (#10).
+// Layer 7 — the classifier, trained on this site's own moderation decisions (#10).
 //
 // It is last of the local layers and ahead of any third-party provider, which is the
 // ordering CLAUDE.md sets and the reason it may cost a subrequest at all: everything
@@ -11,7 +11,7 @@
 //   - It is probabilistic where every layer above it is a rule. A false positive on
 //     a rule is a bug somebody can find and fix; a false positive here is a real
 //     person's comment destroyed by a number nobody can inspect.
-//   - Layer 8 — the human — is the gate this project already has. `review` puts the
+//   - Layer 9 — the human — is the gate this project already has. `review` puts the
 //     comment in front of them, which is where a judgement call belongs.
 //   - **A rejected comment is never stored, so it can never be labelled.** This layer
 //     learns only from comments a moderator saw. A classifier allowed to reject would
@@ -57,7 +57,7 @@ export interface ClassifierConfig {
 }
 
 /**
- * Builds layer 6.
+ * Builds layer 7.
  *
  * **The order inside the layer is the order of the pipeline in miniature**, and it is
  * the reason a fresh deployment pays essentially nothing for this feature: the cold
@@ -101,7 +101,7 @@ export function classifierLayer(config: ClassifierConfig = {}): SpamLayer {
   async function classify(context: SpamCheckContext): Promise<LayerOutcome> {
     if (embed === null) {
       // Once per isolate. A deployment whose AI binding is missing has no other way
-      // to learn that layer 6 is not running — it abstains, which is
+      // to learn that layer 7 is not running — it abstains, which is
       // indistinguishable from a working layer with no opinion.
       announceOnce('classifier:no-binding', {
         event: 'spam_layer_inactive',

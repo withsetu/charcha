@@ -105,7 +105,7 @@ export async function sendEmail(message: EmailMessage, config: ResendConfig): Pr
   // `html` because the body is unmoderated commenter text (src/notify/message.ts),
   // and `reply_to`, `cc`, `bcc`, `headers` and `tags` because a value in any of
   // them would be something about the reader travelling to a third party — the
-  // disclosure that makes spam layer 7 opt-in. Built as a literal rather than
+  // disclosure that makes spam layer 8 opt-in. Built as a literal rather than
   // spread from `message` so an added field cannot arrive here by accident.
   // Enforced by test/worker/notify/resend.test.ts.
   const payload = {

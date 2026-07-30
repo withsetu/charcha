@@ -16,6 +16,7 @@ export interface ContextOverrides {
   form?: Record<string, unknown>
   body?: string
   authorName?: string
+  authorEmail?: string
   pageKey?: string
   ip?: string | null
   now?: number
@@ -28,6 +29,9 @@ export function contextFor(overrides: ContextOverrides = {}): SpamCheckContext {
   return {
     comment: {
       authorName: overrides.authorName ?? 'Rahul Kanwar',
+      // Absent unless a test asks for one, because most real comments have none —
+      // a default address here would give every fixture half of #173's identity.
+      ...(overrides.authorEmail === undefined ? {} : { authorEmail: overrides.authorEmail }),
       body: overrides.body ?? validBody,
     },
     form: overrides.form ?? {},

@@ -15,6 +15,7 @@ import {
   READ_SPAM_MODEL_SQL,
   RECENT_BY_IP_SQL,
   RECENT_ON_PAGE_SQL,
+  SPAM_HISTORY_SQL,
   TRAINING_SUBJECT_SQL,
 } from '../../../src/db'
 
@@ -115,20 +116,53 @@ describe("the trainer's reads (#10)", () => {
 })
 
 describe('the duplicate-body read', () => {
-  it('constrains the thread, the body hash and the window on one index', async () => {
-    // The window is asserted, not just the two equalities, and that is #69's
-    // doing rather than tidiness. Adding `comments_by_thread_time` gave SQLite a
-    // second candidate for this statement — (thread_id, created_at) also answers
-    // two of its three predicates — and the planner took it, downgrading an exact
-    // two-column seek into a window scan filtered on body_hash. Carrying
-    // created_at on `comments_by_body` makes that index strictly the more
-    // constrained of the two, so the choice is decided by the schema rather than
-    // by which index the planner's estimates happen to favour.
+  it('constrains the body hash and the window on one index, across every page', async () => {
+    // #184 made this read deployment-wide: the page-scoped version could not see one
+    // payload blasted at fifty URLs at all, because `comments_by_body` led with
+    // thread_id and a prefix of that answers nothing when the thread is unknown.
+    //
+    // The window is asserted and not only the hash, which is #69's lesson carried
+    // over: an index constrained on one column and then filtering every entry it
+    // finds is still reported as a SEARCH, so a plan test that asserts less than the
+    // full seek passes while the read grows with the copies of a body ever stored.
     const plan = await planOf(DUPLICATE_BODY_SQL, '/hello', 'a-body-hash', 1000)
 
     expect(plan).toMatch(
-      /USING (?:COVERING )?INDEX comments_by_body \(thread_id=\? AND body_hash=\? AND created_at>\?\)/,
+      /SEARCH c USING COVERING INDEX comments_by_body_hash \(body_hash=\? AND created_at>\?\)/,
     )
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('is covering, so counting the pages a body reached reads no comment row', async () => {
+    // COVERING is the load-bearing word, and `thread_id` being the index's third
+    // column is what earns it. Without it SQLite seeks back into `comments` once per
+    // copy of the body — each row carrying up to 10,000 characters of body into a
+    // 128 MB isolate — on the public write endpoint.
+    const plan = await planOf(DUPLICATE_BODY_SQL, '/hello', 'a-body-hash', 1000)
+
+    expect(plan).toMatch(/COVERING INDEX comments_by_body_hash/)
+  })
+
+  it('resolves each copy’s page on the threads primary key, never by scanning threads', async () => {
+    const plan = await planOf(DUPLICATE_BODY_SQL, '/hello', 'a-body-hash', 1000)
+
+    expect(plan).toMatch(/SEARCH t USING INTEGER PRIMARY KEY \(rowid=\?\)/)
+  })
+})
+
+describe('the repeat-offender read (#184)', () => {
+  const BINDINGS = ['a-hash-of-an-address', 'rahul@kanwar.example'] as const
+
+  it('answers out of comments_by_spam_origin without reading a comment row', async () => {
+    // The mirror of the trust lookup's plan test, and it carries the same warning:
+    // `not.toMatch(/SCAN/)` alone is a kill-shot that passes here, because dropping
+    // `comments_by_spam_origin` leaves SQLite `comments_by_ip (ip_hash=?)` — still a
+    // seek, still no SCAN, and one row read for every comment ever posted from that
+    // address, on the public write endpoint. The index by name and COVERING are what
+    // make the assertion mean anything.
+    const plan = await planOf(SPAM_HISTORY_SQL, ...BINDINGS)
+
+    expect(plan).toMatch(/USING COVERING INDEX comments_by_spam_origin \(ip_hash=\?\)/)
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })

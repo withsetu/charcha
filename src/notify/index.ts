@@ -39,7 +39,7 @@
 //     of the three, and src/notify/resend.ts builds a four-key payload with no
 //     `reply_to`, `cc`, `bcc`, `headers` or `tags`.
 //
-// That split is the point. Spam layer 7 is opt-in and off by default because it
+// That split is the point. Spam layer 8 is opt-in and off by default because it
 // sends commenter IP, email *and* content; this sends the least of that set which
 // still does the job, and it is off by default for the same reason.
 //

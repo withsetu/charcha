@@ -1,4 +1,4 @@
-// The Akismet adapter — the first, and so far only, implementation of the layer 7
+// The Akismet adapter — the first, and so far only, implementation of the layer 8
 // seam (#11). CleanTalk and StopForumSpam are named on that issue and deliberately
 // not built: one adapter is what proves the seam, a third is speculative until
 // somebody asks for it.
@@ -25,7 +25,7 @@
 //   https://akismet.com/pricing/ and https://akismet.com/pricing/personal/
 //
 // **The 500-a-month figure is the reason for every other decision in the pipeline
-// around this file.** It is why layer 7 runs last, why it is `reviewOnly`, and why
+// around this file.** It is why layer 8 runs last, why it is `reviewOnly`, and why
 // every failure here abstains instead of retrying.
 // Enforced by test/worker/spam/akismet.test.ts and
 // test/worker/spam/akismet-announcements.test.ts.
@@ -111,13 +111,13 @@ export function akismetProvider(config: AkismetConfig): SpamProvider | null {
 
   if (!hasSite) {
     announce('akismet:no-site-url', false, 'AKISMET_API_KEY is set but CHARCHA_SITE_URL is not', {
-      fix: 'set CHARCHA_SITE_URL to your site’s home page URL, or unset AKISMET_API_KEY to leave layer 7 off',
+      fix: 'set CHARCHA_SITE_URL to your site’s home page URL, or unset AKISMET_API_KEY to leave layer 8 off',
     })
     return null
   }
   if (!hasKey) {
     announce('akismet:no-api-key', false, 'CHARCHA_SITE_URL is set but AKISMET_API_KEY is not', {
-      fix: 'set AKISMET_API_KEY, or leave layer 7 off — every other spam layer runs without it',
+      fix: 'set AKISMET_API_KEY, or leave layer 8 off — every other spam layer runs without it',
     })
     return null
   }
@@ -166,7 +166,7 @@ async function check(
   // owner paid for nothing.
   if (submission.ip === null) {
     announce('akismet:no-ip', true, 'a submission arrived with no CF-Connecting-IP header', {
-      meanwhile: 'layer 7 abstains on those submissions rather than spending a check',
+      meanwhile: 'layer 8 abstains on those submissions rather than spending a check',
     })
     return 'unknown'
   }
@@ -218,7 +218,7 @@ async function check(
     // signal it lost. Here there is no signal to lose and two reasons not to
     // hold: a `review` would put Akismet's name on a comment Akismet never saw,
     // which is a false reason in the moderator's queue and in the log; and layer
-    // 7 is the last layer, so unlike layer 3 there is nothing after it that an
+    // 8 is the last layer, so unlike layer 3 there is nothing after it that an
     // attacker waiting for downtime could skip.
     //
     // No retry, for the reason src/notify/resend.ts gives about Resend and one
@@ -252,7 +252,7 @@ async function check(
   announce('akismet:invalid', true, 'Akismet did not return a verdict', {
     answer: body.slice(0, 64),
     debugHelp: capped(response.headers.get('x-akismet-debug-help') ?? ''),
-    fix: 'check the key and the site at https://akismet.com/account/, or unset AKISMET_API_KEY to turn layer 7 off',
+    fix: 'check the key and the site at https://akismet.com/account/, or unset AKISMET_API_KEY to turn layer 8 off',
   })
   return 'unknown'
 }

@@ -170,8 +170,8 @@ their IP. If your site has a privacy notice, that first sentence is the one that
 in it.
 
 **Third-party spam checking (Akismet) — the one to read about before you switch it on.**
-Charcha's spam defence is seven layers deep, and the first six run inside your Worker and
-transmit nothing about your readers to anybody. This is the seventh, and it is the
+Charcha's spam defence is eight layers deep, and the first seven run inside your Worker and
+transmit nothing about your readers to anybody. This is the eighth, and it is the
 exception: every comment that reaches it is posted to
 [Akismet](https://akismet.com), a service run by Automattic, carrying
 
@@ -187,9 +187,9 @@ because the check happens before the comment is stored.
 [docs/spam-providers.md](docs/spam-providers.md) lists every field, has a paragraph you
 can paste into a privacy notice, and says what is deliberately *not* sent.
 
-What it buys is a **held** comment, never a refused one — layer 7 can only put something
+What it buys is a **held** comment, never a refused one — layer 8 can only put something
 in your moderation queue with `provider: akismet` as its reason, never turn a reader away.
-It runs last, so it only ever sees comments the six free layers could not decide, and it
+It runs last, so it only ever sees comments the seven free layers could not decide, and it
 is skipped altogether for a comment something else already held: Akismet's Pro plan is
 [500 checks a month](https://akismet.com/pricing/) at $9.95 billed yearly (checked
 2026-07-29), and an anonymous visitor must not be able to spend them. If Akismet is down,
@@ -210,7 +210,7 @@ address is a `workers.dev` URL rather than your site, and the URL the embed repo
 chosen by whoever posted the comment. Setting one of the two without the other leaves the
 layer off and writes one line to your Worker's log saying which half is missing.
 
-Turning it off again is `pnpm wrangler secret delete AKISMET_API_KEY`. The other six
+Turning it off again is `pnpm wrangler secret delete AKISMET_API_KEY`. The other seven
 layers do not know it existed.
 
 ### Changing a secret afterwards

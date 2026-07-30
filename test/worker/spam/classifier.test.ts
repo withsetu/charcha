@@ -1,4 +1,4 @@
-// Layer 6, as a layer (#10).
+// Layer 7, as a layer (#10).
 //
 // **No test here touches the real `AI` binding, and none can.** Workers AI has no
 // local simulation, so a test that reached it would need a CLOUDFLARE_API_TOKEN in
@@ -302,7 +302,7 @@ describe('the assembled pipeline', () => {
   })
 
   it('is the last of the free layers, so nothing cheap runs after an inference call', async () => {
-    // It was the last layer outright until #11 added layer 7. The property that
+    // It was the last layer outright until #11 added layer 8. The property that
     // matters is unchanged and now says something slightly stronger: everything
     // before the classifier is free and local, and the only thing after it is the
     // one layer that costs the site owner money and transmits something about the

@@ -1,6 +1,6 @@
-// What layer 7 says about itself (#11).
+// What layer 8 says about itself (#11).
 //
-// Layer 7 is opt-in and off by default, which makes its failure modes invisible in
+// Layer 8 is opt-in and off by default, which makes its failure modes invisible in
 // a way no other layer's are: a site owner who paid for Akismet and whose key has
 // been suspended sees exactly what a working layer with no opinion looks like —
 // nothing. Every path here abstains, so the log line is the *only* signal.
@@ -76,7 +76,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('layer 7 — what it announces', () => {
+describe('layer 8 — what it announces', () => {
   it('says nothing at all when nobody has opted in', () => {
     // The default state on every deployment. A line here would be a nag for a
     // feature this project deliberately does not push: it is the only layer that

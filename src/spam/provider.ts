@@ -1,4 +1,4 @@
-// Layer 7 — the seam a third-party spam service plugs into (#11), and the one
+// Layer 8 — the seam a third-party spam service plugs into (#11), and the one
 // place in this project where something about a reader leaves the Worker.
 //
 // **This layer breaks Charcha's posture on purpose, and only when the site owner
@@ -104,13 +104,13 @@ export interface ProviderLayerConfig {
 }
 
 /**
- * Builds layer 7 from whichever provider the owner enabled, or from none.
+ * Builds layer 8 from whichever provider the owner enabled, or from none.
  *
  * **It can only hold a comment for review, and that is what makes it affordable.**
  * The reasoning is a loop that closes, and each half needs the other:
  *
  *   - A provider is a third party's probabilistic judgement about someone else's
- *     site. Layer 6 already refuses to reject on a probability (src/spam/classifier.ts)
+ *     site. Layer 7 already refuses to reject on a probability (src/spam/classifier.ts)
  *     for a reason that applies here with more force, not less: a false positive
  *     destroys a real person's comment, a rejected comment is never stored, and the
  *     moderator never learns it happened. The judgement is not even ours to inspect.
@@ -120,7 +120,7 @@ export interface ProviderLayerConfig {
  *     it is. Akismet's paid tier allows **500 checks a month**
  *     (https://akismet.com/pricing/, checked 2026-07-29), so a check spent on a
  *     discarded answer is 0.2% of a site's monthly allowance bought by an
- *     unauthenticated caller. #10 found exactly this bug on layer 6, where the
+ *     unauthenticated caller. #10 found exactly this bug on layer 7, where the
  *     budget was 10,000 neurons a day; here the budget is three orders of magnitude
  *     smaller and resets thirty times more slowly.
  *

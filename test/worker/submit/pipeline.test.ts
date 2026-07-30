@@ -272,3 +272,64 @@ describe('runSubmission — replies', () => {
     expect(result.html).toContain('a visible reply echo')
   })
 })
+
+describe('runSubmission — the whole submission, counted', () => {
+  // The 50-query invocation budget is spent by the whole request, not by the spam
+  // check alone, and CLAUDE.md's rule is that the count stays *constant* rather than
+  // low. test/worker/spam/order.test.ts pins the layers' share; this pins the total, so
+  // a read added anywhere between validation and the insert has somewhere to fail.
+  //
+  // Six, on a deployment with an IP_HASH_SECRET, no Workers AI and no parent comment:
+  //   1 per-IP rate limit          (layer 4)
+  //   2 per-thread rate limit      (layer 4)
+  //   3 repeat-offender history    (layer 5, #184)
+  //   4 duplicate bodies           (layer 6, #184 — one statement for both scopes)
+  //   5 getOrCreateThread
+  //   6 insertComment
+  // The moderation policy and the trust lookup are not among them: `autoApproved`
+  // refuses before its first read when the comment carries no email (#173).
+  it('spends six statements, and no more when the page is already busy', async () => {
+    const { createSpamCheck } = await import('../../../src/spam')
+    const { computeBodyHash } = await import('../../../src/submit/hash')
+    const { getOrCreateThread, insertComment } = await import('../../../src/db')
+
+    const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
+    for (let i = 0; i < 20; i++) {
+      const body = `an earlier comment number ${i} on this page, long enough to be a real one`
+      await insertComment(db, {
+        threadId: thread.id,
+        authorName: `Reader ${i}`,
+        body,
+        bodyHash: await computeBodyHash(body),
+        ipHash: null,
+        now: t0 - 86_400,
+      })
+    }
+
+    const statements: string[] = []
+    const counting = {
+      ...db,
+      prepare(sql: string) {
+        statements.push(sql)
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+
+    const result = await runSubmission(
+      { ...validRoot, body: 'A comment nothing objects to, long enough for the duplicate rule.' },
+      {
+        db: counting,
+        spamCheck: createSpamCheck({ IP_HASH_SECRET: 'ip-secret' }),
+        request: new Request('https://charcha.example/comments', {
+          method: 'POST',
+          headers: { 'CF-Connecting-IP': '198.51.100.7' },
+        }),
+        now: t0,
+        ipSecret: 'ip-secret',
+      },
+    )
+
+    expect(result.outcome).toBe('pending')
+    expect(statements).toHaveLength(6)
+  })
+})

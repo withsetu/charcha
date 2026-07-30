@@ -114,12 +114,13 @@ layers could not decide. Order:
 2. Time-to-submit heuristic (under ~2s is not a human)
 3. Turnstile (free, unmetered, invisible)
 4. Rate limiting, per IP and per thread
-5. Content heuristics — link count, duplicate body, known patterns
-6. Workers AI classifier, self-trained on this site's own moderation decisions
-7. Optional third-party provider behind `SpamProvider`
-8. Moderation queue — the human gate
+5. Repeat offender — a commenter the owner has already marked spam (#184)
+6. Content heuristics — link count, duplicate body across the deployment, known patterns
+7. Workers AI classifier, self-trained on this site's own moderation decisions
+8. Optional third-party provider behind `SpamProvider`
+9. Moderation queue — the human gate
 
-Layers 1–6 are on by default, run locally, transmit nothing. **Layer 7 is opt-in
+Layers 1–7 are on by default, run locally, transmit nothing. **Layer 8 is opt-in
 and off by default**, because it means sending commenter IP, email and content to a
 third party — which the site owner then has to disclose. Any UI enabling a provider
 must state plainly what is sent and to whom, *before* the toggle.

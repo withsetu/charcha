@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { getOrCreateThread, insertComment } from '../../../src/db'
 import { computeBodyHash } from '../../../src/submit/hash'
 import { ELAPSED_FIELD, HONEYPOT_FIELD, TURNSTILE_FIELD } from '../../../src/spam/fields'
+import { hashIp } from '../../../src/spam/ip'
 import { SPAM_LAYER_ORDER, createSpamCheck } from '../../../src/spam'
 import type { SpamLayer } from '../../../src/spam/layer'
 import { runLayers } from '../../../src/spam/layer'
@@ -70,7 +71,7 @@ describe('the layered run', () => {
 
   it('keeps going after a review, so a review cannot be used to skip the rate limit', async () => {
     // If review short-circuited, anything that reliably produces one — a Turnstile
-    // outage, a link-heavy body — would be a way past layers 4 and 5. Review still
+    // outage, a link-heavy body — would be a way past layers 4 and 6. Review still
     // costs a database write, so the layers that bound writes must still run.
     const seen: string[] = []
     const verdict = await runLayers(
@@ -120,7 +121,7 @@ describe('the layered run', () => {
   it('skips a reviewOnly layer once a review is held, because its answer is discarded', async () => {
     // #10. The first review's reason is the one kept and a reviewOnly layer cannot
     // reject, so asking one after a review can no longer change the verdict — it can
-    // only cost. For layer 6 that cost is a metered Workers AI call on the public
+    // only cost. For layer 7 that cost is a metered Workers AI call on the public
     // write endpoint, spent on an answer nobody reads, and omitting one form field is
     // enough to make layer 2 hold every submission.
     const seen: string[] = []
@@ -175,7 +176,7 @@ describe('the layered run', () => {
     // `reviewOnly` is a promise about a layer's strongest answer, and getting it
     // wrong on a rejecting layer would silently disable that layer for any held
     // comment. The two layers that make the promise are the two that cost money to
-    // ask — layer 6 in neurons (#10) and layer 7 in a third party's metered checks
+    // ask — layer 7 in neurons (#10) and layer 8 in a third party's metered checks
     // (#11), which is not a coincidence but the reason the flag exists.
     const check = createSpamCheck({})
     const reviewOnly = check.layers.filter((layer) => layer.reviewOnly === true)
@@ -264,7 +265,7 @@ describe('createSpamCheck — the assembled ordering', () => {
 
   it('never spends a third-party check on a comment another layer already held', async () => {
     // The `reviewOnly` rule in situ, on the layer it matters most for. `runLayers`
-    // keeps the first review's reason and layer 7 cannot reject, so its answer here
+    // keeps the first review's reason and layer 8 cannot reject, so its answer here
     // would be discarded — while still costing 1/500th of a month's allowance, to an
     // unauthenticated caller who need only omit one form field.
     const asked: string[] = []
@@ -374,11 +375,12 @@ describe('createSpamCheck — a comment from a real person', () => {
     expect(verdict).toEqual({ action: 'allow' })
   })
 
-  it('costs at most four database reads once the classifier is wired in', async () => {
-    // Four: one per-IP count, one per-thread count, one duplicate-body lookup, and
-    // the classifier's model row (#10). Constant in the number of comments *and* in
+  it('costs at most five database reads once the classifier is wired in', async () => {
+    // Five: one per-IP count, one per-thread count, the repeat-offender lookup (#184),
+    // one duplicate-body lookup, and the classifier's model row (#10). Constant in the
+    // number of comments *and* in
     // the number of comments the site has ever moderated, which is the rule the
-    // 50-query budget produces (CLAUDE.md) and the property layer 6's single weight
+    // 50-query budget produces (CLAUDE.md) and the property layer 7's single weight
     // vector exists to keep — a nearest-neighbour classifier would read one row per
     // stored vector right here.
     //
@@ -423,7 +425,7 @@ describe('createSpamCheck — a comment from a real person', () => {
       },
     } as unknown as D1Database
 
-    // The model really is past the gate, or the four below is the untrained path
+    // The model really is past the gate, or the five below is the untrained path
     // wearing the trained path's name.
     const { readSpamModel } = await import('../../../src/db')
     const fitted = await readSpamModel(db)
@@ -436,13 +438,14 @@ describe('createSpamCheck — a comment from a real person', () => {
     )
     await check.check({ ...contextFor({ form: goodForm() }), db: counting })
 
-    expect(statements).toHaveLength(4)
+    expect(statements).toHaveLength(5)
   })
 
-  it('costs at most three database reads on a deployment with no Workers AI', async () => {
-    // Three: one per-IP count, one per-thread count, one duplicate-body lookup. The
-    // classifier reads nothing at all without a binding — it abstains before the
-    // model row, so the feature costs an unprovisioned deployment exactly zero.
+  it('costs at most four database reads on a deployment with no Workers AI', async () => {
+    // Four: one per-IP count, one per-thread count, the repeat-offender lookup, one
+    // duplicate-body lookup. The classifier reads nothing at all without a binding —
+    // it abstains before the model row, so the feature costs an unprovisioned
+    // deployment exactly zero.
     const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
     for (let i = 0; i < 30; i++) {
       const body = `an earlier comment number ${i}, long enough to be a real one on this thread`
@@ -467,7 +470,69 @@ describe('createSpamCheck — a comment from a real person', () => {
     const check = createSpamCheck({ IP_HASH_SECRET: 'ip-secret' })
     await check.check({ ...contextFor({ form: goodForm() }), db: counting })
 
-    expect(statements).toHaveLength(3)
+    expect(statements).toHaveLength(4)
+  })
+
+  it('costs two database reads on a deployment with no IP_HASH_SECRET', async () => {
+    // Two: the per-thread count and the duplicate-body lookup. Both layers that need
+    // an address to recognise anybody by — the per-IP half of layer 4 and the whole of
+    // layer 5 — abstain before their read rather than after it, which is what makes
+    // #184 free on a deployment that has not run `wrangler secret put`.
+    const statements: string[] = []
+    const counting = {
+      ...db,
+      prepare(sql: string) {
+        statements.push(sql)
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+
+    const check = createSpamCheck({})
+    await check.check({ ...contextFor({ form: goodForm() }), db: counting })
+
+    expect(statements).toHaveLength(2)
+  })
+
+  it('costs no more reads on a deployment with a long history of refusals', async () => {
+    // The rule CLAUDE.md states, applied to the two new signals together: the count is
+    // constant in the number of comments on the page, in the number the site has ever
+    // moderated, and in the number it has ever refused from this address. A lookup that
+    // listed a spammer's history instead of aggregating it would fail here and nowhere
+    // else.
+    const thread = await getOrCreateThread(db, { pageKey: '/notes/leaving', now: t0 })
+    const ipHash = await hashIp('198.51.100.7', 'ip-secret')
+    for (let i = 0; i < 25; i++) {
+      const body = `an earlier comment number ${i}, long enough to be a real one on this thread`
+      await db
+        .prepare(
+          `insert into comments (thread_id, author_name, author_email, body, body_hash, status,
+                                 by_owner, ip_hash, created_at)
+           values (?1, 'Someone', 'buy@pills.example', ?2, ?3, 'spam', 0, ?4, ?5)`,
+        )
+        .bind(thread.id, body, await computeBodyHash(body), ipHash, t0 - DEFAULT_WINDOW_AGO)
+        .run()
+    }
+    const statements: string[] = []
+    const counting = {
+      ...db,
+      prepare(sql: string) {
+        statements.push(sql)
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+
+    const check = createSpamCheck({ IP_HASH_SECRET: 'ip-secret' })
+    const verdict = await check.check({
+      ...contextFor({ form: goodForm(), authorEmail: 'buy@pills.example' }),
+      db: counting,
+    })
+
+    // Held by layer 5, which does not short-circuit — the layers that bound writes must
+    // still get their say (src/spam/layer.ts) — so the full four reads still happen and
+    // the count is what this test is about. The reason kept is layer 5's, because
+    // `runLayers` keeps the first review's and layer 5 runs before layer 6.
+    expect(verdict).toEqual({ action: 'review', reason: 'repeat-offender: known-spammer' })
+    expect(statements).toHaveLength(4)
   })
 })
 

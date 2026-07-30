@@ -1,0 +1,87 @@
+-- The two indexes behind #184's local spam signals, and the removal of the one they
+-- replace. Designed on issue #184.
+--
+-- Both signals are questions the free local layers could already have asked and could
+-- not answer, because no index answered them. Neither adds a query to the submission
+-- path's constant count; each makes an existing or new single statement seekable.
+--
+-- ## 1. `comments_by_body_hash` — the same body posted to different pages
+--
+-- The duplicate rule (layer 6) was scoped to one page, because `comments_by_body` is
+-- (thread_id, body_hash, created_at) and a prefix of that is useless when the thread is
+-- not known. So one payload blasted at fifty URLs — the archetypal spam shape — was
+-- fifty first-time comments, while the one attacker who posted twice to one article was
+-- caught. Leading on `body_hash` is what makes "has this text been posted anywhere on
+-- this deployment lately" one seek instead of a table scan.
+--
+-- `created_at` is second so the window is a constraint on the seek and not a filter
+-- applied to every copy ever stored, the same lesson #69 taught `comments_by_body`.
+-- `thread_id` is third so the seek is covering: DUPLICATE_BODY_SQL counts how many
+-- *distinct* pages carry the body, and without the column in the index that count reads
+-- one comment row — up to 10,000 characters of body — per copy, inside a 128 MB isolate
+-- on the public write endpoint.
+--
+-- **Not partial.** Every comment has a `body_hash`, so there is no predicate to exclude
+-- anything, and a partial index here would only be a way to have the statement silently
+-- stop using it.
+-- Enforced by test/worker/spam/query-plan.test.ts.
+CREATE INDEX comments_by_body_hash ON comments (body_hash, created_at, thread_id);
+
+-- `comments_by_body` is dropped because nothing reads it any more: the one statement
+-- that did — DUPLICATE_BODY_SQL — now asks the cross-page question and the same-page
+-- question together, off the index above, and a page is a thread (threads.page_key is
+-- UNIQUE) so the same-page half needs no thread-leading index of its own.
+--
+-- Dropping it is not tidiness. D1 counts one extra row written per index whose columns a
+-- write touches (https://developers.cloudflare.com/d1/platform/pricing/, checked
+-- 2026-07-30), and every insert sets thread_id, body_hash and created_at — so an index
+-- nothing reads was a write charged against 100k/day on every single comment, forever.
+--
+-- It also makes the query-plan test able to fail. With both indexes present, dropping
+-- `comments_by_body_hash` would let SQLite fall back to the older one rather than scan,
+-- which is exactly the trap #173 documented: a plan assertion that only forbids SCAN
+-- passes happily while the read is wrong.
+DROP INDEX comments_by_body;
+
+-- ## 2. `comments_by_spam_origin` — a commenter the owner has already marked spam
+--
+-- The mirror of `comments_by_commenter` (migrations/0004), and deliberately a second
+-- index rather than a reuse of that one. #173's index leads (author_email, ip_hash)
+-- because trust requires both halves of the identity to match the same judged row; this
+-- one leads on `ip_hash` alone because distrust is allowed a looser match — being wrong
+-- holds a comment for review, which is what `hold-all` does to every comment anyway.
+-- A prefix of (author_email, ip_hash) cannot answer an ip_hash-only question, and a
+-- comment with no email address — most of them — has no entry in that index at all.
+--
+-- `author_email` is the second column so one seek answers both tiers: whether *this
+-- address* has ever been marked spam, and whether the row that was marked carried
+-- *this email too*. See SPAM_HISTORY_SQL in src/db/index.ts.
+--
+-- **`status` is the third column even though the predicate already pins it to one
+-- value, and that is not redundancy — it is what makes the seek covering.** Measured,
+-- not assumed: with (ip_hash, author_email) alone SQLite reports
+-- `USING INDEX comments_by_spam_origin`, without COVERING, because it still counts
+-- `status` as a column the query reads and goes back to the table for it once per
+-- entry — each row carrying up to 10,000 characters of body. Adding the column turns
+-- the same plan into `USING COVERING INDEX`. Three columns and a partial predicate is
+-- also exactly `comments_by_commenter`'s shape (migrations/0004), which is the point:
+-- the two indexes answer opposite questions about the same identity and differ only in
+-- which half leads.
+--
+-- **Partial, on all three of the statement's own preconditions.** `status = 'spam'` is
+-- the whole point — a pending or approved comment is not a judgement against anybody —
+-- and putting it in the predicate rather than in the key means the index holds only the
+-- rows the owner has actually condemned, which on a healthy site is a rounding error
+-- next to the table. `ip_hash IS NOT NULL` is what makes this decay with #19's retention
+-- sweep: when the sweep nulls a hash the row leaves this index, and an identity nobody
+-- can still recognise stops being one. `by_owner = 0` because the owner cannot mark
+-- their own comment spam in the dashboard, and an index entry for a row that can never
+-- match is a write for nothing.
+--
+-- **What it costs.** One extra row written per moderation decision that lands on `spam`
+-- — one person clicking one button — and nothing at all on insert, because a comment is
+-- never stored as `spam`. The read it saves is on the path an anonymous visitor
+-- controls.
+-- Enforced by test/worker/spam/query-plan.test.ts.
+CREATE INDEX comments_by_spam_origin ON comments (ip_hash, author_email, status)
+  WHERE status = 'spam' AND ip_hash IS NOT NULL AND by_owner = 0;
