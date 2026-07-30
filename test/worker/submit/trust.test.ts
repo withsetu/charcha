@@ -414,3 +414,38 @@ describe('the query budget', () => {
     expect(statements).toHaveLength(BASELINE)
   })
 })
+
+describe('a database that fails while the policy is being read', () => {
+  /** A binding that answers everything except the statement `match` names. */
+  function failingOn(match: string): D1Database {
+    return {
+      ...db,
+      prepare(sql: string) {
+        if (sql.includes(match)) throw new Error('D1_ERROR: the database is unavailable')
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+  }
+
+  it('fails the submission rather than quietly holding the comment', async () => {
+    // The tempting shape is a `catch` returning false: the comment lands `pending`, the
+    // reader gets a 202, and a broken database is invisible. It reaches the right
+    // *status* by hiding a fault. Throwing is closed in the way that matters — nothing
+    // is published, nothing is stored, and the reader is told the truth.
+    await trustReturning()
+
+    await expect(post({ db: failingOn('from settings') })).rejects.toThrow(/D1_ERROR/)
+    expect(await statuses()).toEqual([])
+  })
+
+  it('fails the same way when the trust lookup itself is the read that breaks', async () => {
+    await trustReturning()
+    await post()
+    await decide('approved')
+
+    await expect(post({ db: failingOn('by_owner = 0') })).rejects.toThrow(/D1_ERROR/)
+    // Only the first comment, which the owner approved. Nothing was stored by the
+    // submission that failed.
+    expect(await statuses()).toEqual(['approved'])
+  })
+})

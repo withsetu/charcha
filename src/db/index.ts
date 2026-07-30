@@ -80,9 +80,10 @@ export interface NewComment {
    * **A second boolean rather than a `status` field, and the difference is the whole
    * guard.** A status parameter would let any caller name any of the four values,
    * including `approved`, from anything they could get into the request; this is a
-   * flag with one meaning that `runSubmission` computes from a database read and
-   * never from the submitted form. src/submit/schema.ts strips every field it does
-   * not know, so there is no wire value that reaches this at all.
+   * flag with one meaning, which `runSubmission` computes from two database reads and
+   * assembles into the insert by hand. Nothing on the wire is spread into this object,
+   * which is the guard — and src/submit/schema.ts stripping every field it does not
+   * know is the second layer under it, not the first.
    *
    * **It is not `byOwner`, and must never be conflated with it.** `by_owner` is
    * rendered as a badge on the page, is what the composer's own replies set, and is

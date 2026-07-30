@@ -202,10 +202,19 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
  *
  * **Every layer of the spam pipeline terminates in the queue, and this is the only door
  * out of it.** So it is written as a run of refusals with one `true` at the very end:
- * anything unexpected — an unreadable setting, a missing hash, a verdict that is not
- * `allow` — lands on `false`, which is today's behaviour on every deployment and costs
+ * an unreadable setting, a missing hash, a missing email and a verdict that is not
+ * `allow` each land on `false`, which is today's behaviour on every deployment and costs
  * nobody anything they were not already paying. Card rule 5, in the one place on this
  * path where failing open would publish a stranger's comment.
+ *
+ * **A database error is deliberately not caught here, and that is closed rather than
+ * open.** Either read throwing propagates out of `runSubmission` as it does for
+ * `getOrCreateThread` and `insertComment`, so the reader gets an error and is told their
+ * comment did not post — which is true, because `insertComment` is downstream of this
+ * line and never ran. A `catch` returning `false` would be the tempting shape and the
+ * wrong one: it would store the comment as `pending` while reporting success, which is
+ * the right *status* reached by hiding a fault the deployment needs to know about.
+ * Enforced by test/worker/submit/trust.test.ts.
  *
  * **The risk is asymmetric and the order of these guards is that asymmetry.** Wrongly
  * trusting somebody publishes spam with no human in the way; wrongly not trusting
