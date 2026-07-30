@@ -53,8 +53,16 @@ Two things are built and reachable, which is why the pages above can be written 
   first migration creates, so it does not prove that a later one ran
   ([#149](https://github.com/withsetu/charcha/issues/149)).
 
-New comments are held for review by default. The queue they land in is real; the
-interface for working through it is [#13](https://github.com/withsetu/charcha/issues/13).
+New comments are held for review by default. That default is a `settings` value rather
+than a rule of the software: the dashboard's Setup tab can switch a deployment to
+*trust-returning*, which publishes a comment when its author has had one approved before
+and none marked spam — identified by the email address **and** the hashed IP together, so
+that an unverified address alone confers nothing
+([#173](https://github.com/withsetu/charcha/issues/173)). A spam layer's objection always
+overrules trust, so `202` remains the answer for anything held. The
+[README](../README.md#moderation-policy-and-what-already-approved-actually-means) has the
+whole of it. The queue they land in is real; the interface for working through it is
+[#13](https://github.com/withsetu/charcha/issues/13).
 
 ## A note on the spam defence, since it shapes the docs above
 

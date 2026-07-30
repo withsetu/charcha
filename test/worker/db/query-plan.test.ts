@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import {
+  COMMENTER_TRUST_SQL,
   MAX_PAGE_COMMENTS,
   MODERATE_SQL,
   MODERATION_QUEUE_PAGE_SQL,
@@ -211,6 +212,38 @@ describe('the moderation write', () => {
     expect(MODERATE_SQL).not.toMatch(/\bbody\b/)
     expect(MODERATE_SQL).not.toMatch(/author_name/)
     expect(MODERATE_SQL).not.toMatch(/author_email/)
+  })
+})
+
+describe('the trust lookup', () => {
+  const TRUST_BINDINGS = ['rahul@kanwar.example', 'a-hash-of-an-address'] as const
+
+  // This runs on the public write endpoint, on a comment nothing objected to, and its
+  // answer decides whether that comment is published without a human seeing it. What it
+  // must not do is read a comment row: a regular with four hundred approved comments
+  // would then cost four hundred row reads per submission — each carrying up to 10,000
+  // characters of body into a 128 MB isolate — on a path an attacker inflates by
+  // commenting.
+  it('answers out of comments_by_commenter without reading a comment row', async () => {
+    const plan = await planOf(COMMENTER_TRUST_SQL, ...TRUST_BINDINGS)
+
+    // **Both halves, and the index by name, because `not.toMatch(/SCAN/)` alone is a
+    // kill-shot that passes.** Drop `comments_by_commenter` and SQLite falls back to
+    // `comments_by_ip (ip_hash=?)` — still a seek, still no SCAN in the plan, and one
+    // row read for every comment ever posted from that address. COVERING is what says
+    // the answer came from index entries; the name is what says it came from the right
+    // index.
+    expect(plan).toMatch(/USING COVERING INDEX comments_by_commenter/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('constrains the email and the address together, not one and then a filter', async () => {
+    // The identity is both columns (#173). A seek on one of them with the other applied
+    // as a filter would read every comment sharing an address — which is every comment
+    // from one NAT — to answer a question about one person.
+    const plan = await planOf(COMMENTER_TRUST_SQL, ...TRUST_BINDINGS)
+
+    expect(plan).toMatch(/author_email=\? AND ip_hash=\?/)
   })
 })
 

@@ -190,6 +190,82 @@ describe('insertComment', () => {
     expect(fromReader.status).toBe('pending')
   })
 
+  // The three ways a comment becomes `approved`, and the fields that tell them apart
+  // (#173). The dashboard reads exactly this to badge a comment the moderation policy
+  // published — `approved`, not the owner's, never moderated — so what these assert is
+  // the shape that derivation depends on, not merely that each writer works.
+  describe('what publishes a comment, and what each one leaves behind', () => {
+    it('the moderation policy: approved, not the owner’s, and never moderated', async () => {
+      const thread = await seedThread()
+
+      const trusted = await insertComment(db, {
+        threadId: thread.id,
+        authorName: 'Rahul Kanwar',
+        body: 'a comment from somebody the owner has approved before',
+        bodyHash: 'h-trusted',
+        autoApprove: true,
+        now: t0,
+      })
+
+      expect(trusted.status).toBe('approved')
+      // Never the owner's. A trusted commenter is a stranger the owner approved once,
+      // and `by_owner` is both a badge on the page and the flag the trust lookup
+      // excludes — so setting it here would put the owner's name on somebody else's
+      // comment *and* let a trusted commenter confer standing on the next arrival.
+      expect(trusted.byOwner).toBe(false)
+      // Never moderated. Nobody looked at this comment, and that null is the only thing
+      // that distinguishes it from one the owner approved.
+      expect(trusted.moderatedAt).toBeNull()
+    })
+
+    it('the owner’s own composer: approved, the owner’s, and never moderated', async () => {
+      const thread = await seedThread()
+
+      const own = await insertComment(db, {
+        threadId: thread.id,
+        authorName: 'Maya',
+        body: 'answering from the dashboard',
+        bodyHash: 'h-own',
+        byOwner: true,
+        now: t0,
+      })
+
+      expect(own).toMatchObject({ status: 'approved', byOwner: true, moderatedAt: null })
+    })
+
+    it('a moderation decision: approved, not the owner’s, and moderated', async () => {
+      const thread = await seedThread()
+      const held = await insertComment(db, {
+        threadId: thread.id,
+        authorName: 'Reader',
+        body: 'a comment somebody had to look at',
+        bodyHash: 'h-held',
+        now: t0,
+      })
+
+      const decided = await setCommentStatus(db, held.id, 'approved', t0 + 30)
+
+      expect(decided.status).toBe('approved')
+      expect(decided.moderatedAt).toBe(t0 + 30)
+    })
+
+    it('holds a comment when neither flag is set, whatever else is on it', async () => {
+      const thread = await seedThread()
+
+      const stored = await insertComment(db, {
+        threadId: thread.id,
+        authorName: 'Reader',
+        body: 'a comment with no flag on it',
+        bodyHash: 'h-plain',
+        autoApprove: false,
+        byOwner: false,
+        now: t0,
+      })
+
+      expect(stored.status).toBe('pending')
+    })
+  })
+
   it('refuses a comment on a thread that does not exist', async () => {
     await expect(
       insertComment(db, {

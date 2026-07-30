@@ -10,6 +10,16 @@
 // own code.
 // Enforced by test/dashboard/api.test.ts.
 
+// The moderation policy union, shared with the Worker rather than restated here (#173).
+// It imports nothing, so both TypeScript projects can have it — the same arrangement
+// src/cascade.ts has, and for the same reason: a second copy would let this screen offer
+// a value the Worker does not recognise, with every test in both projects still green.
+import { MODERATION_POLICIES } from '../moderation/policy'
+import type { ModerationPolicy } from '../moderation/policy'
+
+export { MODERATION_POLICIES }
+export type { ModerationPolicy }
+
 /**
  * Every request is same-origin and relative, and neither is incidental.
  *
@@ -296,10 +306,23 @@ export function decide(id: number, status: SettableStatus): Promise<ApiResult<De
   })
 }
 
-/** The origin policy as the server holds it (#57). */
+/** The owner's settings as the server holds them (#57, #173). */
 export interface Settings {
   /** The cross-origin allowlist, canonicalised — what the public check compares. */
   allowedOrigins: string[]
+  /**
+   * What happens to a comment no spam layer objected to (#173).
+   *
+   * Typed as `ModerationPolicy` rather than `string` — the union is imported from
+   * src/moderation/policy.ts, which imports nothing and so reaches both TypeScript
+   * projects, the same arrangement `cascades` has. A second copy of the list here would
+   * let this screen offer a value the Worker parses back to the default, silently.
+   *
+   * It is what `getModerationPolicy` returns, so a stored row holding something
+   * unrecognisable arrives as `hold-all` — the policy that will actually be applied,
+   * rather than the string that happens to be in the table.
+   */
+  moderationPolicy: ModerationPolicy
   /**
    * This deployment's own address, which is allowed whether or not it is listed.
    *
@@ -311,9 +334,37 @@ export interface Settings {
   selfOrigin: string
 }
 
-/** `GET /admin/api/settings` — the origin policy. */
+/**
+ * `GET /admin/api/settings` — the origin policy and the moderation policy.
+ *
+ * **`moderationPolicy` is validated rather than cast**, which is the second call in this
+ * file to do so and for `readSetup`'s reason (#173). Every other malformed field here
+ * shows itself: an allowlist that did not arrive renders as an empty allowlist, which an
+ * owner can see is wrong. A missing policy would render as *hold-all is selected* — the
+ * answer a fresh deployment gives, indistinguishable from the truth, telling an owner
+ * their comments are being held when the field simply never came. So a settings body
+ * without a policy this dashboard knows is a failure rather than a setting.
+ * Enforced by test/dashboard/api.test.ts.
+ */
 export function readSettings(): Promise<ApiResult<Settings>> {
-  return request<Settings>({ method: 'GET', path: '/settings' })
+  return settingsRequest({ method: 'GET', path: '/settings' })
+}
+
+/**
+ * One request to the settings endpoint, with its answer checked.
+ *
+ * Shared by the read and both writes, because a write's answer is rendered exactly like
+ * a read's — the Setup tab takes the saved policy from it rather than from what it sent,
+ * so that what the screen shows is what the server stored.
+ */
+async function settingsRequest(spec: RequestSpec): Promise<ApiResult<Settings>> {
+  const result = await request<Settings>(spec)
+  if (!result.ok) return result
+
+  if (!MODERATION_POLICIES.includes(result.value.moderationPolicy)) {
+    return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+  }
+  return result
 }
 
 /**
@@ -325,7 +376,26 @@ export function readSettings(): Promise<ApiResult<Settings>> {
  * than asking the owner to check twenty addresses.
  */
 export function writeAllowedOrigins(allowedOrigins: string[]): Promise<ApiResult<Settings>> {
-  return request<Settings>({ method: 'PUT', path: '/settings', body: { allowedOrigins } })
+  return settingsRequest({ method: 'PUT', path: '/settings', body: { allowedOrigins } })
+}
+
+/**
+ * `PUT /admin/api/settings` — the moderation policy, and nothing else (#173).
+ *
+ * **The body carries only this field on purpose.** The endpoint leaves an absent field
+ * alone, so the Setup tab's policy control cannot overwrite an allowlist edited in
+ * another tab — and `writeAllowedOrigins` above cannot overwrite the policy for the same
+ * reason. Sending the whole settings document from either surface would make whichever
+ * one saved last quietly undo the other.
+ *
+ * An unknown value comes back as a `BAD_REQUEST` naming it rather than as a 200 that
+ * stored the default, so a drift between this union and the Worker's is visible instead
+ * of being a policy nobody chose.
+ */
+export function writeModerationPolicy(
+  moderationPolicy: ModerationPolicy,
+): Promise<ApiResult<Settings>> {
+  return settingsRequest({ method: 'PUT', path: '/settings', body: { moderationPolicy } })
 }
 
 /**
