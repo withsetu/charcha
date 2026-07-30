@@ -169,6 +169,50 @@ Resend, a third party. It does not send their email address or anything derived 
 their IP. If your site has a privacy notice, that first sentence is the one that belongs
 in it.
 
+**Third-party spam checking (Akismet) — the one to read about before you switch it on.**
+Charcha's spam defence is seven layers deep, and the first six run inside your Worker and
+transmit nothing about your readers to anybody. This is the seventh, and it is the
+exception: every comment that reaches it is posted to
+[Akismet](https://akismet.com), a service run by Automattic, carrying
+
+- the commenter's **IP address in full** — Akismet requires it, and it is the address
+  rather than the hash the rate limit stores;
+- their name, and their email address if they gave one;
+- the whole text of their comment;
+- their browser's user-agent string, and the page they were referred from;
+- the page they commented on, and your site's home URL.
+
+That is a disclosure you take on, and it covers readers whose comments you later delete,
+because the check happens before the comment is stored.
+[docs/spam-providers.md](docs/spam-providers.md) lists every field, has a paragraph you
+can paste into a privacy notice, and says what is deliberately *not* sent.
+
+What it buys is a **held** comment, never a refused one — layer 7 can only put something
+in your moderation queue with `provider: akismet` as its reason, never turn a reader away.
+It runs last, so it only ever sees comments the six free layers could not decide, and it
+is skipped altogether for a comment something else already held: Akismet's Pro plan is
+[500 checks a month](https://akismet.com/pricing/) at $9.95 billed yearly (checked
+2026-07-29), and an anonymous visitor must not be able to spend them. If Akismet is down,
+slow, or your subscription lapses, the layer simply has no opinion — nobody loses a
+comment over it.
+
+Both values or neither:
+
+```sh
+pnpm wrangler secret put AKISMET_API_KEY
+pnpm wrangler secret put CHARCHA_SITE_URL
+```
+
+`CHARCHA_SITE_URL` is your site's home page — `https://example.com`, or
+`https://you.github.io/blog` if it lives at a path. Akismet requires it and matches it
+against the sites authorised on your key. Nothing can derive it for you: your Worker's own
+address is a `workers.dev` URL rather than your site, and the URL the embed reports is
+chosen by whoever posted the comment. Setting one of the two without the other leaves the
+layer off and writes one line to your Worker's log saying which half is missing.
+
+Turning it off again is `pnpm wrangler secret delete AKISMET_API_KEY`. The other six
+layers do not know it existed.
+
 ### Changing a secret afterwards
 
 The same command replaces one:

@@ -47,8 +47,8 @@ const SIGNIFICANT_PARAMS: readonly string[] = []
 
 // The public, unauthenticated write endpoint — the primary surface, and the one
 // card rule 5 is about. Validation, size caps and the spam seam all live behind
-// handleSubmit; the layers themselves are src/spam (#8), assembled per request
-// because their configuration is two optional secrets on `env`.
+// handleSubmit; the layers themselves are src/spam (#8, #10, #11), assembled per
+// request because their configuration is four optional secrets on `env`.
 // Enforced by test/worker/submit/route.test.ts and test/worker/spam/route.test.ts.
 app.post('/comments', async (c) => {
   // Checked on the real request, not only at the preflight. `text/plain` makes this

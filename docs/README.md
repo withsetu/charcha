@@ -13,6 +13,7 @@
 | [Will this stay free?](free-tier.md) | The Cloudflare free-tier ceilings in plain language, a worked example, and what breaks if you reach one |
 | [Theming](theming.md) | The HTML and class names Charcha emits, how to style them, and the styling modes that are agreed but not yet built |
 | [How a URL becomes a comment thread](thread-identity.md) | Which parts of a page address decide which thread a comment lands in, and how to name a thread yourself |
+| [Third-party spam checking, and what it sends](spam-providers.md) | The one spam layer that transmits something about your readers — field by field, before the switch that turns it on |
 
 For reporting a security problem, see [SECURITY.md](../SECURITY.md). For running the
 project locally, see the [README](../README.md).
@@ -28,7 +29,7 @@ describing software nobody can run.
 |---|---|
 | Installing via the Deploy button, in more depth than the [README](../README.md#deploying-it) covers | [#16](https://github.com/withsetu/charcha/issues/16) — the deploy flow. The button, the secrets it collects and the migration step are built; nobody has run a real deploy yet, so a page written now could not describe what a deployer actually sees |
 | Adding the embed to Astro, Hugo, Eleventy, Jekyll and plain HTML | [#5](https://github.com/withsetu/charcha/issues/5) — the embed script |
-| Configuring spam defence, and what each optional provider transmits | [#8](https://github.com/withsetu/charcha/issues/8), [#11](https://github.com/withsetu/charcha/issues/11) |
+| Tuning the local spam layers — thresholds, windows, and what to change when a real comment gets held | [#66](https://github.com/withsetu/charcha/issues/66) — the settings table. The thresholds are constants in `src/spam/` today, so there is nothing a site owner can configure and a page about it would be a page about editing source. What each optional provider transmits *is* written: see [above](#available-now) |
 | Migrating from Disqus | [#15](https://github.com/withsetu/charcha/issues/15) — the importer |
 | Moderating comments | [#13](https://github.com/withsetu/charcha/issues/13) — the dashboard |
 
@@ -75,6 +76,7 @@ on — in **both** of the places it is set, because the two halves fail differen
 Worker's secret key without a sitekey on the page holds every comment for review; a
 sitekey without the secret key costs nothing at all.
 
-When that configuration ships, its documentation will state exactly what each provider
-receives, before the switch that turns it on. That ordering is a commitment, not a
-formatting preference.
+The one provider that exists is Akismet, and
+[its page](spam-providers.md) states exactly what it receives before it says how to
+switch it on. That ordering was a commitment rather than a formatting preference, and it
+is the shape any provider added later has to follow.

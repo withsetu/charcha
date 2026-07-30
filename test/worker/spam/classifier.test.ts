@@ -301,10 +301,16 @@ describe('the assembled pipeline', () => {
     expect(outcome).toBeNull()
   })
 
-  it('is the last layer, so nothing cheap runs after an inference call', async () => {
+  it('is the last of the free layers, so nothing cheap runs after an inference call', async () => {
+    // It was the last layer outright until #11 added layer 7. The property that
+    // matters is unchanged and now says something slightly stronger: everything
+    // before the classifier is free and local, and the only thing after it is the
+    // one layer that costs the site owner money and transmits something about the
+    // reader.
     const { SPAM_LAYER_ORDER } = await import('../../../src/spam')
 
-    expect(SPAM_LAYER_ORDER.at(-1)).toBe('classifier')
+    expect(SPAM_LAYER_ORDER.at(-2)).toBe('classifier')
+    expect(SPAM_LAYER_ORDER.at(-1)).toBe('provider')
   })
 })
 
