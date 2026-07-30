@@ -250,7 +250,7 @@ async function check(
   // that a layer they are paying for has stopped, because every branch here
   // abstains and abstaining is invisible.
   announce('akismet:invalid', true, 'Akismet did not return a verdict', {
-    answer: capped(body).slice(0, 64),
+    answer: body.slice(0, 64),
     debugHelp: capped(response.headers.get('x-akismet-debug-help') ?? ''),
     fix: 'check the key and the site at https://akismet.com/account/, or unset AKISMET_API_KEY to turn layer 7 off',
   })
@@ -306,7 +306,7 @@ function reportAlert(response: Response): void {
   if (code === undefined || code === '') return
 
   announce('akismet:alert', true, 'Akismet sent an alert about this account', {
-    code: capped(code).slice(0, 32),
+    code: code.slice(0, 32),
     message: capped(response.headers.get('x-akismet-alert-msg') ?? ''),
     fix: 'see https://akismet.com/developers/detailed-docs/errors/ and your account at https://akismet.com/account/',
   })
