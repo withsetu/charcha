@@ -161,12 +161,19 @@ export function providerLayer(config: ProviderLayerConfig): SpamLayer {
         return null
       }
 
-      // `ham` and `unknown` are one answer here, deliberately. A provider has no way
-      // to allow — `LayerOutcome` has no such member, and a layer that could allow
-      // would veto every layer after it. So "clean" and "no idea" both mean the
-      // layer says nothing, and the difference between them is not one this
-      // pipeline can act on.
-      if (verdict === 'ham' || verdict === 'unknown') return null
+      // **`unknown` and `ham` part company here, and that is #189.** They were one
+      // answer until a verb existed for the difference. `unknown` is every failure
+      // this seam has — a wrong key, a 500, a timeout, a body that did not parse,
+      // and a provider switched off — so it must stay `null`: none of those is
+      // evidence that a comment is clean, and a third party's outage must never be
+      // able to start publishing strangers' comments.
+      // Enforced by test/worker/spam/vouch.test.ts.
+      if (verdict === 'unknown') return null
+
+      // `ham` is the opposite: a real corpus asked and answered. It is still not a
+      // veto — `runLayers` lets any doubt from any layer beat it — and on its own it
+      // changes nothing, because the default policy acts on neither this nor `allow`.
+      if (verdict === 'ham') return { action: 'vouch', reason: provider.name }
 
       // **No reject branch, at either strength.** See the doc comment above.
       return {

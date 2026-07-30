@@ -21,6 +21,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
+import { SETUP_SECRETS } from '../../src/dashboard/api'
 import { Triage } from '../../src/dashboard/components/triage'
 import { comment, decision, json, queuePage, stubFetch, unhandled, type FetchStub } from './harness'
 
@@ -39,14 +40,11 @@ async function mountQueue(): Promise<FetchStub> {
     // The Setup tab's two reads (#158). Answered rather than refused, because `4` is now
     // a binding this file drives and the panel behind it fetches on mount.
     if (call.path === '/admin/api/setup') {
+      // Derived from SETUP_SECRETS rather than written out, because `readSetup` refuses
+      // a report missing a name it expects — so a hand-written literal here turns any
+      // future secret into six timeouts in this file rather than one clear failure.
       return json(200, {
-        secrets: {
-          RESEND_API_KEY: false,
-          CHARCHA_NOTIFY_FROM: false,
-          CHARCHA_NOTIFY_TO: false,
-          TURNSTILE_SECRET_KEY: false,
-          IP_HASH_SECRET: false,
-        },
+        secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, false])),
         shortPassword: false,
       })
     }
@@ -250,14 +248,9 @@ describe('the shortcut listener', () => {
         })
       }
       if (call.path === '/admin/api/setup') {
+        // Derived from SETUP_SECRETS — see the note on the other fixture in this file.
         return json(200, {
-          secrets: {
-            RESEND_API_KEY: true,
-            CHARCHA_NOTIFY_FROM: true,
-            CHARCHA_NOTIFY_TO: true,
-            TURNSTILE_SECRET_KEY: true,
-            IP_HASH_SECRET: true,
-          },
+          secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, true])),
           shortPassword: false,
         })
       }

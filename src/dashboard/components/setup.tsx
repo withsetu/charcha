@@ -400,6 +400,12 @@ export function Setup({
           <TurnstileSection set={secrets.value.secrets.TURNSTILE_SECRET_KEY} />
           <EmailSection secrets={secrets.value.secrets} />
           <IpHashSection set={secrets.value.secrets.IP_HASH_SECRET} />
+          {/*
+            Last of the four, deliberately. Reading order is this tab's only prominence,
+            and the three above are things a deployer is being encouraged to switch on;
+            this is the one whose default — off — is the recommendation.
+          */}
+          <SpamServiceSection set={secrets.value.secrets.AKISMET_API_KEY} />
         </>
       )}
 
@@ -430,13 +436,17 @@ export function Setup({
 }
 
 /**
- * The two policies, and what a reader needs before choosing one.
+ * The three policies, and what a reader needs before choosing one.
  *
  * The prose is the control here, not decoration on it. `hold-all` is what every
- * deployment already does, so its description is a confirmation; `trust-returning` is the
- * one that changes what readers see without the owner, so its description has to say what
- * identifies a returning commenter *before* the radio it belongs to is chosen — the same
- * ordering rule the third-party disclosure follows.
+ * deployment already does, so its description is a confirmation; the other two change
+ * what readers see without the owner, so each has to say what it acts on *before* the
+ * radio it belongs to is chosen — the same ordering rule the third-party disclosure
+ * follows.
+ *
+ * They are a ladder rather than a menu, and the copy has to carry that: `trust-vouched`
+ * keeps doing what `trust-returning` does, which is why its description says "as well"
+ * rather than describing a replacement (src/submit/pipeline.ts).
  */
 const POLICY_CHOICES: readonly {
   value: ModerationPolicy
@@ -461,6 +471,17 @@ const POLICY_CHOICES: readonly {
         A first comment is held, as always. After you approve it, that person’s later comments go
         straight onto the page. It is not a guess about the comment — it is your own decision,
         replayed.
+      </>
+    ),
+  },
+  {
+    value: 'trust-vouched',
+    label: 'Also publish comments your spam service says are clean',
+    description: (
+      <>
+        Everything above, <i>and</i>: when a spam service you have connected checks a comment and
+        comes back clean, it goes straight onto the page. Only a service saying so counts — a
+        comment nothing happened to look wrong about is still held.
       </>
     ),
   },
@@ -526,6 +547,13 @@ function ModerationSection({
 
   const policy = saved ?? load.value.moderationPolicy
   const ipHashMissing = secrets.kind === 'ready' && !secrets.value.secrets.IP_HASH_SECRET
+  // The #107 case for `trust-vouched`, and it renders only once that policy is the one
+  // chosen: nothing can produce a `vouch` without a provider, so the setting would read
+  // as on and do nothing. Unlike `ipHashMissing` it is not a warning about a broken
+  // deployment — a provider is opt-in and most never will — so it says what to connect
+  // rather than what is wrong.
+  const providerMissing =
+    policy === 'trust-vouched' && secrets.kind === 'ready' && !secrets.value.secrets.AKISMET_API_KEY
 
   function choose(next: string) {
     if (busy) return
@@ -653,6 +681,21 @@ function ModerationSection({
         again, and stays held until you approve one of theirs. Deleting a comment does not do this —
         only Spam does, because only Spam is a judgement about the commenter.
       </p>
+
+      {providerMissing && (
+        <Alert>
+          <TriangleAlertIcon />
+          <AlertTitle>No spam service is connected, so nothing is being vouched for</AlertTitle>
+          <AlertDescription>
+            <p>
+              This deployment has no <code>AKISMET_API_KEY</code> set, and a comment is only
+              published early when a service you connected says it is clean. Until you connect one
+              this setting behaves exactly like the option above it — nothing is published that
+              would not have been.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {ipHashMissing && (
         <Alert variant="destructive">
@@ -911,6 +954,64 @@ function TurnstileSection({ set }: { set: boolean }) {
 }
 
 /** The per-IP rate limit's key, and the one thing that reports whether it is running. */
+/**
+ * The third-party spam service (#11), and the only section on this tab whose `On` state
+ * is the one that needs the most words.
+ *
+ * Everywhere else here, `On` means a feature works and `Off` means it does not. This one
+ * inverts that: `Off` is the private default — layers 1–7 run inside the Worker and
+ * transmit nothing — and `On` means comment text, the commenter's address and their email
+ * leave this deployment for somebody else's servers. CLAUDE.md requires that disclosure
+ * to be plain and to sit where the feature is presented, so the `On` state spends its
+ * length on what is sent rather than on congratulating the deployer.
+ *
+ * It is a report, not a switch: the key is a secret, so nothing here can enable it. What
+ * this section is *for* is #189 — `trust-vouched` acts only on this provider's verdict,
+ * so an owner choosing that policy needs somewhere on this tab that says whether one
+ * exists at all.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function SpamServiceSection({ set }: { set: boolean }) {
+  return (
+    <Section title="Third-party spam service" status={set ? <On /> : <Off />}>
+      {set ? (
+        <>
+          <p>
+            <code>AKISMET_API_KEY</code> is set, so comments the local layers could not decide are
+            sent to Akismet to be checked.
+          </p>
+          <p>
+            <b>What leaves this deployment:</b> the comment text and the name on it, the commenter’s
+            email address if they typed one, their IP address, their browser’s user agent and
+            referrer, and the address of the page they commented on. That is a disclosure you owe
+            your readers — it is the one thing Charcha does that sends anything about them anywhere.
+          </p>
+          <p>
+            It runs last, and only on comments the free local layers did not already settle, so a
+            comment stopped earlier is never sent.
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            No third-party service is connected, and nothing about your readers leaves this
+            deployment. The seven local layers still run — they are what handles spam by default.
+          </p>
+          <ul className="space-y-1">
+            <SecretRow name="AKISMET_API_KEY" set={false} />
+          </ul>
+          <p>
+            Connecting one is a real trade rather than an upgrade: it would send comment text, email
+            addresses and IP addresses to Akismet, and Akismet’s paid tier allows 500 checks a
+            month. It is worth reading what it sends before turning it on.
+          </p>
+          <HowToSet names={['AKISMET_API_KEY']} />
+        </>
+      )}
+    </Section>
+  )
+}
+
 function IpHashSection({ set }: { set: boolean }) {
   return (
     <Section title="Per-commenter rate limiting" status={set ? <On /> : <Off />}>

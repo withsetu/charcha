@@ -241,22 +241,42 @@ async function autoApproved(input: {
   ipHash: string | null
   authorEmail: string | null
 }): Promise<boolean> {
-  // A layer objected. History does not overrule a live signal.
-  if (input.verdict.action !== 'allow') return false
+  // A layer objected. Neither history nor a provider's good opinion overrules a live
+  // signal, and this single line is what makes that true for both paths below.
+  if (input.verdict.action === 'review' || input.verdict.action === 'reject') return false
 
-  // Half an identity is not an identity (#173). No hash means either no
-  // `IP_HASH_SECRET` or no address from the edge, and either way nothing here can
-  // recognise anybody; no email means the same from the other side. Both are checked
-  // before any read because both are free, and an empty string is not a value — it
-  // would otherwise match every other comment stored with one.
+  // The vouch path (#189), and it is deliberately short. A `vouch` is a real
+  // classifier's verdict about *this comment*, so it asks nothing about who sent it —
+  // no email, no address hash, no history. That is the difference from the path below,
+  // where the whole question is whether we recognise a person.
+  //
+  // One read, and only for a deployment that configured a provider at all: nothing
+  // else in the pipeline can produce a `vouch`, so this line is unreachable on a
+  // deployment that opted into nothing.
+  if (input.verdict.action === 'vouch') {
+    return (await getModerationPolicy(input.db)) === 'trust-vouched'
+  }
+
+  // `allow` from here down — the returning-commenter path, unchanged from #173.
+  //
+  // Half an identity is not an identity. No hash means either no `IP_HASH_SECRET` or
+  // no address from the edge, and either way nothing here can recognise anybody; no
+  // email means the same from the other side. Both are checked before any read because
+  // both are free, and an empty string is not a value — it would otherwise match every
+  // other comment stored with one.
   const { ipHash, authorEmail } = input
   if (ipHash === null || ipHash === '') return false
   if (authorEmail === null || authorEmail === '') return false
 
   // Read second, because the answer is the same for every commenter on a deployment
   // that has not changed it — and that is every deployment until somebody does.
+  //
+  // `trust-vouched` is listed here as well as above because the policies are a ladder
+  // rather than a menu: an owner who turned on the stronger one did not thereby ask to
+  // stop trusting the regulars they had already approved.
+  // Enforced by test/worker/submit/vouched.test.ts.
   const policy = await getModerationPolicy(input.db)
-  if (policy !== 'trust-returning') return false
+  if (policy !== 'trust-returning' && policy !== 'trust-vouched') return false
 
   const trust = await readCommenterTrust(input.db, authorEmail, ipHash)
   // Revocation is `spammed`, and it wins over any number of approvals. Marking a

@@ -418,6 +418,7 @@ export const SETUP_SECRETS = [
   'CHARCHA_NOTIFY_TO',
   'TURNSTILE_SECRET_KEY',
   'IP_HASH_SECRET',
+  'AKISMET_API_KEY',
 ] as const
 
 export type SetupSecret = (typeof SETUP_SECRETS)[number]

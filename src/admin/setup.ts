@@ -73,6 +73,11 @@ export const REPORTED_SECRETS = [
   'CHARCHA_NOTIFY_TO',
   'TURNSTILE_SECRET_KEY',
   'IP_HASH_SECRET',
+  // Reported for the same reason `IP_HASH_SECRET` is (#107, #189): the Moderation
+  // section offers `trust-vouched`, and without a provider configured nothing can ever
+  // produce the `vouch` that policy acts on. A setting that reads as on and does
+  // nothing is the failure this report exists to make impossible to ship.
+  'AKISMET_API_KEY',
 ] as const
 
 export type ReportedSecret = (typeof REPORTED_SECRETS)[number]
