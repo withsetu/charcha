@@ -34,7 +34,8 @@ import {
   parseAllowedOrigins,
   selfOrigin,
 } from '../cors'
-import { readSetting, writeSetting } from '../db'
+import { MODERATION_POLICY_SETTING, getModerationPolicy, readSetting, writeSetting } from '../db'
+import { MODERATION_POLICIES, isModerationPolicy } from '../moderation/policy'
 import { adminJson, badRequest, forbidden, readAdminJson } from './api'
 import { authenticated } from './authenticate'
 import { isCrossOriginRequest } from './csrf'
@@ -53,10 +54,35 @@ type AdminContext = Context<{ Bindings: Env }>
  */
 const SEPARATOR = '\n'
 
-/** The body's shape. Its size cap is readAdminJson's, shared with every admin route. */
-const bodySchema = z.object({
-  allowedOrigins: z.array(z.string()),
-})
+/**
+ * The body's shape. Its size cap is readAdminJson's, shared with every admin route.
+ *
+ * **Both fields are optional, and an absent one is left alone — which is not the PUT
+ * semantics the allowlist alone had, and is deliberate (#173).** The two settings are
+ * edited from two different surfaces: the allowlist from the header's dialog, the
+ * moderation policy from the Setup tab. If the body were the whole document, the origins
+ * dialog would send back whatever policy it happened to read when it opened, so an owner
+ * who changed the policy in one tab and saved an origin in another would silently undo
+ * it — a lost update on the one setting that decides whether comments publish without
+ * review. `allowedOrigins`, when it is sent, still replaces the whole list: an owner has
+ * to be able to remove an origin.
+ *
+ * A body with neither field is refused rather than treated as a no-op, because it is a
+ * caller asking for nothing and the honest answer is that they sent nothing.
+ * Enforced by test/worker/admin/settings.test.ts.
+ */
+const bodySchema = z
+  .object({
+    allowedOrigins: z.array(z.string()).optional(),
+    // Not `z.enum(MODERATION_POLICIES)`: the caller is the owner, and this endpoint
+    // names the value it refused rather than answering "invalid body". See the check
+    // in the handler.
+    moderationPolicy: z.string().optional(),
+  })
+  .refine(
+    (body) => body.allowedOrigins !== undefined || body.moderationPolicy !== undefined,
+    'nothing to save',
+  )
 
 /** The clock, read once per handler, the way every other write in this project does. */
 function now(): number {
@@ -77,26 +103,29 @@ export async function handleReadSettings(c: AdminContext): Promise<Response> {
   const auth = await authenticated(c.env, c.req.raw, now())
   if (!auth.ok) return auth.response
 
-  return adminJson({
-    // Read back through the same parser the public origin check uses, so the dashboard
-    // shows what that check will actually honour rather than what the row happens to
-    // contain. A stored value the reader fails closed on would otherwise be displayed
-    // as a working allowlist.
-    allowedOrigins: parseAllowedOrigins(await readSetting(c.env.DB, ALLOWED_ORIGINS_SETTING)),
-    selfOrigin: selfOrigin(c.req.raw) ?? '',
-  })
+  return settingsResponse(c)
 }
 
 /**
- * `PUT /admin/api/settings` — replace the allowlist.
+ * `PUT /admin/api/settings` — the owner's settings: the allowlist, and the moderation
+ * policy (#173).
  *
- * PUT and not PATCH because the body is the whole list: an owner has to be able to
- * *remove* an origin, and an endpoint that only ever added would make de-listing a
- * staging domain impossible from the only surface that can edit it.
+ * PUT and not PATCH because a field that is sent is replaced whole: an owner has to be
+ * able to *remove* an origin, and an endpoint that only ever added would make de-listing
+ * a staging domain impossible from the only surface that can edit it. A field that is
+ * *absent* is untouched — see `bodySchema` for why that is not the same compromise.
  *
- * One D1 write, and only after every entry has been validated — so a list with one bad
- * entry stores nothing rather than storing the good half and reporting an error about
- * the rest.
+ * At most one D1 write per field, and only after everything has been validated — so a
+ * list with one bad entry stores nothing rather than storing the good half and reporting
+ * an error about the rest, and a bad policy leaves the origins in the same body unsaved.
+ *
+ * **This is the only writer of the moderation policy, and that is the security property
+ * rather than an implementation detail.** The setting decides whether a stranger's
+ * comment can be published without a human seeing it, so a public endpoint that could
+ * reach it would be worse than the feature is worth. `authenticated` is the door and
+ * `isCrossOriginRequest` is the other half: a page in another tab riding the owner's
+ * session to switch their site to `trust-returning` is exactly the attack CSRF
+ * protection is for here.
  * Enforced by test/worker/admin/settings.test.ts.
  */
 export async function handleWriteSettings(c: AdminContext): Promise<Response> {
@@ -109,7 +138,29 @@ export async function handleWriteSettings(c: AdminContext): Promise<Response> {
   if (!read.ok) return read.response
 
   const body = bodySchema.safeParse(read.value)
-  if (!body.success) return badRequest('Send allowedOrigins as a list of addresses.')
+  if (!body.success) {
+    return badRequest('Send allowedOrigins as a list of addresses, or moderationPolicy as one of.')
+  }
+
+  // **Refused, not coerced.** `parseModerationPolicy` turns anything unrecognisable into
+  // `hold-all`, which is the right answer when reading a stored row on the submission
+  // path and the wrong one here: the caller is the owner, and a policy that saved as
+  // something other than what they chose — silently, with a 200 — is the setting most
+  // worth being told about. The value is named in the message for the same reason a bad
+  // origin is.
+  const { allowedOrigins, moderationPolicy } = body.data
+  if (moderationPolicy !== undefined && !isModerationPolicy(moderationPolicy)) {
+    return badRequest(
+      `“${moderationPolicy}” is not a moderation policy. It is one of: ${MODERATION_POLICIES.join(', ')}.`,
+    )
+  }
+
+  if (allowedOrigins === undefined) {
+    if (moderationPolicy !== undefined) {
+      await writeSetting(c.env.DB, MODERATION_POLICY_SETTING, moderationPolicy, now())
+    }
+    return settingsResponse(c)
+  }
 
   // **Counted after canonicalising and de-duplicating, not before.** `https://a.example`
   // and `https://a.example/` are one origin, and an owner who pasted a list with a
@@ -120,7 +171,7 @@ export async function handleWriteSettings(c: AdminContext): Promise<Response> {
   // the body first: at MAX_BODY_BYTES there is no list long enough for the per-entry
   // work here to be worth anything to an attacker — and the caller is authenticated.
   const origins: string[] = []
-  for (const entry of body.data.allowedOrigins) {
+  for (const entry of allowedOrigins) {
     const trimmed = entry.trim()
     if (trimmed === '') continue
 
@@ -151,10 +202,38 @@ export async function handleWriteSettings(c: AdminContext): Promise<Response> {
     return badRequest('Those addresses are too long to store together. Use fewer, or shorter ones.')
   }
 
+  if (moderationPolicy !== undefined) {
+    await writeSetting(c.env.DB, MODERATION_POLICY_SETTING, moderationPolicy, now())
+  }
   await writeSetting(c.env.DB, ALLOWED_ORIGINS_SETTING, value, now())
 
-  // The saved list, read back from what was written rather than echoing the request:
-  // the dashboard renders this, and it must show the canonicalised form the origin
-  // check will compare against, not the spelling the owner typed.
-  return adminJson({ allowedOrigins: origins, selfOrigin: selfOrigin(c.req.raw) ?? '' })
+  // The saved settings, read back from the database rather than echoed from the request:
+  // the dashboard renders this, and it must show the canonicalised origins the public
+  // check will compare against rather than the spelling the owner typed, and the policy
+  // the submission path will actually apply rather than the string that was sent.
+  return settingsResponse(c)
+}
+
+/**
+ * The settings as they now stand, for both handlers.
+ *
+ * One function so the read and the write cannot answer differently-shaped bodies — the
+ * dashboard validates neither, and a save that came back without `moderationPolicy`
+ * would render as the default having been chosen.
+ * Enforced by test/worker/admin/settings.test.ts.
+ */
+async function settingsResponse(c: AdminContext): Promise<Response> {
+  return adminJson({
+    // Read back through the same parser the public origin check uses, so the dashboard
+    // shows what that check will actually honour rather than what the row happens to
+    // contain. A stored value the reader fails closed on would otherwise be displayed
+    // as a working allowlist.
+    allowedOrigins: parseAllowedOrigins(await readSetting(c.env.DB, ALLOWED_ORIGINS_SETTING)),
+    selfOrigin: selfOrigin(c.req.raw) ?? '',
+    // Same rule, for the same reason: `getModerationPolicy` is the function the
+    // submission path calls, so a row holding something unrecognisable is reported as
+    // the policy that will actually be applied rather than as the string stored. The
+    // failure this rules out is the dashboard showing a policy nothing enforces.
+    moderationPolicy: await getModerationPolicy(c.env.DB),
+  })
 }

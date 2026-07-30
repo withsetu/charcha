@@ -867,3 +867,60 @@ describe('unhandled paths', () => {
     expect(stub.paths()).toEqual(['/admin/api/queue?status=pending'])
   })
 })
+
+// The badge on a comment the moderation policy published (#173). It is the
+// accountability half of the feature: under `trust-returning` a comment can be on the
+// site before the owner has seen it, and without this the Approved tab shows it
+// indistinguishably from one they approved themselves.
+describe('a comment the policy published rather than a person (#173)', () => {
+  /** The Approved view, which is where a comment nobody moderated shows up. */
+  function approved(comments: Parameters<typeof queuePage>[0]) {
+    stubFetch((call) => {
+      if (call.path.startsWith('/admin/api/queue')) return json(200, queuePage(comments))
+      return unhandled(call)
+    })
+    mount()
+    fireEvent.keyDown(document.body, { key: '3' })
+  }
+
+  it('is badged, and says on what grounds and how to stop it', async () => {
+    approved([comment({ id: 1, status: 'approved', byOwner: false, moderatedAt: null })])
+
+    expect(await screen.findByText('Auto-approved')).toBeTruthy()
+    expect(screen.getByText(/You approved this commenter before/)).toBeTruthy()
+    expect(screen.getByText(/Marking this as spam stops that/)).toBeTruthy()
+  })
+
+  it('is not badged when the owner moderated it themselves', async () => {
+    // `moderated_at` is set by the moderation write and by nothing else, so it is what
+    // separates a decision from a policy. A badge here would call the owner's own
+    // approval automatic.
+    approved([
+      comment({ id: 1, status: 'approved', byOwner: false, moderatedAt: 1_700_000_100 }),
+      comment({ id: 2, status: 'approved', byOwner: false, moderatedAt: 1_700_000_200 }),
+    ])
+
+    await screen.findByText('Comment body 1')
+    expect(screen.queryByText('Auto-approved')).toBeNull()
+  })
+
+  it('is not badged on the owner’s own comment, which never went through the queue', async () => {
+    approved([comment({ id: 1, status: 'approved', byOwner: true, moderatedAt: null })])
+
+    await screen.findByText('Comment body 1')
+    expect(screen.queryByText('Auto-approved')).toBeNull()
+  })
+
+  it('is not badged on a comment still waiting, whatever else is null', async () => {
+    stubFetch((call) => {
+      if (call.path.startsWith('/admin/api/queue')) {
+        return json(200, queuePage([comment({ id: 1, status: 'pending', moderatedAt: null })]))
+      }
+      return unhandled(call)
+    })
+    mount()
+
+    await screen.findByText('Comment body 1')
+    expect(screen.queryByText('Auto-approved')).toBeNull()
+  })
+})

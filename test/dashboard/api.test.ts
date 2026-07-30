@@ -8,7 +8,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { decide, readQueue, readSession, signIn, signOut } from '../../src/dashboard/api'
+import {
+  decide,
+  readQueue,
+  readSession,
+  readSettings,
+  signIn,
+  signOut,
+  writeAllowedOrigins,
+  writeModerationPolicy,
+} from '../../src/dashboard/api'
 
 interface Call {
   url: string
@@ -198,5 +207,69 @@ describe('failures', () => {
     const result = await readQueue('pending')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.failure.code).toBe('MALFORMED')
+  })
+})
+
+// The settings calls (#173). The moderation policy is the one field this client
+// validates rather than casts, for `readSetup`'s reason: a missing one renders as
+// *hold-all is selected*, which is what a fresh deployment truthfully looks like — so
+// silence there is indistinguishable from an answer.
+describe('the settings endpoint', () => {
+  const SETTINGS = {
+    allowedOrigins: ['https://maya.build'],
+    selfOrigin: 'https://c.example',
+    moderationPolicy: 'hold-all',
+  }
+
+  it('reads the settings, policy and all', async () => {
+    stubFetch(() => answer(200, SETTINGS))
+
+    expect(await readSettings()).toEqual({ ok: true, value: SETTINGS })
+    expect(calls[0]?.url).toBe('/admin/api/settings')
+  })
+
+  it('refuses a body with no moderation policy, rather than reading silence as hold-all', async () => {
+    stubFetch(() => answer(200, { allowedOrigins: [], selfOrigin: 'https://c.example' }))
+
+    const result = await readSettings()
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a failure')
+    expect(result.failure.code).toBe('MALFORMED')
+  })
+
+  it('refuses a policy this dashboard does not know, which is how drift becomes visible', async () => {
+    // The union comes from the Worker's own module (src/moderation/policy.ts), so this
+    // can only happen against a Worker running different code. Answering it as a failure
+    // is what stops the screen showing a policy nobody chose.
+    stubFetch(() => answer(200, { ...SETTINGS, moderationPolicy: 'trust-clean' }))
+
+    const result = await readSettings()
+    expect(result.ok).toBe(false)
+  })
+
+  it('sends only the policy when saving the policy', async () => {
+    // The endpoint leaves an absent field alone, so a body carrying the allowlist too
+    // would let the Setup tab undo an edit made in the origins dialog.
+    stubFetch(() => answer(200, { ...SETTINGS, moderationPolicy: 'trust-returning' }))
+
+    await writeModerationPolicy('trust-returning')
+
+    expect(calls[0]?.init.method).toBe('PUT')
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ moderationPolicy: 'trust-returning' }))
+  })
+
+  it('sends only the origins when saving the origins, for the same reason', async () => {
+    stubFetch(() => answer(200, SETTINGS))
+
+    await writeAllowedOrigins(['https://maya.build'])
+
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ allowedOrigins: ['https://maya.build'] }))
+  })
+
+  it('checks a write’s answer too, so a save cannot render as a policy nobody stored', async () => {
+    stubFetch(() => answer(200, { allowedOrigins: [], selfOrigin: 'https://c.example' }))
+
+    const result = await writeModerationPolicy('trust-returning')
+    expect(result.ok).toBe(false)
   })
 })

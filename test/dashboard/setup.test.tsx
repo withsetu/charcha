@@ -32,7 +32,15 @@ function report(set: Partial<Record<SetupSecret, boolean>> = {}, shortPassword =
   }
 }
 
-const NO_ORIGINS = { allowedOrigins: [], selfOrigin: 'https://comments.example.com' }
+/**
+ * The settings body, with `moderationPolicy` on it because `readSettings` validates that
+ * field and refuses a body without one (#173).
+ */
+const NO_ORIGINS = {
+  allowedOrigins: [],
+  selfOrigin: 'https://comments.example.com',
+  moderationPolicy: 'hold-all',
+}
 
 /** Answers both of the panel's reads, and refuses anything else loudly. */
 function answering(setup: () => Response, settings: () => Response = () => json(200, NO_ORIGINS)) {
@@ -162,6 +170,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     const headings = screen.getAllByRole('heading', { level: 2 })
     expect(headings.map((heading) => heading.textContent)).toEqual([
       'Dashboard password',
+      'Moderation policy',
       'Turnstile bot check',
       'Email notifications',
       'Per-commenter rate limiting',
@@ -280,6 +289,7 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
     ).toEqual([
+      'Moderation policy',
       'Turnstile bot check',
       'Email notifications',
       'Per-commenter rate limiting',
@@ -421,7 +431,12 @@ describe('the allowed origins, which are the one thing here that is editable', (
     const onEditOrigins = vi.fn()
     answering(
       () => json(200, report()),
-      () => json(200, { allowedOrigins: ['https://maya.build'], selfOrigin: 'https://c.example' }),
+      () =>
+        json(200, {
+          allowedOrigins: ['https://maya.build'],
+          selfOrigin: 'https://c.example',
+          moderationPolicy: 'hold-all',
+        }),
     )
     mount({ onEditOrigins })
 
@@ -438,7 +453,12 @@ describe('the allowed origins, which are the one thing here that is editable', (
     let stored = ['https://old.example']
     const stub = answering(
       () => json(200, report()),
-      () => json(200, { allowedOrigins: stored, selfOrigin: 'https://c.example' }),
+      () =>
+        json(200, {
+          allowedOrigins: stored,
+          selfOrigin: 'https://c.example',
+          moderationPolicy: 'hold-all',
+        }),
     )
     const { rerender } = render(<Setup onEditOrigins={noop} onExpired={noop} originsSavedAt={0} />)
     expect(await screen.findByText('https://old.example')).toBeTruthy()
@@ -531,10 +551,14 @@ describe('what it refuses to do', () => {
     mount()
 
     await screen.findByText('Could not read what is configured')
-    // Both reads fail offline, and each says so in its own section rather than one of
-    // them silently rendering as an answer.
-    expect(screen.getAllByText(/Check your connection/)).toHaveLength(2)
+    // Both reads fail offline, and every section that depended on one says so rather
+    // than any of them silently rendering as an answer. Three, not two: the settings
+    // read feeds the moderation policy as well as the allowlist (#173), and a policy
+    // control that rendered `hold-all` as selected on a failed read would be telling
+    // an owner their comments are being held on the strength of nothing.
+    expect(screen.getAllByText(/Check your connection/)).toHaveLength(3)
     expect(screen.getByText('Could not read the allowed origins')).toBeTruthy()
+    expect(screen.getByText('Could not read the moderation policy')).toBeTruthy()
   })
 
   it('ends the session on a 401, the way every other call on this surface does', async () => {
@@ -557,5 +581,194 @@ describe('what it refuses to do', () => {
     await screen.findByText('Could not read the allowed origins')
     // The secret report still arrived, and is still worth the trip.
     expect(screen.getByText('Email notifications')).toBeTruthy()
+  })
+})
+
+// The moderation policy (#173). It is the one control on this tab that changes what
+// readers see, so what is asserted here is the copy as much as the wiring: an owner who
+// misreads "someone you approved before" as meaning an email address would be wrong
+// about what they just switched on.
+describe('the moderation policy', () => {
+  /** Answers the settings read with a policy, and the write with whatever it is given. */
+  function policyResponder(policy: string, write?: () => Response): Responder {
+    return (call) => {
+      if (call.path === '/admin/api/setup') return json(200, report())
+      if (call.path === '/admin/api/settings' && call.method === 'GET') {
+        return json(200, { ...NO_ORIGINS, moderationPolicy: policy })
+      }
+      if (call.path === '/admin/api/settings' && call.method === 'PUT') {
+        return write === undefined ? unhandled(call) : write()
+      }
+      return unhandled(call)
+    }
+  }
+
+  function policySection(): HTMLElement {
+    const heading = screen.getByText('Moderation policy')
+    const section = heading.closest('section')
+    if (section === null) throw new Error('the policy heading is not inside a section')
+    return section
+  }
+
+  function option(name: RegExp): HTMLElement {
+    return screen.getByRole('radio', { name })
+  }
+
+  it('shows the policy this deployment is on, not a guess', async () => {
+    stubFetch(policyResponder('trust-returning'))
+    mount()
+
+    await screen.findByText('Moderation policy')
+    expect(option(/hold every comment/i).getAttribute('aria-checked')).toBe('false')
+    expect(option(/trust a commenter/i).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('offers exactly the two policies that exist', async () => {
+    // No "publish anything the layers allowed": #173 proposes it and it is deliberately
+    // not shipped (#189). A third radio here would be a decision nobody took.
+    stubFetch(policyResponder('hold-all'))
+    mount()
+
+    await screen.findByText('Moderation policy')
+    expect(screen.getAllByRole('radio')).toHaveLength(2)
+    expect(policySection().textContent).not.toContain('trust-clean')
+  })
+
+  it('saves the choice, sending the policy and nothing else', async () => {
+    // Only this field, because the endpoint leaves an absent one alone: a body carrying
+    // the allowlist too would let this screen undo an edit made in the dialog.
+    const stub = stubFetch(
+      policyResponder('hold-all', () =>
+        json(200, { ...NO_ORIGINS, moderationPolicy: 'trust-returning' }),
+      ),
+    )
+    mount()
+
+    await screen.findByText('Moderation policy')
+    fireEvent.click(option(/trust a commenter/i))
+
+    await waitFor(() => {
+      expect(option(/trust a commenter/i).getAttribute('aria-checked')).toBe('true')
+    })
+    const put = stub.calls.find((call) => call.method === 'PUT')
+    expect(put?.body).toEqual({ moderationPolicy: 'trust-returning' })
+  })
+
+  it('shows what the server saved, not what was clicked', async () => {
+    // The screen has to agree with the deployment. A control that showed the click
+    // would report a policy the Worker is not applying.
+    stubFetch(
+      policyResponder('hold-all', () => json(200, { ...NO_ORIGINS, moderationPolicy: 'hold-all' })),
+    )
+    mount()
+
+    await screen.findByText('Moderation policy')
+    fireEvent.click(option(/trust a commenter/i))
+
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('saved')
+    })
+    expect(option(/hold every comment/i).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('reports a refused save rather than leaving the radio where it was clicked', async () => {
+    stubFetch(
+      policyResponder('hold-all', () =>
+        apiError(400, 'BAD_REQUEST', '“trust-clean” is not a moderation policy.'),
+      ),
+    )
+    mount()
+
+    await screen.findByText('Moderation policy')
+    fireEvent.click(option(/trust a commenter/i))
+
+    expect(await screen.findByText('Not saved')).toBeTruthy()
+    expect(screen.getByText(/is not a moderation policy/)).toBeTruthy()
+    expect(option(/hold every comment/i).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('reports a rejected fetch rather than a control that silently did nothing', async () => {
+    stubFetch((call) => {
+      if (call.method === 'PUT') throw new TypeError('Failed to fetch')
+      return policyResponder('hold-all')(call)
+    })
+    mount()
+
+    await screen.findByText('Moderation policy')
+    fireEvent.click(option(/trust a commenter/i))
+
+    expect(await screen.findByText('Not saved')).toBeTruthy()
+  })
+
+  it('ends the session on a 401 rather than showing a save failure', async () => {
+    const onExpired = vi.fn()
+    stubFetch(
+      policyResponder('hold-all', () =>
+        apiError(401, 'UNAUTHORIZED', 'Sign in to use the dashboard.'),
+      ),
+    )
+    mount({ onExpired })
+
+    await screen.findByText('Moderation policy')
+    fireEvent.click(option(/trust a commenter/i))
+
+    await waitFor(() => {
+      expect(onExpired).toHaveBeenCalled()
+    })
+  })
+
+  it('says the identity is not an email address on its own', async () => {
+    // The crux of #173 in the one place an owner decides. "Someone you approved before"
+    // reads as an email address, and an email address on a Charcha comment is optional
+    // and unverified — so the copy has to say that the network has to match too, or the
+    // owner is wrong about what they are switching on.
+    stubFetch(policyResponder('hold-all'))
+    mount()
+
+    await screen.findByText('Moderation policy')
+    const text = policySection().textContent ?? ''
+    expect(text).toContain('is not an email address')
+    expect(text).toContain('nobody verifies it')
+    expect(text).toContain('the network they are commenting from both match')
+  })
+
+  it('says what trust does not cover, in the place it is switched on', async () => {
+    stubFetch(policyResponder('hold-all'))
+    mount()
+
+    await screen.findByText('Moderation policy')
+    const text = policySection().textContent ?? ''
+    // A flagged comment is still held; marking a trusted person spam revokes it; and the
+    // hash retention window makes trust fade. None of the three is discoverable from a
+    // radio button, and each is a question an owner has within a day of choosing this.
+    expect(text).toContain('object to is held for you whatever is chosen here')
+    expect(text).toContain('Marking a trusted person’s comment as spam takes it away')
+    expect(text).toContain('trust fades')
+  })
+
+  it('warns that nobody can be recognised without IP_HASH_SECRET', async () => {
+    // The #107 case for this feature: with no secret there is no address hash, so half
+    // the identity does not exist and the policy is a switch that does nothing.
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ IP_HASH_SECRET: false }))
+      return policyResponder('hold-all')(call)
+    })
+    mount()
+
+    await screen.findByText('Nobody can be recognised on this deployment yet')
+    expect(policySection().textContent).toContain('will do nothing')
+  })
+
+  it('drops that warning once the secret is set', async () => {
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ IP_HASH_SECRET: true }))
+      return policyResponder('hold-all')(call)
+    })
+    mount()
+
+    await screen.findByText('Moderation policy')
+    await waitFor(() => {
+      expect(screen.queryByText('Nobody can be recognised on this deployment yet')).toBeNull()
+    })
   })
 })

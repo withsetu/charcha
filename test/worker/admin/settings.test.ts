@@ -10,6 +10,7 @@ import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ALLOWED_ORIGINS_SETTING, MAX_ALLOWED_ORIGINS, readAllowedOrigins } from '../../../src/cors'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
+import { MODERATION_POLICY_SETTING, getModerationPolicy } from '../../../src/db'
 import {
   TEST_PASSWORD,
   configurePassword,
@@ -47,6 +48,15 @@ async function storedValue(): Promise<string | null> {
 interface SettingsBody {
   allowedOrigins: string[]
   selfOrigin: string
+  moderationPolicy: string
+}
+
+async function storedPolicy(): Promise<string | null> {
+  const row = await db
+    .prepare('select value from settings where key = ?1')
+    .bind(MODERATION_POLICY_SETTING)
+    .first<{ value: string }>()
+  return row?.value ?? null
 }
 
 /** The read endpoint's body, named rather than inferred, so a shape change is a type error. */
@@ -265,5 +275,112 @@ describe('writing the setting', () => {
     )
 
     expect(await readAllowedOrigins(db)).toHaveLength(MAX_ALLOWED_ORIGINS)
+  })
+})
+
+// The moderation policy (#173). It shares this endpoint with the allowlist and it is a
+// more dangerous setting than the allowlist is: it decides whether a stranger's comment
+// can be published without a human seeing it. So the door is asserted separately here
+// rather than assumed from the tests above, which name the allowlist.
+describe('the moderation policy', () => {
+  it('is hold-all on a deployment nobody has configured', async () => {
+    const body = await readBody()
+
+    expect(body.moderationPolicy).toBe('hold-all')
+  })
+
+  it('is saved, and takes effect on the read the submission path uses', async () => {
+    const response = await write({ moderationPolicy: 'trust-returning' }, { origin })
+
+    expect(response.status).toBe(200)
+    expect(await getModerationPolicy(db)).toBe('trust-returning')
+    const body: SettingsBody = await response.json()
+    expect(body.moderationPolicy).toBe('trust-returning')
+  })
+
+  it('can be set back to hold-all, so a policy is reversible from the same screen', async () => {
+    await write({ moderationPolicy: 'trust-returning' }, { origin })
+    await write({ moderationPolicy: 'hold-all' }, { origin })
+
+    expect(await getModerationPolicy(db)).toBe('hold-all')
+  })
+
+  it('cannot be set without a session', async () => {
+    const response = await exports.default.fetch(SETTINGS, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ moderationPolicy: 'trust-returning' }),
+    })
+
+    expect(response.status).toBe(401)
+    expect(await storedPolicy()).toBeNull()
+  })
+
+  it('cannot be set from another site’s page, even with the owner’s cookie', async () => {
+    // A page in another tab flipping the owner's site to trust-returning is the CSRF
+    // this check exists for, and it is worth more here than on the allowlist: the
+    // attacker's next step is a comment that publishes itself.
+    const response = await write(
+      { moderationPolicy: 'trust-returning' },
+      { origin: 'https://evil.example' },
+    )
+
+    expect(response.status).toBe(403)
+    expect(await storedPolicy()).toBeNull()
+  })
+
+  it('refuses a value that is not a policy, rather than storing the default quietly', async () => {
+    // `parseModerationPolicy` coerces on the read path, which is right for a stored row
+    // and wrong here: the caller is the owner, and a policy that saved as something
+    // other than what they chose — with a 200 — is the setting most worth being told
+    // about. The refused value is named in the message.
+    const response = await write({ moderationPolicy: 'trust-clean' }, { origin })
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('trust-clean')
+    expect(await storedPolicy()).toBeNull()
+  })
+
+  it('refuses a value that is not a string at all', async () => {
+    const response = await write({ moderationPolicy: { policy: 'trust-returning' } }, { origin })
+
+    expect(response.status).toBe(400)
+    expect(await storedPolicy()).toBeNull()
+  })
+
+  it('leaves the allowlist alone when only the policy is sent', async () => {
+    await write({ allowedOrigins: ['https://maya.build'] }, { origin })
+    await write({ moderationPolicy: 'trust-returning' }, { origin })
+
+    expect(await readAllowedOrigins(db)).toEqual(['https://maya.build'])
+  })
+
+  it('leaves the policy alone when only the allowlist is sent', async () => {
+    // The lost update the optional fields exist to prevent: the origins dialog does not
+    // know about the policy, and a PUT that required the whole document would have it
+    // send back whatever it read when it opened.
+    await write({ moderationPolicy: 'trust-returning' }, { origin })
+    await write({ allowedOrigins: ['https://maya.build'] }, { origin })
+
+    expect(await getModerationPolicy(db)).toBe('trust-returning')
+  })
+
+  it('saves neither when the policy in the same body is refused', async () => {
+    await write({ allowedOrigins: ['https://maya.build'] }, { origin })
+
+    const response = await write(
+      { allowedOrigins: ['https://other.example'], moderationPolicy: 'trust-clean' },
+      { origin },
+    )
+
+    expect(response.status).toBe(400)
+    expect(await readAllowedOrigins(db)).toEqual(['https://maya.build'])
+    expect(await storedPolicy()).toBeNull()
+  })
+
+  it('refuses a body carrying neither field, rather than answering a no-op 200', async () => {
+    const response = await write({}, { origin })
+
+    expect(response.status).toBe(400)
   })
 })

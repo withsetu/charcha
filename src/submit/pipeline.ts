@@ -10,14 +10,20 @@
 
 import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
-import { getOrCreateThread, insertComment, isReplyTarget } from '../db'
+import {
+  getModerationPolicy,
+  getOrCreateThread,
+  insertComment,
+  isReplyTarget,
+  readCommenterTrust,
+} from '../db'
 import type { StoredComment } from '../db'
 import type { Notifier } from '../notify'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { clientIp, hashIp, usableIpSecret } from '../spam/ip'
 import { computeBodyHash } from './hash'
 import { parseComment } from './schema'
-import type { SpamCheck } from './spam'
+import type { SpamCheck, SpamVerdict } from './spam'
 
 export interface SubmitDeps {
   db: D1Database
@@ -147,9 +153,19 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
   const ip = secret === null ? null : clientIp(deps.request)
   const ipHash = ip === null || secret === null ? null : await hashIp(ip, secret)
 
-  // No status is passed: insertComment derives it from byOwner, which this public
-  // path never sets, so the comment is stored `pending` and enters the moderation
-  // queue. A public handler that could choose the status could self-approve.
+  // The moderation policy (#173), and the only thing on this path that can publish a
+  // stranger's comment without a human seeing it. It is computed here, from a database
+  // read, and never from `input` — see `autoApproved` below.
+  const autoApprove = await autoApproved({
+    db: deps.db,
+    verdict,
+    ipHash,
+    authorEmail: comment.authorEmail ?? null,
+  })
+
+  // No status is passed: insertComment derives it from byOwner — which this public
+  // path never sets — and from the trust decision above. A public handler that could
+  // choose the status could self-approve.
   //
   // The `review` verdict's reason is stored with it (#70). Without it a held
   // comment and a clean one are the same row — both `pending` — and the human
@@ -165,6 +181,7 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     bodyHash,
     ipHash,
     spamReason: verdict.action === 'review' ? verdict.reason : null,
+    autoApprove,
     now: deps.now,
   })
 
@@ -178,6 +195,76 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
   return stored.status === 'approved'
     ? { outcome: 'published', html }
     : { outcome: 'pending', html }
+}
+
+/**
+ * Whether the owner's moderation policy publishes this comment without review (#173).
+ *
+ * **Every layer of the spam pipeline terminates in the queue, and this is the only door
+ * out of it.** So it is written as a run of refusals with one `true` at the very end:
+ * an unreadable setting, a missing hash, a missing email and a verdict that is not
+ * `allow` each land on `false`, which is today's behaviour on every deployment and costs
+ * nobody anything they were not already paying. Card rule 5, in the one place on this
+ * path where failing open would publish a stranger's comment.
+ *
+ * **A database error is deliberately not caught here, and that is closed rather than
+ * open.** Either read throwing propagates out of `runSubmission` as it does for
+ * `getOrCreateThread` and `insertComment`, so the reader gets an error and is told their
+ * comment did not post — which is true, because `insertComment` is downstream of this
+ * line and never ran. A `catch` returning `false` would be the tempting shape and the
+ * wrong one: it would store the comment as `pending` while reporting success, which is
+ * the right *status* reached by hiding a fault the deployment needs to know about.
+ * Enforced by test/worker/submit/trust.test.ts.
+ *
+ * **The risk is asymmetric and the order of these guards is that asymmetry.** Wrongly
+ * trusting somebody publishes spam with no human in the way; wrongly not trusting
+ * somebody holds a real comment for review, which is exactly what happens today. False
+ * negatives are free. False positives are not. So the matching is strict, and when it
+ * does not match the behaviour is simply the old one.
+ *
+ * **A spam verdict overrides trust, and that is the first line.** `review` means some
+ * layer objected, and a regular whose comment trips the content heuristics or arrives
+ * without a Turnstile token is exactly the case where the owner should get to look.
+ * Trust decides what happens to an *unflagged* comment and nothing more.
+ *
+ * **The free checks come before the reads**, the same shape `isReplyTarget` above has
+ * and the same argument src/spam/index.ts makes for the layer ordering: a comment that
+ * cannot be trusted for a reason costing no I/O must not spend a query finding that
+ * out. A comment with no email — most of them — costs nothing here at all. What it
+ * costs at most is two primary-key/index seeks, neither of which grows with the number
+ * of comments on the page or in the commenter's history.
+ * Enforced by test/worker/submit/trust.test.ts.
+ */
+async function autoApproved(input: {
+  db: D1Database
+  verdict: SpamVerdict
+  ipHash: string | null
+  authorEmail: string | null
+}): Promise<boolean> {
+  // A layer objected. History does not overrule a live signal.
+  if (input.verdict.action !== 'allow') return false
+
+  // Half an identity is not an identity (#173). No hash means either no
+  // `IP_HASH_SECRET` or no address from the edge, and either way nothing here can
+  // recognise anybody; no email means the same from the other side. Both are checked
+  // before any read because both are free, and an empty string is not a value — it
+  // would otherwise match every other comment stored with one.
+  const { ipHash, authorEmail } = input
+  if (ipHash === null || ipHash === '') return false
+  if (authorEmail === null || authorEmail === '') return false
+
+  // Read second, because the answer is the same for every commenter on a deployment
+  // that has not changed it — and that is every deployment until somebody does.
+  const policy = await getModerationPolicy(input.db)
+  if (policy !== 'trust-returning') return false
+
+  const trust = await readCommenterTrust(input.db, authorEmail, ipHash)
+  // Revocation is `spammed`, and it wins over any number of approvals. Marking a
+  // trusted person's comment as spam is the owner saying they were wrong about them,
+  // so it withdraws the standing rather than being one bad comment among good ones.
+  // It is also reversible in the obvious direction: approving that comment later
+  // leaves no spam row, and the standing comes back.
+  return trust.approved && !trust.spammed
 }
 
 /**

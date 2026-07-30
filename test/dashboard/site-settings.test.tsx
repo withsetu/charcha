@@ -20,8 +20,15 @@ import { apiError, comment, decision, json, queuePage, stubFetch, unhandled } fr
 const SELF = 'https://comments.example.com'
 const SETTINGS = '/admin/api/settings'
 
+/**
+ * A settings body as the endpoint sends it.
+ *
+ * `moderationPolicy` is on it because `readSettings` validates that field and rejects a
+ * body without one (#173) — a fixture missing it would fail every test in this file with
+ * a MALFORMED, rather than testing the dialog.
+ */
 function settings(allowedOrigins: string[]) {
-  return { allowedOrigins, selfOrigin: SELF }
+  return { allowedOrigins, selfOrigin: SELF, moderationPolicy: 'hold-all' }
 }
 
 /**

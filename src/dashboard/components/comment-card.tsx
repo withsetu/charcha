@@ -9,7 +9,7 @@
 // Enforced by test/dashboard/triage.test.tsx.
 
 import * as React from 'react'
-import { CheckIcon, ShieldAlertIcon, Trash2Icon } from 'lucide-react'
+import { CheckIcon, ShieldAlertIcon, Trash2Icon, ZapIcon } from 'lucide-react'
 
 import type { DecisionStatus, QueuedComment } from '../api'
 import { formatAge, formatExact, isoInstant, pageLabel } from '../format'
@@ -44,6 +44,21 @@ const DECISIONS: readonly {
   { status: 'spam', label: 'Spam', key: 'S', icon: ShieldAlertIcon, variant: 'outline' },
   { status: 'deleted', label: 'Delete', key: 'D', icon: Trash2Icon, variant: 'outline' },
 ]
+
+/**
+ * Whether the moderation policy published this comment rather than a person (#173).
+ *
+ * **There is no column for this, and there deliberately is not one — the three fields
+ * already say it.** A comment is `approved`, was not written by the owner, and has no
+ * `moderated_at`: nothing else in the Worker produces that combination, because the only
+ * ways into `approved` are the owner's own composer (`by_owner = 1`), a moderation
+ * decision (which sets `moderated_at`), and the trust decision (which sets neither).
+ * Enforced by test/worker/db/comments.test.ts, which asserts each of the three writers
+ * against this shape, and test/dashboard/triage.test.tsx.
+ */
+function autoApproved(comment: QueuedComment): boolean {
+  return comment.status === 'approved' && !comment.byOwner && comment.moderatedAt === null
+}
 
 export function CommentCard({
   comment,
@@ -125,6 +140,24 @@ export function CommentCard({
           <span className="sr-only">On page: </span>
           {page}
         </p>
+
+        {autoApproved(comment) && (
+          // The accountability half of #173. Under `trust-returning` a comment can be on
+          // the site before the owner has seen it, and without this the Approved tab
+          // shows it indistinguishably from one they approved themselves — so the one
+          // question the policy raises, *what went out without me?*, would have no answer
+          // anywhere. It carries the reason with it, the same shape the Held badge uses,
+          // because "auto-approved" alone does not say on what grounds.
+          <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+            <Badge variant="outline" className="gap-1 text-muted-foreground">
+              <ZapIcon aria-hidden="true" />
+              Auto-approved
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              You approved this commenter before. Marking this as spam stops that.
+            </span>
+          </p>
+        )}
 
         {comment.spamReason !== null && (
           // #70's reason, and the whole point of it: it turns triage from reading

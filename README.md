@@ -335,6 +335,57 @@ partway through a later step still answers `ok`. The build log is what settles t
 ([#149](https://github.com/withsetu/charcha/issues/149) is the issue for closing the
 gap).
 
+### Moderation policy, and what "already approved" actually means
+
+Every comment is held for you to look at. That is the **default**, not a rule of the
+software: your dashboard's **Setup** tab has a *Moderation policy* setting with two
+choices.
+
+| | |
+|---|---|
+| **Hold every comment** | The default. Nothing appears on your site until you approve it. |
+| **Trust a commenter you have approved before** | A first comment is held, as always. Once you approve it, that person's later comments go straight onto the page. |
+
+The second one is not a guess about a comment. It is **your own decision, replayed** —
+the same rule blog comments have worked by for twenty years, and the reason the queue
+stops filling up with people you already know.
+
+**"Approved before" is not an email address.** An email on a Charcha comment is optional
+and nothing verifies it, so anyone can type yours. A commenter counts as returning only
+when the address **and** the network they are commenting from *both* match a comment you
+approved. Someone who knows a regular's email but is somewhere else is held, the same as
+a stranger. That is the whole of what makes this safe to switch on, and the reason the
+email alone is not enough.
+
+Four consequences worth knowing before you choose it:
+
+- **A spam layer's objection always wins.** Trust decides what happens to a comment
+  nothing flagged; it never overrules a layer that did. A regular whose next comment
+  trips the link heuristics, or arrives without a Turnstile token, is still held.
+- **Marking a trusted person's comment as Spam takes the trust away.** Their next comment
+  is held again, and stays held until you approve one of theirs. **Delete** does not do
+  this — only Spam does, because only Spam is a judgement about the commenter.
+- **Trust fades.** The network half is a hash of an IP address, and Charcha deletes those
+  on a retention window. Someone who has not commented for longer than that window is
+  held again. That is deliberate: an address this deployment no longer stores must not
+  keep vouching for whoever holds it now.
+- **It needs `IP_HASH_SECRET`.** Without it no address hash is stored at all, so half the
+  identity does not exist and nobody is ever recognised — the setting reads as on and
+  does nothing. The Setup tab says so where you choose it. It is one of the two secrets
+  the deploy form asks for, so a one-click deploy already has it.
+
+A household or an office sharing one connection can inherit each other's standing, if
+they also know the email address. That is the residual, it is stated rather than glossed,
+and it is the price of having no reader accounts and no cookies.
+
+There is deliberately **no** "publish anything the spam layers allowed" option. Those
+layers mostly measure the *absence* of something wrong — an untouched honeypot, more than
+two seconds spent typing, not too many links — so passing them is not evidence a comment
+is real. The one layer that is real evidence is
+[Turnstile](#turning-on-the-optional-features), and it is off until you turn it on.
+[#189](https://github.com/withsetu/charcha/issues/189) is where that option is tracked,
+for when the classifier can supply a confidence rather than an absence.
+
 ### Allowed origins, and why a comment can be refused
 
 Charcha only accepts comments from pages on addresses you have listed. A page anywhere
