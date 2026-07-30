@@ -1,4 +1,4 @@
-// Layer 6's model: the arithmetic, with no binding in sight (#10).
+// Layer 7's model: the arithmetic, with no binding in sight (#10).
 //
 // **Everything here is pure, and that is the point rather than a style.** This is
 // the only part of the classifier that spends CPU. `env.AI.run()` and every D1 read

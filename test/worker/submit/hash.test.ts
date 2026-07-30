@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeBodyHash } from '../../../src/submit/hash'
 
 // The DB requires a body_hash on every insert and indexes (thread_id, body_hash)
-// for duplicate detection (#8, layer 5). So the only property that matters here is
+// for duplicate detection (#8, layer 6). So the only property that matters here is
 // that identical bodies hash identically and different bodies (almost) never do —
 // not secrecy. SHA-256 gives that deterministically and without a dependency.
 describe('computeBodyHash', () => {

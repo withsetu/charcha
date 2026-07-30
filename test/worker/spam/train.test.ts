@@ -314,12 +314,12 @@ describe('training must never fail a decision that is already committed', () => 
 })
 
 describe('the classifier cannot label its own verdicts', () => {
-  it('gains no training example from a comment layer 6 held for review', async () => {
+  it('gains no training example from a comment layer 7 held for review', async () => {
     // The degenerate case #9 named and #28 does not cover: a model that treats its
     // own output as ground truth stops learning from reality and amplifies its first
     // mistakes, invisibly, because every decision agrees with the model that made it.
     //
-    // It is structurally impossible here — layer 6 returns a verdict and never writes
+    // It is structurally impossible here — layer 7 returns a verdict and never writes
     // — and this drives the submission path to prove it rather than asserting it.
     for (let i = 0; i < MIN_LABELS_PER_CLASS; i++) {
       const spam = await comment(`Ycheap offers number ${String(i)}`)

@@ -1,4 +1,4 @@
-// Layer 5 — content heuristics. Last of the free local layers, and the one whose
+// Layer 6 — content heuristics. Last of the free local layers, and the one whose
 // judgements are the least certain, which is why most of them are `review`.
 //
 // The order inside the layer is the order of the whole pipeline in miniature: the

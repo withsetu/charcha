@@ -84,7 +84,7 @@ describe('what the pipeline hands the notifier', () => {
     // `author_email` is collected for reply notifications, which v1 does not send,
     // and the embed's privacy line promises it is never rendered. It is also not
     // the owner's notification's business: putting it in the email would transmit a
-    // reader's address to Resend, which is the disclosure layer 7 is opt-in to
+    // reader's address to Resend, which is the disclosure layer 8 is opt-in to
     // avoid. The event type has no field for it — this asserts the pipeline does
     // not smuggle it through another one.
     const { events, notifier } = spy()

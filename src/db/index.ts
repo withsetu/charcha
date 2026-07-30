@@ -1098,7 +1098,7 @@ export async function countRecentCommentsOnPage(
  * Where this exact body has already been posted since `since` — on this page, and on
  * how many others (#184).
  *
- * Two facts and not one, because layer 5 answers them differently: a second copy on
+ * Two facts and not one, because layer 6 answers them differently: a second copy on
  * the page the reader is looking at adds nothing to that page and is refused, while a
  * copy on *other* pages is the blast pattern and is judged on how many pages it
  * reached. See src/spam/content.ts.
@@ -1123,7 +1123,7 @@ export interface BodyDuplicates {
  * Enforced by test/worker/spam/query-plan.test.ts.
  *
  * **What it reads grows with the copies of one body inside one window, and that is
- * self-limiting rather than merely small.** Layer 5 holds the second page's copy and
+ * self-limiting rather than merely small.** Layer 6 holds the second page's copy and
  * refuses the third, so a body cannot reach a third stored copy inside the window to be
  * counted. The `threads` seek is a rowid lookup per copy found, which on the ordinary
  * submission — no copies — happens zero times.
@@ -1323,7 +1323,7 @@ export async function readCommenterTrust(
 }
 
 /**
- * The classifier's five statements (#10, layer 6). Here rather than in src/spam/ for
+ * The classifier's five statements (#10, layer 7). Here rather than in src/spam/ for
  * the reason the file header gives, and the count matters more for these than for
  * most: one of them is on the public submission path.
  *

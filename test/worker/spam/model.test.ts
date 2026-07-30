@@ -1,7 +1,7 @@
 // The classifier's arithmetic, on its own (#10).
 //
 // Pure functions, so these tests are about the model rather than about D1 or
-// Workers AI — which matters because this is the only part of layer 6 that spends
+// Workers AI — which matters because this is the only part of layer 7 that spends
 // CPU, and the only part whose cost has to stay constant as the site's moderation
 // history grows.
 

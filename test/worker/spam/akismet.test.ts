@@ -7,7 +7,7 @@
 // cannot use costs**, because a metered third party that is down, suspended or
 // misconfigured must never be a reason a real person loses their comment.
 //
-// What layer 7 *says about itself* is asserted in
+// What layer 8 *says about itself* is asserted in
 // test/worker/spam/akismet-announcements.test.ts instead, for the reason that file
 // gives: `announceOnce` memoises per isolate, so a line written here would be
 // suppressed there and every absence assertion would pass without meaning anything.
@@ -274,7 +274,7 @@ describe('reading Akismet back', () => {
 describe('when Akismet cannot answer at all', () => {
   it('abstains rather than holding the comment when the call fails', async () => {
     // Fail open, and further open than layer 3 does. A `review` here would put a
-    // third party's name on a comment that third party never saw, and layer 7 is
+    // third party's name on a comment that third party never saw, and layer 8 is
     // the last layer — there is nothing after it for a bypass to skip.
     const failing: typeof fetch = () => Promise.reject(new Error('down'))
     expect(await akismetProvider({ apiKey, siteUrl, fetch: failing })?.check(submission())).toBe(

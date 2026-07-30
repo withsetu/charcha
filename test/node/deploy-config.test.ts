@@ -637,7 +637,7 @@ declare global {
     const names = (await declaredSecrets(repoRoot)).map((secret) => secret.name).sort()
 
     expect(names).toEqual([
-      // The pair of #11, layer 7, which are also a set: either alone leaves the
+      // The pair of #11, layer 8, which are also a set: either alone leaves the
       // third-party spam check off. Off is the default on every deployment, because
       // it is the one layer that transmits something about a reader.
       'AKISMET_API_KEY',

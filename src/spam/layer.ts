@@ -28,7 +28,7 @@ export interface SpamLayer {
    * review's reason and a later review changes nothing, so once some layer has held
    * a comment, asking a review-only layer can no longer alter the verdict — its
    * answer is discarded whatever it is. For a layer that is free that is merely
-   * pointless; for layer 6, which spends a metered Workers AI call on the public
+   * pointless; for layer 7, which spends a metered Workers AI call on the public
    * write endpoint, it is an unauthenticated caller making a deployment spend
    * neurons on an answer nobody reads. Omitting the elapsed field is enough to
    * produce a `review` from layer 2 (src/spam/timing.ts) on every submission.

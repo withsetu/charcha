@@ -7,7 +7,7 @@
 --
 -- ## 1. `comments_by_body_hash` — the same body posted to different pages
 --
--- Layer 5's duplicate rule was scoped to one page, because `comments_by_body` is
+-- The duplicate rule (layer 6) was scoped to one page, because `comments_by_body` is
 -- (thread_id, body_hash, created_at) and a prefix of that is useless when the thread is
 -- not known. So one payload blasted at fifty URLs — the archetypal spam shape — was
 -- fifty first-time comments, while the one attacker who posted twice to one article was

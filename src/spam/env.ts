@@ -30,7 +30,7 @@ declare global {
      */
     readonly IP_HASH_SECRET?: string
     /**
-     * An Akismet API key, which switches layer 7 on (#11). Absent means it is off,
+     * An Akismet API key, which switches layer 8 on (#11). Absent means it is off,
      * which is the state of every deployment that has not gone looking for it —
      * and the only state in which Charcha transmits nothing about a reader.
      *
@@ -42,7 +42,7 @@ declare global {
      * The site this deployment takes comments for — `https://example.com`, the home
      * page rather than a post.
      *
-     * Read only by layer 7 today, and named for the deployment rather than for
+     * Read only by layer 8 today, and named for the deployment rather than for
      * Akismet because it is a fact about the site: it is Akismet's required `blog`
      * parameter, the identity their account matches a check against, and the base
      * the permalink sent with a check is built from. It cannot be derived — this
@@ -58,7 +58,7 @@ declare global {
  *
  * **`AI` is `Partial` where the generated `Env` has it required**, and that is a
  * statement about this seam rather than about the binding. `wrangler types` marks
- * every declared binding as present because the platform provides it; layer 6 must
+ * every declared binding as present because the platform provides it; layer 7 must
  * still behave when it is not — on a deployment where provisioning did not happen,
  * and in every test in this project, because Workers AI has no local simulation and
  * a test that reached it would need account credentials and spend real neurons (see

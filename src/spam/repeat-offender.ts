@@ -89,10 +89,9 @@ export function repeatOffenderLayer(config: RepeatOffenderConfig): SpamLayer {
       // The reasons carry no address and no hash — a log line is not covered by #19's
       // retention sweep, and this one is written to the owner's log and stored on the
       // comment. `known-spammer` names a person the owner refused;
-      // `address-refused-before` names the *address* on purpose, because that is all
-      // the loose tier knows and
-      // a moderator reading "known spammer" about somebody's NAT neighbour would be
-      // reading a claim this layer never made.
+      // `address-refused-before` names the *address* on purpose, because that is all the
+      // loose tier knows — a moderator reading "known spammer" about somebody's NAT
+      // neighbour would be reading a claim this layer never made.
       return history.sameCommenter
         ? { action: 'reject', reason: 'known-spammer' }
         : { action: 'review', reason: 'address-refused-before' }

@@ -1,8 +1,8 @@
 // Turning a comment into a vector, and the one place in this project that calls
 // Workers AI (#10).
 //
-// It runs in the site owner's own Cloudflare account. That is the reason layer 6
-// sits ahead of layer 7 in CLAUDE.md's ordering and is on by default: nothing here
+// It runs in the site owner's own Cloudflare account. That is the reason layer 7
+// sits ahead of layer 8 in CLAUDE.md's ordering and is on by default: nothing here
 // leaves the deployment, so no comment, address or email is disclosed to anybody,
 // and the site owner has nothing to add to their privacy notice for it.
 //
@@ -56,7 +56,7 @@ function cutToEmbedLength(text: string): string {
 }
 
 /**
- * What layer 6 and the trainer both need, as a function rather than as the binding.
+ * What layer 7 and the trainer both need, as a function rather than as the binding.
  *
  * The seam is here because `env.AI` cannot be exercised in tests: Workers AI has no
  * local simulation, so a test that reached the binding would need account

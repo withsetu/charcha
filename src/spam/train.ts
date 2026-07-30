@@ -1,4 +1,4 @@
-// The other half of layer 6: the moderation inbox training the classifier (#10).
+// The other half of layer 7: the moderation inbox training the classifier (#10).
 //
 // **The invariant this file exists to hold, and #28 is why it needs a file:**
 //

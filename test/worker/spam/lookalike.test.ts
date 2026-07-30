@@ -153,7 +153,7 @@ describe('the signal over a comment body', () => {
   })
 })
 
-describe('layer 5 carries the signal', () => {
+describe('layer 6 carries the signal', () => {
   it('holds a comment whose only fault is a lookalike link', async () => {
     const outcome = await contentLayer().run(
       contextFor({ body: `Worth a look: https://${CYRILLIC_A}pple.example/deal` }),

@@ -1,4 +1,4 @@
-// Layer 7 — the seam, apart from any one provider (#11).
+// Layer 8 — the seam, apart from any one provider (#11).
 //
 // These tests are about what the seam promises: that it is off unless configured,
 // that it can only ever hold a comment, that a provider which throws or hangs
@@ -27,9 +27,9 @@ function stub(verdict: ProviderVerdict | (() => Promise<ProviderVerdict>)): Spam
 
 const siteUrl = 'https://maya.build'
 
-describe('the layer 7 seam', () => {
+describe('the layer 8 seam', () => {
   it('abstains, and asks nothing, when no provider is configured', async () => {
-    // Off by default is the whole posture (#11): layer 7 is the only layer that
+    // Off by default is the whole posture (#11): layer 8 is the only layer that
     // transmits anything about the reader, so a deployment that never opts in must
     // never reach one — and must still take comments.
     const layer = providerLayer({ provider: null, siteUrl })

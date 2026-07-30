@@ -121,7 +121,7 @@ describe('the layered run', () => {
   it('skips a reviewOnly layer once a review is held, because its answer is discarded', async () => {
     // #10. The first review's reason is the one kept and a reviewOnly layer cannot
     // reject, so asking one after a review can no longer change the verdict — it can
-    // only cost. For layer 6 that cost is a metered Workers AI call on the public
+    // only cost. For layer 7 that cost is a metered Workers AI call on the public
     // write endpoint, spent on an answer nobody reads, and omitting one form field is
     // enough to make layer 2 hold every submission.
     const seen: string[] = []
@@ -176,7 +176,7 @@ describe('the layered run', () => {
     // `reviewOnly` is a promise about a layer's strongest answer, and getting it
     // wrong on a rejecting layer would silently disable that layer for any held
     // comment. The two layers that make the promise are the two that cost money to
-    // ask — layer 6 in neurons (#10) and layer 7 in a third party's metered checks
+    // ask — layer 7 in neurons (#10) and layer 8 in a third party's metered checks
     // (#11), which is not a coincidence but the reason the flag exists.
     const check = createSpamCheck({})
     const reviewOnly = check.layers.filter((layer) => layer.reviewOnly === true)
@@ -265,7 +265,7 @@ describe('createSpamCheck — the assembled ordering', () => {
 
   it('never spends a third-party check on a comment another layer already held', async () => {
     // The `reviewOnly` rule in situ, on the layer it matters most for. `runLayers`
-    // keeps the first review's reason and layer 7 cannot reject, so its answer here
+    // keeps the first review's reason and layer 8 cannot reject, so its answer here
     // would be discarded — while still costing 1/500th of a month's allowance, to an
     // unauthenticated caller who need only omit one form field.
     const asked: string[] = []
@@ -380,7 +380,7 @@ describe('createSpamCheck — a comment from a real person', () => {
     // one duplicate-body lookup, and the classifier's model row (#10). Constant in the
     // number of comments *and* in
     // the number of comments the site has ever moderated, which is the rule the
-    // 50-query budget produces (CLAUDE.md) and the property layer 6's single weight
+    // 50-query budget produces (CLAUDE.md) and the property layer 7's single weight
     // vector exists to keep — a nearest-neighbour classifier would read one row per
     // stored vector right here.
     //
