@@ -19,6 +19,9 @@ import type { RenderableComment } from '../render'
 // The set of statuses the cascade applies to, shared with the dashboard rather than
 // written out here — see src/cascade.ts for why a second copy is the bug it prevents.
 import { CASCADING_STATUSES_SQL } from '../cascade'
+// The policy vocabulary, shared with the dashboard the same way (#173).
+import { parseModerationPolicy } from '../moderation/policy'
+import type { ModerationPolicy } from '../moderation/policy'
 
 export type CommentStatus = 'pending' | 'approved' | 'spam' | 'deleted'
 
@@ -66,10 +69,32 @@ export interface NewComment {
    *
    * There is deliberately no `status` here. A public submission handler that can
    * be handed a status is a public submission handler that can be made to
-   * self-approve — so status is derived from this flag and nothing else.
+   * self-approve — so status is derived from this flag and `autoApprove` below,
+   * and from nothing else.
    * Enforced by test/worker/db/comments.test.ts.
    */
   byOwner?: boolean
+  /**
+   * The moderation policy said to publish this one without review (#173).
+   *
+   * **A second boolean rather than a `status` field, and the difference is the whole
+   * guard.** A status parameter would let any caller name any of the four values,
+   * including `approved`, from anything they could get into the request; this is a
+   * flag with one meaning that `runSubmission` computes from a database read and
+   * never from the submitted form. src/submit/schema.ts strips every field it does
+   * not know, so there is no wire value that reaches this at all.
+   *
+   * **It is not `byOwner`, and must never be conflated with it.** `by_owner` is
+   * rendered as a badge on the page, is what the composer's own replies set, and is
+   * excluded from the trust lookup so that owner comments cannot confer standing.
+   * A trusted commenter is a stranger the owner has approved before, not the owner.
+   *
+   * `moderated_at` stays null, which is deliberate: nobody moderated this comment.
+   * That null is also what tells an auto-approved comment apart from an approved one
+   * in the dashboard — approved, not by the owner, never moderated.
+   * Enforced by test/worker/db/comments.test.ts and test/worker/submit/trust.test.ts.
+   */
+  autoApprove?: boolean
   /**
    * Why a spam layer held this comment, when one did (#70) — `runLayers` has
    * already prefixed it with the layer's name. Absent, empty or blank stores
@@ -272,6 +297,19 @@ function storableSpamReason(reason: string | null | undefined): string | null {
 }
 
 /**
+ * The one place a stored comment's status is decided, and the only two inputs it has.
+ *
+ * Written out as a function rather than inline in the bind list so that both flags are
+ * visible together: the rule is that a comment is published on arrival if the owner
+ * wrote it or if the moderation policy trusted its author, and is otherwise `pending`.
+ * There is no third way in, and no caller-supplied status anywhere.
+ * Enforced by test/worker/db/comments.test.ts.
+ */
+function statusFor(input: NewComment): CommentStatus {
+  return input.byOwner === true || input.autoApprove === true ? 'approved' : 'pending'
+}
+
+/**
  * Stores a comment. `depth` is derived in SQL from whether there is a parent, and
  * the comments_depth_guard trigger rejects a reply to a reply — so the two-level
  * rule holds even for a caller that never checked.
@@ -294,7 +332,11 @@ export async function insertComment(db: D1Database, input: NewComment): Promise<
       input.authorEmail ?? null,
       input.body,
       input.bodyHash,
-      input.byOwner === true ? 'approved' : 'pending',
+      statusFor(input),
+      // `by_owner` follows `byOwner` alone. An auto-approved comment is a stranger's
+      // comment that skipped the queue, not the owner's — badging it as the owner's
+      // would be a lie on the page, and counting it in the trust lookup would let a
+      // trusted commenter confer trust on the next arrival.
       input.byOwner === true ? 1 : 0,
       input.ipHash ?? null,
       storableSpamReason(input.spamReason),
@@ -836,6 +878,28 @@ export async function writeSetting(
     .run()
 }
 
+/** The `settings` key holding the moderation policy (#173). */
+export const MODERATION_POLICY_SETTING = 'moderation_policy'
+
+/**
+ * The moderation policy the owner configured, or `hold-all` when they have not.
+ *
+ * The same shape as `getIpHashRetentionDays` above, and for the same reason: the value
+ * arrives from a free-text `settings` row, so it is validated like a query string rather
+ * than trusted because the dashboard wrote it. `parseModerationPolicy` has exactly one
+ * failure answer and it is the default — see src/moderation/policy.ts for why a null
+ * this caller had to interpret would be the worse contract.
+ *
+ * **This is a read on the public submission path, so where it is called from matters as
+ * much as what it returns.** It is one primary-key seek, and `runSubmission` reaches it
+ * only for a comment no layer objected to whose commenter is identifiable at all — so a
+ * held comment, a rejected one, and a comment with no email each cost nothing here.
+ * Enforced by test/worker/moderation/policy.test.ts and test/worker/submit/trust.test.ts.
+ */
+export async function getModerationPolicy(db: D1Database): Promise<ModerationPolicy> {
+  return parseModerationPolicy(await readSetting(db, MODERATION_POLICY_SETTING))
+}
+
 /**
  * The retention window for `ip_hash`, in days, when the owner has set none.
  *
@@ -1061,6 +1125,90 @@ export async function hasDuplicateBodyOnPage(
     .bind(pageKey, bodyHash, since)
     .first<{ hit: number }>()
   return row !== null
+}
+
+/**
+ * What the owner's own past decisions say about a commenter (#173).
+ *
+ * Two booleans and not one, because they are different facts and the caller combines
+ * them: `approved` is the standing, `spammed` is the revocation, and a lookup returning
+ * only "trusted" would leave the second one somewhere else to be forgotten.
+ */
+export interface CommenterTrust {
+  /** The owner has approved a comment from this identity. */
+  approved: boolean
+  /** The owner has marked a comment from this identity as spam. */
+  spammed: boolean
+}
+
+/**
+ * The trust lookup, as a constant so the query plan can be asserted against the
+ * statement this project actually sends rather than a copy of it in a test.
+ *
+ * **One row out, whatever the commenter's history.** Two aggregates over the index
+ * entries rather than a list of their comments: a regular with four hundred approved
+ * comments has to cost the same as one with a single comment, because this runs on the
+ * public write endpoint and the alternative is a read an attacker can inflate by
+ * commenting.
+ *
+ * **`by_owner = 0`.** Owner-written comments are `approved` the moment they are stored
+ * and never pass a moderation decision, so counting them would let the dashboard's own
+ * replies confer trust on whoever next arrives with that email and that address. It is
+ * also the partial index's predicate, so the term is what keeps the seek covering.
+ *
+ * **`status in ('approved', 'spam')` and not four statuses.** `pending` says the owner
+ * has not decided; `deleted` says they took a comment down without calling it spam,
+ * which is a different judgement and not one this should replay in either direction.
+ * The two named here are the only two that are the owner *judging the commenter*.
+ * Enforced by test/worker/db/query-plan.test.ts and test/worker/db/commenter-trust.test.ts.
+ */
+export const COMMENTER_TRUST_SQL = `select
+        max(case when status = 'approved' then 1 else 0 end) as approved,
+        max(case when status = 'spam'     then 1 else 0 end) as spammed
+     from comments
+    where author_email = ?1
+      and ip_hash = ?2
+      and by_owner = 0
+      and status in ('approved', 'spam')`
+
+/**
+ * Whether the owner has already judged this commenter, and which way.
+ *
+ * **The identity is `author_email` *and* `ip_hash`, matched against the same comment,
+ * and both halves are the design (#173).** `author_email` is optional and unverified —
+ * anyone can type an address they do not control — so on its own it would let an
+ * attacker who knows one approved commenter's address inherit their standing forever.
+ * `ip_hash` is an HMAC of the address under a per-deployment secret, shared by everyone
+ * behind a NAT and purged on the #19 retention window, so on its own it would hand a
+ * regular's standing to every other customer of their ISP. Requiring both, on one row,
+ * means forging trust needs the victim's email address *and* the network they commented
+ * from at the time they were approved. Neither alone buys anything.
+ *
+ * **Compared exactly, never folded or trimmed.** A commenter who capitalises their
+ * address differently this time is not recognised and their comment is held — which is
+ * what would have happened anyway, and is the direction of error this whole feature is
+ * allowed to make. Loosening the comparison would widen who can claim an address for no
+ * security gain, since the attacker types whatever spelling matches.
+ *
+ * **Trust decays, and that is a feature.** #19's sweep nulls `ip_hash` past the
+ * retention window, taking the row out of `comments_by_commenter` with it. So an
+ * approval older than the window stops conferring anything, and a deployment that has
+ * never set `IP_HASH_SECRET` stores no hash at all and therefore trusts nobody. Both are
+ * the fail-closed direction: an identity the deployment can no longer recognise must not
+ * be inheritable by whoever holds that address now.
+ * Enforced by test/worker/db/commenter-trust.test.ts.
+ */
+export async function readCommenterTrust(
+  db: D1Database,
+  authorEmail: string,
+  ipHash: string,
+): Promise<CommenterTrust> {
+  const row = await db
+    .prepare(COMMENTER_TRUST_SQL)
+    .bind(authorEmail, ipHash)
+    .first<{ approved: number | null; spammed: number | null }>()
+  // `max()` over no rows is null, not 0 — a commenter with no judged history at all.
+  return { approved: row?.approved === 1, spammed: row?.spammed === 1 }
 }
 
 /**

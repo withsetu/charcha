@@ -1,0 +1,45 @@
+-- The index behind `trust-returning`. Designed on issue #173.
+--
+-- The moderation policy lives in `settings`, which needs no migration. What needs one
+-- is the question the policy asks on the public submission path: *has the owner already
+-- approved this commenter, and have they ever marked them spam?* That is
+-- COMMENTER_TRUST_SQL in src/db/index.ts, and this is the only thing standing between it
+-- and a row read per comment ever posted from the address.
+--
+-- **Both columns lead, because the identity is both columns.** #173's crux is that
+-- neither `author_email` nor `ip_hash` is an identity on its own: the email is optional
+-- and unverified, so anyone can type someone else's, and the hash is shared by everyone
+-- behind a NAT and purged on the #19 retention window. Trust therefore requires both to
+-- match the *same* previously judged comment, which is what an index leading
+-- (author_email, ip_hash) answers in one seek. See src/submit/pipeline.ts.
+--
+-- **`status` is the third column so the seek never touches a comment row.** The lookup
+-- asks only whether an approved row and a spam row exist for the identity, so with
+-- `status` on the index the answer comes out of the index alone — a covering seek rather
+-- than one row read per comment that commenter has ever posted, each carrying up to
+-- 10,000 characters of body into a 128 MB isolate. This is not a nicety: the read is on
+-- the unauthenticated write endpoint.
+--
+-- **Dropping this index does not produce a SCAN**, which is the reason the test asserts
+-- the index by name and asserts COVERING. SQLite falls back to `comments_by_ip`
+-- (ip_hash=?) — still a seek, so `not.toMatch(/SCAN/)` alone passes happily while every
+-- comment from that address is read on every submission.
+-- Enforced by test/worker/db/query-plan.test.ts.
+--
+-- **Partial, on all three of the statement's own preconditions.** A comment with no
+-- email, a comment whose hash #19's sweep has nulled, and a comment the owner wrote
+-- themselves can none of them make anybody a returning commenter, so none of them earns
+-- an index entry or the write that puts it there. The `ip_hash IS NOT NULL` half is also
+-- what makes trust decay with retention rather than in spite of it: when the sweep nulls
+-- a hash the row leaves this index, and an identity nobody can still recognise stops
+-- being one. That is the intended behaviour, not a limitation of it — see
+-- `readCommenterTrust` in src/db/index.ts.
+--
+-- **What it costs.** D1 counts one extra row written per index whose columns a write
+-- touches (https://developers.cloudflare.com/d1/platform/pricing/, checked 2026-07-29),
+-- against 100k writes a day. An insert pays it only when the comment has both an email
+-- and a hash; a moderation decision pays it because `status` is on the index, which is
+-- one extra row write per click by one person. Both are paid on writes that are already
+-- happening, while the read they save is on the path an anonymous visitor controls.
+CREATE INDEX comments_by_commenter ON comments (author_email, ip_hash, status)
+  WHERE author_email IS NOT NULL AND ip_hash IS NOT NULL AND by_owner = 0;
