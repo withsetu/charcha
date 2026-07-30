@@ -194,25 +194,29 @@ export function contentLayer(config: ContentConfig = {}): SpamLayer {
         : linkOutcome(body, links.length, reviewAt, rejectAt)
       if (counted?.action === 'reject') return counted
 
-      // A link in the *name* field outranks both, because it is the least ambiguous
-      // thing this layer can say: a display name is not a place to put a URL, and
-      // there is no rendering path that would make one into a link. It is still a
-      // review rather than a refusal — someone typing `Jane (www.janeblog.com)` into
-      // the only free-text field beside the comment is making a mistake, not an
-      // attack, and a bare 403 gives them nothing to correct.
+      // A link in the *name* field. It is still a review rather than a refusal —
+      // someone typing `Jane (www.janeblog.com)` into the only free-text field beside
+      // the comment is making a mistake, not an attack, and a bare 403 gives them
+      // nothing to correct.
       // Enforced by test/worker/spam/content.test.ts.
       const named: LayerOutcome =
         countLinks(context.comment.authorName) > 0
           ? { action: 'review', reason: 'link-in-name' }
           : null
 
-      // A lookalike domain outranks the other reviews in this layer, because it is
-      // the only one that names something specific for the moderator to look at:
-      // "many-links" reports a count they can see for themselves, while this says
-      // *which* link reads as a domain it is not. It cannot outrank a reject —
-      // that branch has already returned — so a comment cannot soften a verdict it
-      // has already earned by adding a lookalike link to it.
-      // Enforced by test/worker/spam/lookalike.test.ts.
+      // **The precedence of this layer's reviews, most specific first: `link-in-name`,
+      // then a lookalike domain, then the link count** — and, further down, a
+      // cross-page duplicate above all three. The ordering is by how much the reason
+      // tells a moderator they could not see for themselves: "many-links" reports a
+      // count in front of them, a lookalike says *which* link reads as a domain it is
+      // not, a URL in the name is a field that has no honest reason to hold one, and a
+      // duplicate says the text is somewhere else on the site entirely.
+      //
+      // None of them can outrank a reject — that branch has already returned — so a
+      // comment cannot soften a verdict it has already earned by adding a lookalike
+      // link or a URL-shaped name to it.
+      // Enforced by test/worker/spam/content.test.ts and
+      // test/worker/spam/lookalike.test.ts.
       const held: LayerOutcome = named ?? lookalikeOutcome(links) ?? counted
 
       // The duplicate read still happens when a review is already held, because a

@@ -8,7 +8,7 @@
 //   > `comments.status`.
 //
 // `status` is written by four things that are not a person — the reply cascade, spam
-// layers 1 to 5, this classifier's own verdict, and the importer (#15). The cascade
+// layers 1 to 7, this classifier's own verdict, and the importer (#15). The cascade
 // is the worst of them, because a reply to a spam comment is disproportionately a
 // *good* comment: somebody engaged enough to answer. That is label error correlated
 // with the thing being classified, which is the kind that does not average out.

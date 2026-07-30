@@ -8,7 +8,7 @@
 //
 // `status` answers "should this appear on the page". It is written by four things
 // that are not a person: the reply cascade (#28 — `setCommentStatus` marks the
-// replies under a spam comment, and nobody read them), spam layers 1 to 5, this
+// replies under a spam comment, and nobody read them), spam layers 1 to 7, this
 // classifier's own verdict, and the Disqus importer (#15). Training on any of them
 // teaches the model to reproduce a rule it already sits behind; training on the
 // cascade is worse than that, because a reply to spam is disproportionately a *good*

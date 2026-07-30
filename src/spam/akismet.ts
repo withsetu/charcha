@@ -218,7 +218,7 @@ async function check(
     // signal it lost. Here there is no signal to lose and two reasons not to
     // hold: a `review` would put Akismet's name on a comment Akismet never saw,
     // which is a false reason in the moderator's queue and in the log; and layer
-    // 7 is the last layer, so unlike layer 3 there is nothing after it that an
+    // 8 is the last layer, so unlike layer 3 there is nothing after it that an
     // attacker waiting for downtime could skip.
     //
     // No retry, for the reason src/notify/resend.ts gives about Resend and one

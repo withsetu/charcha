@@ -51,7 +51,7 @@ export interface SpamLayer {
  * - **`review` does not stop the run.** A review still persists a row, so the
  *   layers that bound writes — rate limiting above all — must still get their
  *   say. If review short-circuited, anything that reliably produces one (a
- *   Turnstile outage, a link-heavy body) would be a way to skip layers 4 and 5.
+ *   Turnstile outage, a link-heavy body) would be a way to skip layers 4 and 6.
  *   A later `reject` therefore overrules an earlier `review`; the first review's
  *   reason is the one kept, because it names the layer that doubted the comment
  *   first.

@@ -82,6 +82,6 @@ DROP INDEX comments_by_body;
 -- — one person clicking one button — and nothing at all on insert, because a comment is
 -- never stored as `spam`. The read it saves is on the path an anonymous visitor
 -- controls.
--- Enforced by test/worker/db/query-plan.test.ts.
+-- Enforced by test/worker/spam/query-plan.test.ts.
 CREATE INDEX comments_by_spam_origin ON comments (ip_hash, author_email, status)
   WHERE status = 'spam' AND ip_hash IS NOT NULL AND by_owner = 0;

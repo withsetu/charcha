@@ -119,7 +119,7 @@ reads.
 
 ## What happens when Akismet is down
 
-Nothing, from your reader's point of view. Layer 7 fails **open**: a timeout, a network
+Nothing, from your reader's point of view. Layer 8 fails **open**: a timeout, a network
 failure, a 5xx, an expired subscription, a suspended key, or a site Akismet does not
 recognise all produce *no opinion*, exactly as if the layer were switched off. No comment
 is ever lost because a third party had a bad day, and no comment is ever held with

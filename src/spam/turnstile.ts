@@ -102,7 +102,7 @@ export function turnstileObservations(): TurnstileObservations {
  * isolate, not per deployment, so a cold isolate starts unproven and answers `review`
  * to token-less submissions until a real comment proves the widget. That direction is
  * the safe one — `review` holds the comment behind the human gate and does not stop
- * the run, so layers 4 and 5 still bound how many arrive — and it is load-adaptive the
+ * the run, so layers 4 and 6 still bound how many arrive — and it is load-adaptive the
  * right way, because a busy site warms an isolate on real traffic within seconds.
  * Enforced by test/worker/spam/turnstile.test.ts.
  */
@@ -168,7 +168,7 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
     name: 'turnstile',
     async run(context: SpamCheckContext): Promise<LayerOutcome> {
       // Optional configuration, and the abstention is deliberate. A deployment
-      // with no secret still has to take comments; layers 1, 2, 4 and 5 are
+      // with no secret still has to take comments; layers 1, 2, 4 and 6 are
       // unaffected. Announced once per isolate so an owner who set the secret in
       // the wrong place can find out that layer 3 is not running.
       if (secret === undefined || secret === '') {
@@ -198,7 +198,7 @@ export function turnstileLayer(config: TurnstileConfig): SpamLayer {
         // JSON rather than form encoding: "The API accepts both
         // application/x-www-form-urlencoded and application/json requests".
         // Only the secret and the token are sent. `remoteip` is optional, and
-        // layers 1-6 promise to transmit nothing about the reader — the token
+        // layers 1-7 promise to transmit nothing about the reader — the token
         // already binds the challenge to the client that solved it, so sending
         // the IP would buy a disclosure obligation and no extra detection.
         const response = await doFetch(SITEVERIFY_URL, {
@@ -302,7 +302,7 @@ function held(reason: string): LayerOutcome {
  * sitekey is not part of deploying. Rejecting refused every comment their readers
  * ever wrote and told the owner nothing. Holding loses nothing and bypasses nothing:
  * the comment is stored `pending` behind the human gate exactly as an unmoderated
- * comment is, `review` does not stop the run so layers 4 and 5 still bound how many
+ * comment is, `review` does not stop the run so layers 4 and 6 still bound how many
  * arrive, and no reader-visible message names the layer. What it costs, when the
  * deployment is *not* misconfigured and an isolate is cold, is queue entries instead
  * of 403s — for as long as it takes one real commenter to prove the widget.

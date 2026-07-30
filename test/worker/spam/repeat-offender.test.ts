@@ -72,14 +72,14 @@ describe('a commenter with no history', () => {
 })
 
 describe('the strict tier — the identity #173 settled', () => {
-  it('refuses the commenter the owner marked spam, arriving again from the same address', async () => {
-    // The strongest evidence anywhere in this pipeline, and the only non-probabilistic
-    // kind: not a classifier's confidence and not a third party's opinion, but the
-    // owner's own decision about this email at this address.
+  it('holds the commenter the owner marked spam, arriving again from the same address', async () => {
+    // The reason is what the strict tier buys — `known-spammer` rather than
+    // `address-refused-before` — and it is all it buys. See the ceiling test below for
+    // why the verdict is not a refusal.
     await judged({})
 
     expect(await layer.run(contextFor({ ip: SPAMMER_IP, authorEmail: SPAMMER }))).toEqual({
-      action: 'reject',
+      action: 'review',
       reason: 'known-spammer',
     })
   })
@@ -93,12 +93,11 @@ describe('the strict tier — the identity #173 settled', () => {
 })
 
 describe('the loose tier — the address alone', () => {
-  it('holds, and never refuses, a stranger who shares the address', async () => {
+  it('holds a stranger who shares the address, and says so as an address', async () => {
     // The cost of the looser match, asserted rather than described. Someone behind the
-    // same NAT, or whoever the ISP hands the address to next, is held for review — which
-    // is what `hold-all` does to every comment on every deployment anyway. What they must
-    // never get is the refusal: `review`, not `reject`, is the whole of what makes the
-    // loose match affordable.
+    // same NAT, or whoever the ISP hands the address to next, is held — and the reason
+    // the moderator reads names the address rather than the person, because that is all
+    // this tier knows.
     await judged({})
 
     expect(
@@ -106,7 +105,7 @@ describe('the loose tier — the address alone', () => {
     ).toEqual({ action: 'review', reason: 'address-refused-before' })
   })
 
-  it('holds a comment with no email at all, because half an identity cannot refuse', async () => {
+  it('holds a comment with no email at all, at the address tier', async () => {
     await judged({})
 
     expect(await layer.run(contextFor({ ip: SPAMMER_IP }))).toEqual({
@@ -115,13 +114,58 @@ describe('the loose tier — the address alone', () => {
     })
   })
 
-  it('refuses nobody on a stolen email address alone', async () => {
+  it('treats a blank email as no email, so a blank cannot be an identity', async () => {
+    // `''` would match every other comment stored with one, which is the argument
+    // src/submit/pipeline.ts already makes on the trust path. Unreachable through the
+    // schema today; asserted because the failure would be borne by strangers.
+    await judged({ email: '' })
+
+    expect(await layer.run(contextFor({ ip: SPAMMER_IP, authorEmail: '' }))).toEqual({
+      action: 'review',
+      reason: 'address-refused-before',
+    })
+  })
+
+  it('says nothing at all on a stolen email address alone', async () => {
     // The forgery the strict identity exists to stop, run against this layer rather
     // than against the lookup: the spam row is somebody else's address, so knowing the
     // email buys nothing at all here — not even a hold.
     await judged({ ip: SOMEONE_ELSE_IP })
 
     expect(await layer.run(contextFor({ ip: SPAMMER_IP, authorEmail: SPAMMER }))).toBeNull()
+  })
+})
+
+describe('the ceiling — this layer holds, and never refuses', () => {
+  it('cannot be made to refuse anybody, on either tier (#184)', async () => {
+    // **The single most important assertion in this file**, and the one the design
+    // argument rests on. The owner's spam decision is about a *comment*, and anybody can
+    // write a comment carrying anybody's email — so on a shared address an attacker can
+    // post spam as a victim, wait for the owner to do their job, and thereby aim the
+    // owner's own moderation at them. Were either tier a `reject`, that victim's
+    // comments would then be refused with a bare 403, unstored and unqueued, invisible
+    // to both of them until #19 purged the hash.
+    //
+    // A refusal here would have bought one row write, which layer 4 already bounds. So
+    // the ceiling is `review`, and it is asserted over every shape of history rather
+    // than only the one a spammer produces.
+    await judged({})
+    await judged({ email: null })
+    await judged({ ip: SOMEONE_ELSE_IP })
+
+    const outcomes = await Promise.all([
+      layer.run(contextFor({ ip: SPAMMER_IP, authorEmail: SPAMMER })),
+      layer.run(contextFor({ ip: SPAMMER_IP, authorEmail: 'priya@example.com' })),
+      layer.run(contextFor({ ip: SPAMMER_IP })),
+      layer.run(contextFor({ ip: SOMEONE_ELSE_IP, authorEmail: SPAMMER })),
+    ])
+
+    expect(outcomes.map((outcome) => outcome?.action ?? 'no opinion')).toEqual([
+      'review',
+      'review',
+      'review',
+      'review',
+    ])
   })
 })
 
@@ -176,7 +220,11 @@ describe('what the layer will not do', () => {
       db: counting,
     })
 
-    expect(outcome?.action).toBe('reject')
+    // One *statement*, which is what this asserts and all it asserts. The aggregate
+    // still walks one `comments_by_spam_origin` entry per condemned comment — index
+    // entries, never rows, and bounded by the owner's own clicking rather than by
+    // anything the caller does. See SPAM_HISTORY_SQL in src/db/index.ts.
+    expect(outcome?.reason).toBe('known-spammer')
     expect(statements).toHaveLength(1)
   })
 

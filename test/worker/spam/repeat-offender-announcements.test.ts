@@ -113,7 +113,7 @@ describe('a deployment where the layer is working', () => {
       contextFor({ ip: SPAMMER_IP, authorEmail: 'buy@pills.example' }),
     )
 
-    expect(outcome?.action).toBe('reject')
+    expect(outcome?.reason).toBe('known-spammer')
     expect(announcements()).toEqual([])
   })
 })

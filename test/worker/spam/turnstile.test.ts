@@ -250,7 +250,7 @@ describe('layer 3 — Turnstile, when a token never arrives at all (#104)', () =
 
   it('never allows, in either state — the comment is held, not published', async () => {
     // Card rule 5. `review` stores the comment `pending` behind the human gate and
-    // does not stop the run, so layers 4 and 5 still bound how many arrive. `allow`
+    // does not stop the run, so layers 4 and 6 still bound how many arrive. `allow`
     // would have been a bypass an attacker could reach by omitting the token.
     const layer = turnstileLayer({ secretKey: SECRET, observations: turnstileObservations() })
 

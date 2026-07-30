@@ -18,7 +18,7 @@ import type { ValidatedComment } from './schema'
  * Three outcomes, not two, because "I am unsure" and "I am confident this is fine"
  * are different signals even though, on the public endpoint, both currently persist
  * as `pending` — every public comment passes through the moderation queue (the
- * human gate, layer 8), because `insertComment` derives status from `byOwner` alone
+ * human gate, layer 9), because `insertComment` derives status from `byOwner` alone
  * and this endpoint never sets it. `reject` is the only outcome that stops a write.
  */
 export type SpamVerdict =
@@ -37,7 +37,7 @@ export type SpamVerdict =
  * burn the write budget. #8's per-thread rate limiting and duplicate-body checks
  * key off `pageKey` and read history through `db`.
  *
- * `db` is here because layers 4 and 5 (rate limiting per IP/thread, duplicate-body
+ * `db` is here because layers 4 and 6 (rate limiting per IP/thread, duplicate-body
  * detection) cannot decide without reading past comments. It is for **reads only**:
  * the pipeline is the sole writer, and it writes only after this check returns a
  * non-reject verdict, so a spam check that wrote here would both break the

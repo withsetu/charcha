@@ -11,7 +11,7 @@
 //   - It is probabilistic where every layer above it is a rule. A false positive on
 //     a rule is a bug somebody can find and fix; a false positive here is a real
 //     person's comment destroyed by a number nobody can inspect.
-//   - Layer 8 — the human — is the gate this project already has. `review` puts the
+//   - Layer 9 — the human — is the gate this project already has. `review` puts the
 //     comment in front of them, which is where a judgement call belongs.
 //   - **A rejected comment is never stored, so it can never be labelled.** This layer
 //     learns only from comments a moderator saw. A classifier allowed to reject would

@@ -71,7 +71,7 @@ describe('the layered run', () => {
 
   it('keeps going after a review, so a review cannot be used to skip the rate limit', async () => {
     // If review short-circuited, anything that reliably produces one — a Turnstile
-    // outage, a link-heavy body — would be a way past layers 4 and 5. Review still
+    // outage, a link-heavy body — would be a way past layers 4 and 6. Review still
     // costs a database write, so the layers that bound writes must still run.
     const seen: string[] = []
     const verdict = await runLayers(
@@ -527,9 +527,12 @@ describe('createSpamCheck — a comment from a real person', () => {
       db: counting,
     })
 
-    // Refused by layer 5, so layer 6 and after are never asked: three reads, not four.
-    expect(verdict.action).toBe('reject')
-    expect(statements).toHaveLength(3)
+    // Held by layer 5, which does not short-circuit — the layers that bound writes must
+    // still get their say (src/spam/layer.ts) — so the full four reads still happen and
+    // the count is what this test is about. The reason kept is layer 5's, because
+    // `runLayers` keeps the first review's and layer 5 runs before layer 6.
+    expect(verdict).toEqual({ action: 'review', reason: 'repeat-offender: known-spammer' })
+    expect(statements).toHaveLength(4)
   })
 })
 

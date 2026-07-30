@@ -5,9 +5,10 @@
 // other local layer measures the absence of something wrong — an untouched honeypot,
 // enough seconds spent typing, not too many links — and a script written against this
 // form walks past all of them. This one replays a judgement a human already made, in
-// this deployment's own dashboard, about this comment's origin. It is not a probability
-// and it is not a guess, which is why it is the one layer here that is allowed to refuse
-// on identity alone.
+// this deployment's own dashboard, about this comment's origin.
+//
+// It still only ever holds a comment, never refuses one. See `repeatOffenderLayer` below
+// for why the strength of the evidence turns out not to be the deciding question.
 //
 // It sits after the rate limit and before the content heuristics because it costs one
 // indexed database read and one HMAC, which is layer 4's price and not layer 1's — the
@@ -43,21 +44,38 @@ export interface RepeatOffenderConfig {
  * - Wrongly distrusting holds a real comment for review — which is what `hold-all`, the
  *   default on every deployment, does to every comment regardless.
  *
- * So the loose tier is `ip_hash` alone and its verdict is `review`. **The price is
- * real and is paid by people who did nothing**: an address is shared behind a NAT and
- * reassigned by ISPs, so a spammer's neighbour, or whoever holds that address next
- * month, gets held. They are held, never refused, they are not told, and #19's retention
- * sweep nulls `ip_hash` on a window — so the effect expires on its own rather than
- * needing anybody to notice it.
+ * So the loose tier is `ip_hash` alone. **The price is real and is paid by people who
+ * did nothing**: an address is shared behind a NAT and reassigned by ISPs, so a
+ * spammer's neighbour, or whoever holds that address next month, is held. They are not
+ * told, and #19's retention sweep nulls `ip_hash` on a window — so the effect expires on
+ * its own rather than needing anybody to notice it.
  *
- * **Only the strict tier refuses.** `reject` returns a bare "could not be posted" with
- * no recourse, so it is spent only where the match needs the victim's email address
- * *and* the network they commented from. That is the strongest argument for a refusal
- * anywhere in this pipeline — #10's classifier and #11's provider both cap at `review`
- * precisely because they are probabilistic, and this is not — and it stays reversible in
- * the obvious direction: approving that comment leaves no `spam` row, and the standing
- * comes straight back.
+ * **Neither tier refuses, and that is a decision taken against the obvious argument.**
+ * The obvious argument is that this is the one layer whose evidence is not probabilistic
+ * — #10's classifier and #11's provider cap at `review` because they are guessing, and
+ * this replays a decision a human actually took — so it is the strongest case for a
+ * `reject` anywhere in the pipeline. It loses to one fact: **the owner's spam decision is
+ * about a comment, and anybody can write a comment carrying anybody's email address.**
+ *
+ * Concretely, on any shared address — CGNAT, a campus, an office, a mobile carrier pool
+ * — an attacker posts obvious spam under a victim's email, which is usually public. The
+ * owner marks it spam, correctly. Were the strict tier a `reject`, every comment that
+ * victim wrote from then on would be refused with a bare 403, never stored, never queued,
+ * with nothing for either of them to see, until #19 purged the hash. The attacker would
+ * have aimed the owner's own moderation at somebody. Note the asymmetry with #173, which
+ * runs the same identity the other way: to plant *approval* you need the owner to approve
+ * your spam, which they will not; to plant *condemnation* you need them to do their job.
+ *
+ * `review` costs almost nothing to give up, which is the other half of the decision. A
+ * refusal here would have bought one row write, and layer 4 already bounds those to five
+ * per address per window. What is kept is the part that was worth having: the reason, on
+ * the comment and in the log, telling the moderator which of the two this is.
  * Enforced by test/worker/spam/repeat-offender.test.ts.
+ *
+ * **Deliberately not `reviewOnly`.** That flag means "skip me once something has already
+ * held this comment", and src/spam/layer.ts states plainly that it is a declaration about
+ * *cost* — it exists for the two layers that spend money to answer. This layer is one
+ * local indexed read, so skipping it would save nothing worth the extra rule.
  */
 export function repeatOffenderLayer(config: RepeatOffenderConfig): SpamLayer {
   const secret = usableIpSecret(config.ipSecret)
@@ -83,7 +101,18 @@ export function repeatOffenderLayer(config: RepeatOffenderConfig): SpamLayer {
       }
 
       const ipHash = await hashIp(ip, secret)
-      const history = await readSpamHistory(context.db, ipHash, context.comment.authorEmail ?? null)
+      // An empty string is not an email address, and it must never reach the strict
+      // tier: `author_email = ''` would match every other comment stored with one, so a
+      // blank would be an identity everybody shares. `src/submit/schema.ts` turns a blank
+      // into an absent key today and `insertComment` stores null, so this is unreachable
+      // — it is here because the consequence if that ever loosens is borne by strangers,
+      // and because src/submit/pipeline.ts guards the same value on the trust path for
+      // the same reason. Fails closed: a blank is treated as no email at all.
+      // Enforced by test/worker/spam/repeat-offender.test.ts.
+      const email = context.comment.authorEmail
+      const identifying = email === undefined || email === '' ? null : email
+
+      const history = await readSpamHistory(context.db, ipHash, identifying)
       if (!history.seen) return null
 
       // The reasons carry no address and no hash — a log line is not covered by #19's
@@ -92,9 +121,10 @@ export function repeatOffenderLayer(config: RepeatOffenderConfig): SpamLayer {
       // `address-refused-before` names the *address* on purpose, because that is all the
       // loose tier knows — a moderator reading "known spammer" about somebody's NAT
       // neighbour would be reading a claim this layer never made.
-      return history.sameCommenter
-        ? { action: 'reject', reason: 'known-spammer' }
-        : { action: 'review', reason: 'address-refused-before' }
+      return {
+        action: 'review',
+        reason: history.sameCommenter ? 'known-spammer' : 'address-refused-before',
+      }
     },
   }
 }

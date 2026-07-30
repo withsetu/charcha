@@ -1122,11 +1122,15 @@ export interface BodyDuplicates {
  * same on a deployment with one comment as on one with a million.
  * Enforced by test/worker/spam/query-plan.test.ts.
  *
- * **What it reads grows with the copies of one body inside one window, and that is
- * self-limiting rather than merely small.** Layer 6 holds the second page's copy and
- * refuses the third, so a body cannot reach a third stored copy inside the window to be
- * counted. The `threads` seek is a rowid lookup per copy found, which on the ordinary
- * submission — no copies — happens zero times.
+ * **What it reads grows with the copies of one body stored inside one window, and the
+ * layer above is *intended* to keep that at two.** Serially it does: layer 6 holds the
+ * second page's copy and refuses the third. That is not a bound the code enforces,
+ * though, and the comment would be suppressing the check if it claimed otherwise — the
+ * read and the insert are not in a transaction, so N submissions of one body to N pages
+ * arriving at once all see `otherPages: 0` and all get stored. The real bounds are the
+ * window, which expires them, and the rate limits, which cap how many arrive. The
+ * `threads` seek is a rowid lookup per copy found, which on the ordinary submission — no
+ * copies — happens zero times.
  *
  * **`count(distinct)` over page keys and not over rows.** The question the thresholds
  * ask is how many *pages* the text reached; counting rows would let two copies on one
@@ -1180,9 +1184,15 @@ export interface SpamHistory {
  * **One row out, whatever the address's history**, the same shape and for the same
  * reason as COMMENTER_TRUST_SQL: this runs on the public write endpoint, so an
  * attacker must not be able to inflate the read by commenting. The aggregate is over
- * `comments_by_spam_origin` entries — (ip_hash, author_email) partial on
- * `status = 'spam'` — so no comment row is touched and the entries walked are only the
- * ones the owner explicitly condemned from this one address.
+ * `comments_by_spam_origin` entries — (ip_hash, author_email, status) partial on
+ * `status = 'spam'` — so no comment row is touched. **Index entries, not rows, and the
+ * count of them is not constant**: it is one per comment the owner has condemned from
+ * this one address. That is bounded by the owner's own clicking rather than by anything
+ * an anonymous caller does, which is the property that matters here — but a site that
+ * mass-marks a botnet sharing one CGNAT address will walk those entries on every later
+ * submission from that carrier pool. Covering keeps it cheap; it does not make it
+ * constant, and test/worker/spam/repeat-offender.test.ts pins the *statement* count at
+ * one, not the entry count.
  *
  * **`max(...)` over no rows is null, and that is the third answer.** Null means this
  * address has never been marked spam at all; 0 means it has, but not under this email;
@@ -1211,18 +1221,20 @@ export const SPAM_HISTORY_SQL = `select
  * is what `hold-all` — the default on every deployment — does to every comment anyway.
  * That asymmetry is what buys the looser match, and it is the whole of what buys it:
  * the price is that an address behind a NAT, or one an ISP has since reassigned, holds
- * innocent strangers who inherited a spammer's address. They are held, never refused,
- * and #19's retention sweep nulls `ip_hash` on a window, so the effect expires by
- * itself rather than needing anyone to notice it.
+ * innocent strangers who inherited a spammer's address. Neither tier refuses anybody —
+ * see src/spam/repeat-offender.ts for why the strict one does not either — and #19's
+ * retention sweep nulls `ip_hash` on a window, so the effect expires by itself rather
+ * than needing anyone to notice it.
  *
  * **The strict half is exactly #173's identity — this email *and* this address on the
- * same judged row — and only it earns a refusal.** Forging it needs the victim's email
- * address and the network they commented from, which is the property migration 0004
- * exists for; inheriting it by accident means two people behind one NAT who also type
- * the same email address.
+ * same judged row.** It is what separates "this person" from "this address", which is
+ * the difference the moderator is shown. It is deliberately *not* what separates a hold
+ * from a refusal: unlike the trust direction, a third party can plant the row this half
+ * matches, by posting spam under somebody else's email from a network they share.
  *
- * `authorEmail` may be null, and then `author_email = ?2` is null for every row and the
- * strict tier can never fire — a comment with no email cannot be more than an address.
+ * `authorEmail` may be null. Then `author_email = ?2` is null for every row, the `case`
+ * falls to 0, and the address is still `seen` while the strict half cannot fire — a
+ * comment with no email cannot be more than an address.
  * Enforced by test/worker/db/spam-history.test.ts.
  */
 export async function readSpamHistory(
