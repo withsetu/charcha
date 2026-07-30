@@ -174,11 +174,13 @@ describe('the layered run', () => {
   it('marks exactly the layers that never reject, and no others', () => {
     // `reviewOnly` is a promise about a layer's strongest answer, and getting it
     // wrong on a rejecting layer would silently disable that layer for any held
-    // comment. Only the classifier makes the promise today.
+    // comment. The two layers that make the promise are the two that cost money to
+    // ask — layer 6 in neurons (#10) and layer 7 in a third party's metered checks
+    // (#11), which is not a coincidence but the reason the flag exists.
     const check = createSpamCheck({})
     const reviewOnly = check.layers.filter((layer) => layer.reviewOnly === true)
 
-    expect(reviewOnly.map((layer) => layer.name)).toEqual(['classifier'])
+    expect(reviewOnly.map((layer) => layer.name)).toEqual(['classifier', 'provider'])
   })
 })
 
@@ -229,6 +231,82 @@ describe('createSpamCheck — the assembled ordering', () => {
 
     expect(verdict.action).toBe('reject')
     expect(statements).toHaveLength(0)
+  })
+
+  it('never spends a third-party check on a comment an earlier layer refused', async () => {
+    // #11's whole economics. Akismet's paid tier is 500 checks a month, so a check
+    // spent on a comment the honeypot already caught is a check the site owner paid
+    // for an answer nobody needed.
+    const asked: string[] = []
+    const check = createSpamCheck(
+      {},
+      {
+        provider: {
+          siteUrl: 'https://maya.build',
+          provider: {
+            name: 'stub',
+            check() {
+              asked.push('check')
+              return Promise.resolve('spam' as const)
+            },
+          },
+        },
+      },
+    )
+
+    const verdict = await check.check(
+      contextFor({ form: goodForm({ [HONEYPOT_FIELD]: 'filled' }) }),
+    )
+
+    expect(verdict.action).toBe('reject')
+    expect(asked).toHaveLength(0)
+  })
+
+  it('never spends a third-party check on a comment another layer already held', async () => {
+    // The `reviewOnly` rule in situ, on the layer it matters most for. `runLayers`
+    // keeps the first review's reason and layer 7 cannot reject, so its answer here
+    // would be discarded — while still costing 1/500th of a month's allowance, to an
+    // unauthenticated caller who need only omit one form field.
+    const asked: string[] = []
+    const check = createSpamCheck(
+      {},
+      {
+        provider: {
+          siteUrl: 'https://maya.build',
+          provider: {
+            name: 'stub',
+            check() {
+              asked.push('check')
+              return Promise.resolve('spam' as const)
+            },
+          },
+        },
+      },
+    )
+
+    // No elapsed field, which is enough to make layer 2 hold every submission.
+    const verdict = await check.check(
+      contextFor({ form: goodForm({ [ELAPSED_FIELD]: undefined }) }),
+    )
+
+    expect(verdict.action).toBe('review')
+    expect(asked).toHaveLength(0)
+  })
+
+  it('asks the provider, and holds the comment, when nothing above it had an opinion', async () => {
+    const check = createSpamCheck(
+      { IP_HASH_SECRET: 'ip-secret' },
+      {
+        provider: {
+          siteUrl: 'https://maya.build',
+          provider: { name: 'stub', check: () => Promise.resolve('spam' as const) },
+        },
+      },
+    )
+
+    const verdict = await check.check(contextFor({ form: goodForm() }))
+
+    expect(verdict).toEqual({ action: 'review', reason: 'provider: stub' })
   })
 
   it('still runs the rate limit when Turnstile could not answer', async () => {

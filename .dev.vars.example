@@ -20,7 +20,7 @@
 # it — which for the password below would be a published one. `check:deploy` fails
 # on a non-empty value for that reason.
 #
-# **Only two names are live here, and the four commented-out ones below are the
+# **Only two names are live here, and the six commented-out ones below are the
 # design rather than an oversight (#139).** The deploy form **requires every field
 # it shows**, and Cloudflare documents no way to mark one optional
 # (cloudflare/workers-sdk#14075, open, reproduced against the live form). A field
@@ -35,7 +35,7 @@
 #
 # A `#` line is a comment in every dotenv parser, Cloudflare's included, and if
 # that inference is ever wrong the failure is today's behaviour rather than a
-# worse one: the four reappear as form fields. It is an inference and not a
+# worse one: the six reappear as form fields. It is an inference and not a
 # documented fact, so it is on the checklist the first real deploy settles —
 # https://github.com/withsetu/charcha/issues/150.
 #
@@ -127,3 +127,40 @@ IP_HASH_SECRET=
 # mails, and clearing it is how you stop the emails: there is no unsubscribe link,
 # because there is nobody to unsubscribe but you.
 # CHARCHA_NOTIFY_TO=
+
+# Third-party spam checking (#11, layer 7) — both together, or the layer is off.
+#
+# **Read this before you set either.** Charcha's other six spam layers run inside
+# your Worker and transmit nothing about your readers to anybody. This one does
+# not. Every comment that reaches layer 7 is posted to Akismet, a service run by
+# Automattic, carrying the commenter's **IP address in full** (Akismet requires
+# it — it is not the hash the rate limit stores), their name, their email address
+# if they gave one, the whole text of their comment, their browser's user-agent
+# string, the page they were referred from, and the page they commented on. That
+# is a disclosure obligation you take on, not one Charcha can take on for you, and
+# it covers readers whose comments you later delete — the check happens before the
+# comment is stored. docs/spam-providers.md has the paragraph to paste into a
+# privacy notice, and the full field list.
+#
+# What it buys: a held comment, never a refused one. Layer 7 can only put a
+# comment in your moderation queue with `provider: akismet` as its reason. It runs
+# last, so it sees only what the six free layers could not decide, and it is
+# skipped entirely for a comment something else already held — Akismet's paid tier
+# is 500 checks a month (https://akismet.com/pricing/, checked 2026-07-29), and an
+# anonymous visitor must not be able to spend them.
+#
+# Leave both unset and nothing is sent to anyone, ever, which is the default on
+# every deployment and the right answer for most sites.
+
+# An Akismet API key, from https://akismet.com/account/. Unset means layer 7 is
+# off and no comment leaves your Worker.
+# https://akismet.com/developers/comment-check/
+# AKISMET_API_KEY=
+
+# Your site's home page — `https://example.com`, or `https://you.github.io/blog`
+# if the site lives at a path. Akismet requires it (`blog`) and matches it against
+# the sites authorised on your key, and it is the base for the permalink sent with
+# each check. Nothing can derive it: this Worker's own address is a workers.dev
+# URL rather than your site, and the URL the embed reports is chosen by whoever
+# posted the comment. Setting this without AKISMET_API_KEY leaves layer 7 off.
+# CHARCHA_SITE_URL=

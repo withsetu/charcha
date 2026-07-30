@@ -637,10 +637,15 @@ declare global {
     const names = (await declaredSecrets(repoRoot)).map((secret) => secret.name).sort()
 
     expect(names).toEqual([
+      // The pair of #11, layer 7, which are also a set: either alone leaves the
+      // third-party spam check off. Off is the default on every deployment, because
+      // it is the one layer that transmits something about a reader.
+      'AKISMET_API_KEY',
       'CHARCHA_DASHBOARD_PASSWORD',
       // The three of #14, which are all optional and only work as a set.
       'CHARCHA_NOTIFY_FROM',
       'CHARCHA_NOTIFY_TO',
+      'CHARCHA_SITE_URL',
       'IP_HASH_SECRET',
       'RESEND_API_KEY',
       'TURNSTILE_SECRET_KEY',

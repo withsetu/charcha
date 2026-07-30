@@ -1,4 +1,4 @@
-// The two secrets the spam layers read, and the one binding.
+// The four secrets the spam layers read, and the one binding.
 //
 // Neither is a binding in wrangler.jsonc, because both are secrets rather than
 // vars — `wrangler secret put TURNSTILE_SECRET_KEY` — and `wrangler types` only
@@ -29,6 +29,27 @@ declare global {
      * abstains; the per-thread half still runs.
      */
     readonly IP_HASH_SECRET?: string
+    /**
+     * An Akismet API key, which switches layer 7 on (#11). Absent means it is off,
+     * which is the state of every deployment that has not gone looking for it —
+     * and the only state in which Charcha transmits nothing about a reader.
+     *
+     * Requires `CHARCHA_SITE_URL` as well; either alone is announced and ignored.
+     * https://akismet.com/developers/comment-check/
+     */
+    readonly AKISMET_API_KEY?: string
+    /**
+     * The site this deployment takes comments for — `https://example.com`, the home
+     * page rather than a post.
+     *
+     * Read only by layer 7 today, and named for the deployment rather than for
+     * Akismet because it is a fact about the site: it is Akismet's required `blog`
+     * parameter, the identity their account matches a check against, and the base
+     * the permalink sent with a check is built from. It cannot be derived — this
+     * Worker's own origin is a `workers.dev` address rather than the site, and the
+     * URL the embed reports carries an origin anyone can choose (src/page-key.ts).
+     */
+    readonly CHARCHA_SITE_URL?: string
   }
 }
 
@@ -46,5 +67,8 @@ declare global {
  * `classifierLayer` abstains on.
  * Enforced by test/worker/spam/classifier.test.ts.
  */
-export type SpamEnv = Pick<Env, 'TURNSTILE_SECRET_KEY' | 'IP_HASH_SECRET'> &
+export type SpamEnv = Pick<
+  Env,
+  'TURNSTILE_SECRET_KEY' | 'IP_HASH_SECRET' | 'AKISMET_API_KEY' | 'CHARCHA_SITE_URL'
+> &
   Partial<Pick<Env, 'AI'>>
