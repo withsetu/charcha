@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ALLOWED_ORIGINS_SETTING, MAX_ALLOWED_ORIGINS, readAllowedOrigins } from '../../../src/cors'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import { MODERATION_POLICY_SETTING, getModerationPolicy } from '../../../src/db'
+import { MODERATION_POLICIES } from '../../../src/moderation/policy'
 import {
   TEST_PASSWORD,
   configurePassword,
@@ -296,6 +297,20 @@ describe('the moderation policy', () => {
     expect(await getModerationPolicy(db)).toBe('trust-returning')
     const body: SettingsBody = await response.json()
     expect(body.moderationPolicy).toBe('trust-returning')
+  })
+
+  it('accepts every policy that exists, over the real endpoint', async () => {
+    // Driven rather than inferred (#189). The accepted set is derived from
+    // `MODERATION_POLICIES`, so a new policy is wired up by construction — but this is
+    // the write path that turns on publishing without a human, and "it should work
+    // because the list is shared" is the kind of reasoning that is right until a
+    // validator somewhere grows its own copy.
+    for (const policy of MODERATION_POLICIES) {
+      const response = await write({ moderationPolicy: policy }, { origin })
+
+      expect(response.status).toBe(200)
+      expect(await getModerationPolicy(db)).toBe(policy)
+    }
   })
 
   it('can be set back to hold-all, so a policy is reversible from the same screen', async () => {
