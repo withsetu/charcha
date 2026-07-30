@@ -10,8 +10,13 @@
 
 import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
-import { getModerationPolicy, getOrCreateThread, insertComment, isReplyTarget } from '../db'
-import { readCommenterTrust } from '../db'
+import {
+  getModerationPolicy,
+  getOrCreateThread,
+  insertComment,
+  isReplyTarget,
+  readCommenterTrust,
+} from '../db'
 import type { StoredComment } from '../db'
 import type { Notifier } from '../notify'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'

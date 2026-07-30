@@ -108,6 +108,18 @@ function useLoad<T>(
 const README_URL = 'https://github.com/withsetu/charcha#turning-on-the-optional-features'
 
 /**
+ * The long form of the moderation policy, including the retention window trust decays
+ * with (#173).
+ *
+ * A second constant rather than reusing `README_URL`, because that one is the
+ * *optional features* section and this is a setting rather than a secret — a link whose
+ * text promises an explanation of retention and lands on `wrangler secret put` is the
+ * kind of near-miss a reader blames themselves for.
+ */
+const MODERATION_README_URL =
+  'https://github.com/withsetu/charcha#moderation-policy-and-what-already-approved-actually-means'
+
+/**
  * The source of the fifteen-character floor (#120), linked rather than asserted.
  *
  * A number in a warning about somebody's credential invites "says who", and the honest
@@ -624,7 +636,7 @@ function ModerationSection({
         Because the network half is a hash of an IP address, and{' '}
         <a
           className="underline underline-offset-4 hover:text-foreground"
-          href={README_URL}
+          href={MODERATION_README_URL}
           target="_blank"
           rel="noopener noreferrer"
         >
