@@ -1,39 +1,48 @@
-// The assembled spam check: layers 1-7, in the order #1 specifies, behind the
+// The assembled spam check: layers 1-8, in the order #1 specifies, behind the
 // SpamCheck seam #7 left for it.
 //
 // The ordering is the design, and the reason is economics rather than taste. It is
 // ordered cheapest first, so that the expensive layers only ever see what the cheap
 // ones could not decide:
 //
-//   1 honeypot     — one string comparison
-//   2 timing       — one number comparison
-//   3 Turnstile    — one subrequest, and only if the owner configured a secret
-//   4 rate limit   — two indexed database reads
-//   5 content      — string work, then at most one indexed database read
-//   6 classifier   — one indexed database read, then a subrequest only if the site
-//                    has trained a model on both classes (#10)
-//   7 provider     — one subrequest to a third party, and only if the owner opted
-//                    in and nothing above has already held the comment (#11)
+//   1 honeypot        — one string comparison
+//   2 timing          — one number comparison
+//   3 Turnstile       — one subrequest, and only if the owner configured a secret
+//   4 rate limit      — two indexed database reads
+//   5 repeat offender — one indexed database read, and only if the deployment has an
+//                       IP_HASH_SECRET to recognise anybody by (#184)
+//   6 content         — string work, then at most one indexed database read
+//   7 classifier      — one indexed database read, then a subrequest only if the site
+//                       has trained a model on both classes (#10)
+//   8 provider        — one subrequest to a third party, and only if the owner opted
+//                       in and nothing above has already held the comment (#11)
 //
 // A comment the honeypot catches therefore costs no network call and no database
-// read at all. Layer 6 is last of the local layers for the same reason Turnstile
+// read at all. Layer 7 is last of the local layers for the same reason Turnstile
 // sits behind the string comparisons: it is the only one that can spend an
 // inference call, and its own internals repeat the pattern — the cold-start read
 // happens before the embedding, so a deployment that has never moderated anything
 // reaches Workers AI zero times.
 //
-// **Layer 7 is last because it is the only layer that is not ours to spend.** Layers
-// 1-6 are free, local, and transmit nothing about the reader; a third-party provider
+// **Layer 5 is priced with the reads, not with the string work, which is why it is
+// there and not first.** It is the only layer whose evidence is the owner's own
+// explicit decision rather than the absence of something wrong (#184), so it is
+// tempting to put it at the front — but it costs an HMAC and an indexed read, and the
+// ordering is about price rather than about strength. A comment the honeypot catches
+// still costs nothing.
+//
+// **Layer 8 is last because it is the only layer that is not ours to spend.** Layers
+// 1-7 are free, local, and transmit nothing about the reader; a third-party provider
 // is metered — Akismet's paid tier allows 500 checks a month
 // (https://akismet.com/pricing/, checked 2026-07-29) — and it is the site owner's
-// money and their reader's data. So it sees only what six layers could not decide,
+// money and their reader's data. So it sees only what seven layers could not decide,
 // it is `reviewOnly` so a comment already held never reaches it at all, and it is
 // off unless the owner switched it on. See src/spam/provider.ts.
 //
-// **Layer 4 sitting ahead of layer 6 is what bounds the neuron budget**, and it is
+// **Layer 4 sitting ahead of layer 7 is what bounds the neuron budget**, and it is
 // the ordering doing security work rather than economics. Workers AI allows 10,000
 // neurons a day and answers HTTP 429 after that, so a flood that reached the
-// classifier could spend a site's whole allowance and leave layer 6 abstaining for
+// classifier could spend a site's whole allowance and leave layer 7 abstaining for
 // the rest of the day. It cannot: the per-IP limit answers `reject`, and `runLayers`
 // stops at the first reject without asking anything after it. The per-thread limit
 // answers `review` and so does not short-circuit — by design, since review must not
@@ -53,6 +62,7 @@ import { runLayers } from './layer'
 import type { SpamLayer } from './layer'
 import { rateLimitLayer } from './rate-limit'
 import type { RateLimitConfig } from './rate-limit'
+import { repeatOffenderLayer } from './repeat-offender'
 import { akismetProvider } from './akismet'
 import { providerLayer } from './provider'
 import type { SpamProvider } from './provider'
@@ -73,6 +83,7 @@ export const SPAM_LAYER_ORDER = [
   'timing',
   'turnstile',
   'rate-limit',
+  'repeat-offender',
   'content',
   'classifier',
   'provider',
@@ -84,7 +95,7 @@ export interface SpamCheckOverrides {
   content?: ContentConfig
   classifier?: Omit<ClassifierConfig, 'ai'>
   /**
-   * A stand-in for layer 7, so no test reaches Akismet and no fixture carries a
+   * A stand-in for layer 8, so no test reaches Akismet and no fixture carries a
    * key. The whole config rather than just the provider, because a provider with
    * no site URL is a layer that abstains. Nothing in production passes it.
    */
@@ -112,6 +123,7 @@ export function createSpamCheck(
     timingLayer(),
     turnstileLayer({ ...overrides.turnstile, secretKey: env.TURNSTILE_SECRET_KEY }),
     rateLimitLayer({ ...overrides.rateLimit, ipSecret: env.IP_HASH_SECRET }),
+    repeatOffenderLayer({ ipSecret: env.IP_HASH_SECRET }),
     contentLayer(overrides.content),
     classifierLayer({ ...overrides.classifier, ai: env.AI }),
     providerLayer(

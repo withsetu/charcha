@@ -1,10 +1,10 @@
 # Third-party spam checking, and what it sends
 
-Charcha's spam defence is seven layers deep. **Six of them run inside your Worker and
-transmit nothing about your readers to anyone.** The seventh sends a comment to a
+Charcha's spam defence is eight layers deep. **Seven of them run inside your Worker and
+transmit nothing about your readers to anyone.** The eighth sends a comment to a
 company that is not you, and it is off until you switch it on.
 
-This page is about the seventh. It states what leaves your Worker before it states how to
+This page is about the eighth. It states what leaves your Worker before it states how to
 turn it on, which is the order that matters
 ([#11](https://github.com/withsetu/charcha/issues/11)).
 
@@ -16,11 +16,11 @@ turn it on, which is the order that matters
 | Default | **Off.** Nothing is asked for at deploy time and nothing is sent until you set two values |
 | What it can do | Hold a comment for review. It can never refuse one — see [below](#it-can-only-hold-a-comment-never-refuse-one) |
 | What it costs | Akismet's Pro plan is "$9.95 per month, billed yearly" for "500 spam calls/mo, up to 1 site"; Business is "$49.95 per month, billed yearly" for "5000 monthly spam checks". The Personal plan is pay-what-you-can and requires that your site has no ads, sells nothing and promotes no business ([pricing](https://akismet.com/pricing/), [personal](https://akismet.com/pricing/personal/), checked 2026-07-29) |
-| Where it runs | Last. It only ever sees comments the six free layers could not decide |
+| Where it runs | Last. It only ever sees comments the seven free layers could not decide |
 
 ## What is sent to Akismet
 
-Every comment that reaches layer 7 is posted to Akismet's `comment-check` endpoint with:
+Every comment that reaches layer 8 is posted to Akismet's `comment-check` endpoint with:
 
 | Field | What it is |
 |---|---|
@@ -86,7 +86,7 @@ announced rather than ignored.
 
 ## Turning it off
 
-Unset `AKISMET_API_KEY`. Nothing else changes: the other six layers do not know layer 7
+Unset `AKISMET_API_KEY`. Nothing else changes: the other seven layers do not know layer 8
 exists, comments carry on arriving, and your moderation queue is unaffected.
 
 ```sh
@@ -112,7 +112,7 @@ refuses a comment on a third party's say-so, for three reasons:
 Akismet can additionally answer `X-akismet-pro-tip: discard`, meaning "blatant spam, safe
 to throw away". Charcha still only holds those — the reason token reads
 `provider: akismet-discard` so you can triage them first, and that is all the difference
-it makes. Acting on it would mean layer 7 could refuse comments, which would in turn mean
+it makes. Acting on it would mean layer 8 could refuse comments, which would in turn mean
 it could no longer be skipped for a comment some earlier layer already held — and that
 skip is what stops an anonymous visitor spending your monthly allowance on answers nobody
 reads.

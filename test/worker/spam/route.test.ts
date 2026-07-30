@@ -65,11 +65,28 @@ describe('POST /comments — the spam layers are actually wired into the Worker'
     expect(await countComments()).toBe(1)
   })
 
+  it('holds the same comment posted to a second page, and refuses it on a third (#184)', async () => {
+    // The signal the page-scoped duplicate rule could not see at all, driven through
+    // the Worker: one payload, three URLs. The first is a comment, the second is a
+    // cross-post the moderator gets to look at, the third is a broadcast.
+    expect((await post({ url: 'https://maya.build/notes/leaving' })).status).toBe(202)
+    expect((await post({ url: 'https://maya.build/notes/second' })).status).toBe(202)
+
+    const third = await post({ url: 'https://maya.build/notes/third' })
+
+    expect(third.status).toBe(403)
+    expect(await countComments()).toBe(2)
+    const held = await db
+      .prepare(`select spam_reason from comments order by id desc limit 1`)
+      .first<{ spam_reason: string | null }>()
+    expect(held?.spam_reason).toBe('content: duplicate-across-pages')
+  })
+
   it('does not tell the rejected caller which layer stopped it', async () => {
     const response = await post({ [HONEYPOT_FIELD]: 'filled' })
 
     const text = await response.text()
-    expect(text).not.toMatch(/honeypot|turnstile|rate|duplicate|layer/i)
+    expect(text).not.toMatch(/honeypot|turnstile|rate|duplicate|layer|spammer/i)
   })
 
   it('still holds a comment for review rather than losing it when the timing field is absent', async () => {

@@ -1095,37 +1095,147 @@ export async function countRecentCommentsOnPage(
 }
 
 /**
- * Whether this exact body has been posted to this page since `since`.
+ * Where this exact body has already been posted since `since` — on this page, and on
+ * how many others (#184).
  *
- * `limit 1` and no count: the question is existence, and a spam blast of the same
- * body should not cost one row read per copy already stored. Matches
- * `comments_by_body`, which is `(thread_id, body_hash, created_at)` — all three
- * predicates, so the index answers this without reading a row.
+ * Two facts and not one, because layer 5 answers them differently: a second copy on
+ * the page the reader is looking at adds nothing to that page and is refused, while a
+ * copy on *other* pages is the blast pattern and is judged on how many pages it
+ * reached. See src/spam/content.ts.
+ */
+export interface BodyDuplicates {
+  /** The body is already on this page inside the window. */
+  samePage: boolean
+  /** How many *other* pages carry it inside the window. Never counts this one. */
+  otherPages: number
+}
+
+/**
+ * Every page carrying this body inside the window, reduced to two numbers (#184).
+ *
+ * **One statement for both questions, and one row out however many copies exist.** The
+ * page-scoped version this replaces could not see the archetypal spam shape at all —
+ * one payload fired at fifty URLs was fifty first-time comments — because
+ * `comments_by_body` led with `thread_id` and a prefix of that answers nothing when the
+ * thread is unknown. `comments_by_body_hash` is (body_hash, created_at, thread_id), so
+ * this is one seek constrained on the hash *and* the window, covering, and it costs the
+ * same on a deployment with one comment as on one with a million.
  * Enforced by test/worker/spam/query-plan.test.ts.
  *
- * Status is deliberately not filtered — a body already marked spam is the one
- * most worth refusing a second time. `since` is what keeps that from becoming a
- * permanent, invisible ban on a piece of text: see DUPLICATE_WINDOW_SECONDS.
+ * **What it reads grows with the copies of one body inside one window, and that is
+ * self-limiting rather than merely small.** Layer 5 holds the second page's copy and
+ * refuses the third, so a body cannot reach a third stored copy inside the window to be
+ * counted. The `threads` seek is a rowid lookup per copy found, which on the ordinary
+ * submission — no copies — happens zero times.
+ *
+ * **`count(distinct)` over page keys and not over rows.** The question the thresholds
+ * ask is how many *pages* the text reached; counting rows would let two copies on one
+ * other page read as a two-page blast.
+ *
+ * Status is deliberately not filtered — a body already marked spam is the one most
+ * worth refusing a second time. `since` is what keeps that from becoming a permanent,
+ * invisible ban on a piece of text: see DUPLICATE_WINDOW_SECONDS.
  */
-export const DUPLICATE_BODY_SQL = `select 1 as hit
+export const DUPLICATE_BODY_SQL = `select
+        max(case when t.page_key =  ?1 then 1 else 0 end) as same_page,
+        count(distinct case when t.page_key <> ?1 then t.page_key end) as other_pages
      from comments c
      join threads t on t.id = c.thread_id
-    where t.page_key = ?1
-      and c.body_hash = ?2
-      and c.created_at >= ?3
-    limit 1`
+    where c.body_hash = ?2
+      and c.created_at >= ?3`
 
-export async function hasDuplicateBodyOnPage(
+export async function readBodyDuplicates(
   db: D1Database,
   pageKey: string,
   bodyHash: string,
   since: number,
-): Promise<boolean> {
+): Promise<BodyDuplicates> {
   const row = await db
     .prepare(DUPLICATE_BODY_SQL)
     .bind(pageKey, bodyHash, since)
-    .first<{ hit: number }>()
-  return row !== null
+    .first<{ same_page: number | null; other_pages: number | null }>()
+  // `max()` over no rows is null, not 0 — a body nobody has posted anywhere.
+  return { samePage: row?.same_page === 1, otherPages: row?.other_pages ?? 0 }
+}
+
+/**
+ * What the owner's past *spam* decisions say about the address a comment arrived from
+ * (#184). The mirror of `CommenterTrust` above, and deliberately a different shape.
+ *
+ * Two booleans, because the two are judged differently: `seen` is the loose match and
+ * earns a review, `sameCommenter` is #173's strict identity and earns a refusal. A
+ * lookup returning only the loose answer would make the strict tier a second query.
+ */
+export interface SpamHistory {
+  /** Some comment the owner marked spam came from this address. */
+  seen: boolean
+  /** One of them also carried this email address — #173's identity, both halves. */
+  sameCommenter: boolean
+}
+
+/**
+ * The repeat-offender lookup, as a constant so the query plan can be asserted against
+ * the statement this project actually sends rather than a copy of it in a test.
+ *
+ * **One row out, whatever the address's history**, the same shape and for the same
+ * reason as COMMENTER_TRUST_SQL: this runs on the public write endpoint, so an
+ * attacker must not be able to inflate the read by commenting. The aggregate is over
+ * `comments_by_spam_origin` entries — (ip_hash, author_email) partial on
+ * `status = 'spam'` — so no comment row is touched and the entries walked are only the
+ * ones the owner explicitly condemned from this one address.
+ *
+ * **`max(...)` over no rows is null, and that is the third answer.** Null means this
+ * address has never been marked spam at all; 0 means it has, but not under this email;
+ * 1 means both halves match. Three states out of one aggregate is what keeps the two
+ * tiers to a single statement.
+ *
+ * **`by_owner = 0` and the partial index's predicate are the same three terms**, so the
+ * seek stays covering. The owner cannot mark their own comment spam from the dashboard,
+ * but a row that could never match should not cost an index entry either.
+ * Enforced by test/worker/spam/query-plan.test.ts and test/worker/db/spam-history.test.ts.
+ */
+export const SPAM_HISTORY_SQL = `select
+        max(case when author_email = ?2 then 1 else 0 end) as same_email
+     from comments
+    where ip_hash = ?1
+      and by_owner = 0
+      and status = 'spam'`
+
+/**
+ * Whether the owner has already marked something spam from this address, and whether
+ * the comment they marked was from this same commenter.
+ *
+ * **The loose half is `ip_hash` alone, and that is the deliberate difference from
+ * `readCommenterTrust`.** #173 requires both halves of the identity because being wrong
+ * there *publishes* a stranger's comment. Here being wrong holds one for review, which
+ * is what `hold-all` — the default on every deployment — does to every comment anyway.
+ * That asymmetry is what buys the looser match, and it is the whole of what buys it:
+ * the price is that an address behind a NAT, or one an ISP has since reassigned, holds
+ * innocent strangers who inherited a spammer's address. They are held, never refused,
+ * and #19's retention sweep nulls `ip_hash` on a window, so the effect expires by
+ * itself rather than needing anyone to notice it.
+ *
+ * **The strict half is exactly #173's identity — this email *and* this address on the
+ * same judged row — and only it earns a refusal.** Forging it needs the victim's email
+ * address and the network they commented from, which is the property migration 0004
+ * exists for; inheriting it by accident means two people behind one NAT who also type
+ * the same email address.
+ *
+ * `authorEmail` may be null, and then `author_email = ?2` is null for every row and the
+ * strict tier can never fire — a comment with no email cannot be more than an address.
+ * Enforced by test/worker/db/spam-history.test.ts.
+ */
+export async function readSpamHistory(
+  db: D1Database,
+  ipHash: string,
+  authorEmail: string | null,
+): Promise<SpamHistory> {
+  const row = await db
+    .prepare(SPAM_HISTORY_SQL)
+    .bind(ipHash, authorEmail)
+    .first<{ same_email: number | null }>()
+  const sameEmail = row?.same_email ?? null
+  return { seen: sameEmail !== null, sameCommenter: sameEmail === 1 }
 }
 
 /**
