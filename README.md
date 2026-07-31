@@ -4,7 +4,13 @@ Self-hosted comments for static sites. Deploys to your own Cloudflare account in
 one click, runs inside the Cloudflare free tier, and requires no account from
 readers in order to comment.
 
-> **Status: early development.** Nothing here is usable yet. The v1 plan is
+> **Status: v1 in progress.** The comment path, the embed, the moderation
+> dashboard, email notifications, the spam layers — including the self-training
+> Workers AI classifier ([#10](https://github.com/withsetu/charcha/issues/10)) and
+> the optional Akismet provider ([#11](https://github.com/withsetu/charcha/issues/11))
+> — and the deploy flow are built and deployed. The Disqus importer
+> ([#15](https://github.com/withsetu/charcha/issues/15)) and the full documentation
+> ([#17](https://github.com/withsetu/charcha/issues/17)) are not. The v1 plan is
 > [issue #1](https://github.com/withsetu/charcha/issues/1).
 
 ## What it is
@@ -30,12 +36,6 @@ readers in order to comment.
 ## Deploying it
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/withsetu/charcha)
-
-> **Nobody has run this yet.** The button, the secrets it collects and the migration
-> step are all built and asserted by `pnpm check`, but a Deploy-to-Cloudflare build
-> runs on Cloudflare's infrastructure against a real account, and no such build has
-> happened. [#16](https://github.com/withsetu/charcha/issues/16) tracks the first
-> one. Until then, treat this section as the intended path rather than a walked one.
 
 Cloudflare clones this repository into your own GitHub or GitLab account, creates
 the D1 database, asks you for the secrets below, builds, and deploys. You end up
@@ -422,9 +422,10 @@ setting — but your site is a different address, so it has to be added.
 ```
 
 That is the whole integration. Replace the example address with your own Worker's — the
-one Cloudflare gave you, the same one you signed in to `/admin` on. `embed.js` is under
-7 KB gzipped, ships no framework and no Markdown parser, and is served as a static asset
-so it costs your deployment nothing against the Cloudflare request budget.
+one Cloudflare gave you, the same one you signed in to `/admin` on. `embed.js` is 8,242
+bytes gzipped against a 10,240-byte budget — `pnpm check:size` measures it and CI fails
+the build over it. It ships no framework and no Markdown parser, and is served as a
+static asset so it costs your deployment nothing against the Cloudflare request budget.
 [Theming](docs/theming.md) covers the attributes, the class names and the three styling
 modes.
 
@@ -474,7 +475,7 @@ the same bindings the deployed Worker gets.
 Set your local secrets in a `.dev.vars` file — it is gitignored, and it is the only
 way to give `wrangler dev` a `CHARCHA_DASHBOARD_PASSWORD` to sign in to the dashboard
 with. Having one does **not** put `pnpm check` into a failing state: both `pnpm types`
-and `pnpm types:check` pass `--env-file /dev/null`, so type generation reads the
+and `pnpm types:check` pass `--env-file scripts/no-secrets.env`, so type generation reads the
 Wrangler config and nothing else. Without that flag, `wrangler types` folds the keys of
 your `.dev.vars` into the generated `Env`, `types:check` reports the committed types as
 stale when nothing about them is, and regenerating writes your own secret names into
@@ -593,9 +594,9 @@ The fix for any of them is to set the build's pnpm version explicitly: in the
 Cloudflare dashboard, **Settings → Build → Build Variables and Secrets**, add
 `PNPM_VERSION` with the version from `packageManager`. That variable is the only
 lever pnpm has there — there is no `.nvmrc` equivalent for it, and build
-configuration in `wrangler.jsonc` is not read. Nobody has deployed Charcha yet
-([#16](https://github.com/withsetu/charcha/issues/16)), so none of this has been
-exercised; it is a contingency written before it is needed rather than after.
+configuration in `wrangler.jsonc` is not read. This particular failure has not been
+hit on a real build; it is a contingency written before it is needed rather than
+after.
 
 ## License
 

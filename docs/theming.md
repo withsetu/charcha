@@ -7,8 +7,6 @@ the appearance as possible.
 > **Status.** Everything on this page is **built**: the class names and HTML structure,
 > the three styling modes, and the custom properties. A test asserts the exact set of
 > class names and the exact list of properties, so a rename cannot happen by accident.
-> Nobody has deployed Charcha to production yet
-> ([#16](https://github.com/withsetu/charcha/issues/16)).
 
 ## Adding Charcha to a page
 
@@ -30,7 +28,8 @@ from there.
 
 `embed.js` is served as a **static asset**, so fetching it costs your deployment nothing
 against the Cloudflare request budget — only the comment read does. It is
-[under 7 KB gzipped](https://github.com/withsetu/charcha/issues/5) and enforced at 10 KB.
+8,242 bytes gzipped against a 10,240-byte budget, measured by
+`scripts/bundle-size.mjs`, which CI runs.
 
 ## Turnstile
 

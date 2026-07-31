@@ -27,11 +27,8 @@ describing software nobody can run.
 
 | Topic | Waiting on |
 |---|---|
-| Installing via the Deploy button, in more depth than the [README](../README.md#deploying-it) covers | [#16](https://github.com/withsetu/charcha/issues/16) — the deploy flow. The button, the secrets it collects and the migration step are built; nobody has run a real deploy yet, so a page written now could not describe what a deployer actually sees |
-| Adding the embed to Astro, Hugo, Eleventy, Jekyll and plain HTML | [#5](https://github.com/withsetu/charcha/issues/5) — the embed script |
 | Tuning the local spam layers — thresholds, windows, and what to change when a real comment gets held | [#66](https://github.com/withsetu/charcha/issues/66) — the settings table. The thresholds are constants in `src/spam/` today, so there is nothing a site owner can configure and a page about it would be a page about editing source. What each optional provider transmits *is* written: see [above](#available-now) |
 | Migrating from Disqus | [#15](https://github.com/withsetu/charcha/issues/15) — the importer |
-| Moderating comments | [#13](https://github.com/withsetu/charcha/issues/13) — the dashboard |
 
 ## What already works, if you are reading the code
 
@@ -58,11 +55,13 @@ than a rule of the software: the dashboard's Setup tab can switch a deployment t
 *trust-returning*, which publishes a comment when its author has had one approved before
 and none marked spam — identified by the email address **and** the hashed IP together, so
 that an unverified address alone confers nothing
-([#173](https://github.com/withsetu/charcha/issues/173)). A spam layer's objection always
-overrules trust, so `202` remains the answer for anything held. The
+([#173](https://github.com/withsetu/charcha/issues/173)) — or to *trust-vouched*, which
+also publishes a comment a connected spam service checked and called clean
+([#189](https://github.com/withsetu/charcha/issues/189)). A spam layer's objection always
+overrules both, so `202` remains the answer for anything held. The
 [README](../README.md#moderation-policy-and-what-already-approved-actually-means) has the
-whole of it. The queue they land in is real; the interface for working through it is
-[#13](https://github.com/withsetu/charcha/issues/13).
+whole of it. The queue they land in is real, and so is the interface for working through
+it: the dashboard at `/admin`.
 
 ## A note on the spam defence, since it shapes the docs above
 
