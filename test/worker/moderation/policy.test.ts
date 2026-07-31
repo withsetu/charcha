@@ -58,14 +58,16 @@ describe('a value that is not a policy', () => {
 })
 
 describe('what is shipped', () => {
-  it('is exactly hold-all and trust-returning', () => {
-    expect([...MODERATION_POLICIES]).toEqual(['hold-all', 'trust-returning'])
+  it('is exactly hold-all, trust-returning and trust-vouched', () => {
+    expect([...MODERATION_POLICIES]).toEqual(['hold-all', 'trust-returning', 'trust-vouched'])
   })
 
-  it('does not include trust-clean', () => {
-    // #173 proposes it and it is deliberately not built — see src/moderation/policy.ts
-    // for the argument, and #189 for where it is tracked. Asserted rather than merely
-    // absent, so that adding it is a decision somebody makes on purpose rather than a
+  it('does not include trust-clean, which trust-vouched is not', () => {
+    // #173 proposes it and it is still deliberately not built — see src/moderation/policy.ts
+    // for the argument. `trust-vouched` (#189) is a strictly narrower signal and does not
+    // retire this: `allow` still publishes nothing under any policy, which is what
+    // test/worker/submit/vouched.test.ts asserts from the other end. Kept as an explicit
+    // assertion so that adding it is a decision somebody makes on purpose rather than a
     // line somebody adds to a list.
     expect(isModerationPolicy('trust-clean')).toBe(false)
     expect(parseModerationPolicy('trust-clean')).toBe('hold-all')

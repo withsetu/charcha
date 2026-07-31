@@ -13,16 +13,32 @@
 import type { ValidatedComment } from './schema'
 
 /**
- * What a spam layer decides about one comment.
+ * What the whole pipeline decides about one comment.
  *
- * Three outcomes, not two, because "I am unsure" and "I am confident this is fine"
- * are different signals even though, on the public endpoint, both currently persist
- * as `pending` — every public comment passes through the moderation queue (the
- * human gate, layer 9), because `insertComment` derives status from `byOwner` alone
- * and this endpoint never sets it. `reject` is the only outcome that stops a write.
+ * Four outcomes, and the two in the middle are the ones worth being careful about:
+ *
+ *   - `reject` — stops the write. The comment is never stored, so neither the owner
+ *     nor the commenter ever sees it again. The only outcome that costs a comment.
+ *   - `review` — stored as `pending`, in the moderation queue, with the reason that
+ *     held it (#70). The human gate, layer 9.
+ *   - `allow` — **nothing objected**, which is not the same as "this is genuine".
+ *     Six of the layers measure the absence of badness, and on a deployment that
+ *     configured nothing most of them did not run at all. This is why `allow` alone
+ *     has never been enough to publish a stranger's comment.
+ *   - `vouch` — a layer that asks a real classifier for a real verdict got a clean
+ *     one, and nothing else objected (#189). The distinction `allow` could not
+ *     express, and the only spam-pipeline outcome the owner may configure into an
+ *     auto-approval. See src/moderation/policy.ts.
+ *
+ * `allow` and `vouch` both persist as `pending` unless the owner's moderation policy
+ * says otherwise; `insertComment` derives status from `byOwner` and that policy, and
+ * this endpoint never sets either directly.
  */
 export type SpamVerdict =
-  { action: 'allow' } | { action: 'review'; reason: string } | { action: 'reject'; reason: string }
+  | { action: 'allow' }
+  | { action: 'vouch'; reason: string }
+  | { action: 'review'; reason: string }
+  | { action: 'reject'; reason: string }
 
 /**
  * Everything a spam layer needs, and nothing it has to re-derive.

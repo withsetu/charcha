@@ -73,7 +73,7 @@ describe('a deployment with nothing switched on', () => {
     mount()
 
     await screen.findByText('Email notifications')
-    expect(screen.getAllByText('Off')).toHaveLength(3)
+    expect(screen.getAllByText('Off')).toHaveLength(4)
     for (const name of SETUP_SECRETS) {
       expect(screen.getAllByText(name).length).toBeGreaterThan(0)
     }
@@ -124,7 +124,7 @@ describe('a deployment with everything switched on', () => {
     mount()
 
     await screen.findByText('Email notifications')
-    expect(screen.getAllByText('On')).toHaveLength(3)
+    expect(screen.getAllByText('On')).toHaveLength(4)
     expect(screen.queryByText('Off')).toBeNull()
     expect(panelText()).not.toContain('wrangler secret put')
     // Including the one item this tab recommends (#174): a recommendation that still
@@ -174,6 +174,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
       'Turnstile bot check',
       'Email notifications',
       'Per-commenter rate limiting',
+      'Third-party spam service',
       'Allowed origins',
     ])
   })
@@ -266,7 +267,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     mount()
 
     await screen.findByText('Dashboard password')
-    expect(screen.getAllByText('Off')).toHaveLength(3)
+    expect(screen.getAllByText('Off')).toHaveLength(4)
     expect(screen.queryByText('On')).toBeNull()
   })
 })
@@ -281,7 +282,7 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     return section
   }
 
-  it('comes first of the optional three, because it is the one being recommended', async () => {
+  it('comes first of the optional four, because it is the one being recommended', async () => {
     answering(() => json(200, report()))
     mount()
 
@@ -293,6 +294,7 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
       'Turnstile bot check',
       'Email notifications',
       'Per-commenter rate limiting',
+      'Third-party spam service',
       'Allowed origins',
     ])
   })
@@ -623,14 +625,15 @@ describe('the moderation policy', () => {
     expect(option(/trust a commenter/i).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('offers exactly the two policies that exist', async () => {
-    // No "publish anything the layers allowed": #173 proposes it and it is deliberately
-    // not shipped (#189). A third radio here would be a decision nobody took.
+  it('offers exactly the three policies that exist', async () => {
+    // Still no "publish anything the layers allowed": #173 proposes `trust-clean` and it
+    // is deliberately not shipped. The third radio is `trust-vouched` (#189), which acts
+    // only on a provider's positive verdict — a fourth would be a decision nobody took.
     stubFetch(policyResponder('hold-all'))
     mount()
 
     await screen.findByText('Moderation policy')
-    expect(screen.getAllByRole('radio')).toHaveLength(2)
+    expect(screen.getAllByRole('radio')).toHaveLength(3)
     expect(policySection().textContent).not.toContain('trust-clean')
   })
 

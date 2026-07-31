@@ -12,7 +12,7 @@
 import type { SpamCheckContext } from '../submit/spam'
 
 export interface VerdictRecord {
-  action: 'review' | 'reject'
+  action: 'review' | 'reject' | 'vouch'
   layer: string
   reason: string
   context: SpamCheckContext

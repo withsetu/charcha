@@ -54,16 +54,21 @@ describe('the layer 8 seam', () => {
   })
 
   it('never returns a reject, whatever a provider answers', async () => {
+    // The layer's oldest promise, and the one #189 must not have weakened: a third
+    // party's probabilistic call about someone else's site can hold a comment for the
+    // owner, and can now speak up for one, but can never destroy one.
     for (const verdict of ['spam', 'blatant-spam', 'ham', 'unknown'] as const) {
       const layer = providerLayer({ provider: stub(verdict), siteUrl })
       const outcome = await layer.run(contextFor())
 
-      expect(outcome?.action ?? 'review').toBe('review')
+      expect(outcome?.action).not.toBe('reject')
     }
   })
 
-  it('abstains on ham and on no answer', async () => {
-    expect(await providerLayer({ provider: stub('ham'), siteUrl }).run(contextFor())).toBeNull()
+  it('abstains on no answer', async () => {
+    // `ham` used to be here too, and its moving out is the whole of #189: a provider
+    // that checked and found nothing wrong now vouches, which is a different statement
+    // from this one. See test/worker/spam/vouch.test.ts.
     expect(await providerLayer({ provider: stub('unknown'), siteUrl }).run(contextFor())).toBeNull()
   })
 

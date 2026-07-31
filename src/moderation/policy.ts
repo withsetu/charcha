@@ -20,19 +20,24 @@
  * misspelt or hand-edited `settings` row lands here too rather than anywhere further
  * down the list. See `parseModerationPolicy`.
  *
- * **`trust-clean` is deliberately not on this list.** #173 proposes it as a third
- * policy — auto-approve whenever no layer objected — and it is not shipped, because
- * `allow` from the spam pipeline means *nothing flagged this*, not *this is genuine*.
- * Six of the seven layers measure the absence of badness and a script written against
- * this form passes all of them (src/spam/index.ts, #184); the one layer that is positive
- * evidence, Turnstile, is off unless the owner configured it. So on the deployment most
- * likely to reach for it, `trust-clean` would publish, unreviewed, everything that merely
- * failed to look wrong. #10's classifier is what turns `allow` into a confidence rather
- * than an absence, and it abstains until it has been trained on both classes — which is
- * the fact that makes this a "later", not a "no". Tracked on #189.
+ * **`trust-clean` is still deliberately not on this list, and `trust-vouched` is not
+ * it under another name.** #173 proposed auto-approving whenever no layer objected,
+ * and that remains unshipped for the reason it was declined: `allow` means *nothing
+ * flagged this*, not *this is genuine*. Six of the layers measure the absence of
+ * badness and a script written against this form passes all of them
+ * (src/spam/index.ts, #184), so on a deployment that configured nothing, `allow` is
+ * mostly the sound of layers not running.
+ *
+ * `trust-vouched` (#189) acts on a strictly narrower signal: a `vouch`, which only a
+ * layer that asked a real classifier for a real verdict can produce, and only from a
+ * positive answer. A provider that is off, that errored or that answered `unknown`
+ * produces `null` and therefore an `allow`, which this policy does not act on — so on
+ * the deployment most likely to reach for it, the one with nothing configured, it
+ * publishes nothing. That self-limiting property is the whole difference, and it is
+ * asserted rather than described: test/worker/submit/vouched.test.ts.
  * Enforced by test/worker/moderation/policy.test.ts.
  */
-export const MODERATION_POLICIES = ['hold-all', 'trust-returning'] as const
+export const MODERATION_POLICIES = ['hold-all', 'trust-returning', 'trust-vouched'] as const
 
 export type ModerationPolicy = (typeof MODERATION_POLICIES)[number]
 
