@@ -162,6 +162,13 @@ Out of v1 — but v1 must not preclude it. See the HTML-not-JSON decision.
   it via the registry, not to invent one.
 - **Deferred scope becomes a labelled issue in the same session.** Never a TODO
   comment.
+- **Commit before you verify, not after.** `pnpm check` takes long enough to be
+  exactly the window in which a shared checkout is pulled out from under you, and
+  **uncommitted work does not merely conflict — it vanishes, with no conflict, no
+  error and no other signal.** The tell is arriving back on `main` with a clean
+  `git status` and no memory of committing. Amend if the check then fails; a
+  commit you have to amend costs nothing, and work you have to redo from memory
+  costs whatever you had not written down yet (#171).
 
 ## Skills
 
@@ -209,7 +216,8 @@ agent-skills one is always the one meant here.
 | Docs, README, or recording a decision | `documentation-and-adrs` — the record goes in the GitHub issue or README, never committed spec files |
 | Cutting a release | `git-workflow-and-versioning` for the version/changelog mechanics, `shipping-and-launch` for launch readiness and rollback |
 | Removing or migrating a feature or API | `deprecation-and-migration` |
-| Running several issues at once | superpowers: `using-git-worktrees`, `subagent-driven-development`, `dispatching-parallel-agents` |
+| **Anything else has a hand on this checkout** — a second session, a subagent, a person — or you are about to hold edits in the tree while a long command runs | superpowers: `using-git-worktrees`, **before the first edit**. Running several issues at once is one instance of this, not the definition — a single-file docs change in a shared checkout needs it just as much (#171) |
+| Running several issues at once | superpowers: `subagent-driven-development`, `dispatching-parallel-agents` |
 
 ### Deliberately not used
 
