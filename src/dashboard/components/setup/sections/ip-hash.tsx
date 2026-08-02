@@ -18,9 +18,11 @@ export function IpHashSection({ set }: { set: boolean }) {
           </>
         ) : (
           <>
-            The per-IP half of rate limiting abstains: one address can comment as often as it likes,
-            bounded only by the per-thread limit, which still runs. Any long random value will do —{' '}
-            <code>openssl rand -hex 32</code>.
+            <code>IP_HASH_SECRET</code> is not set, so the per-IP half of rate limiting abstains:
+            one address can comment as often as it likes, bounded only by the per-thread limit,
+            which still runs. Any long random value will do — <code>openssl rand -hex 32</code> —
+            but it is the only thing standing between the stored hashes and a map of who commented
+            from where, so generate one rather than choosing it.
           </>
         )}{' '}
         <OutboundLink href={DOCS.rateLimit}>What each half of the limit does</OutboundLink>.

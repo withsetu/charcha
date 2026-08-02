@@ -59,10 +59,10 @@ export function DashboardPasswordSection() {
     <Section title="Dashboard password" status={<Badge>Short</Badge>}>
       <p>
         Your <code>CHARCHA_DASHBOARD_PASSWORD</code> is shorter than the{' '}
-        {MIN_DASHBOARD_PASSWORD_LENGTH} characters{' '}
-        <OutboundLink href={NIST_PASSWORD_URL}>NIST states</OutboundLink> for a password used on its
-        own. It is the only credential for this dashboard — no second user, no second factor and no
-        reset — and everything behind it can approve, hide and delete comments on your site.
+        {MIN_DASHBOARD_PASSWORD_LENGTH} characters that{' '}
+        <OutboundLink href={NIST_PASSWORD_URL}>NIST requires</OutboundLink> for a password used on
+        its own. It is the only credential for this dashboard — no second user, no second factor and
+        no reset — and everything behind it can approve, hide and delete comments on your site.
       </p>
       <p>
         <b>Nothing has stopped working and nothing will</b>: a deployment locked out of its own

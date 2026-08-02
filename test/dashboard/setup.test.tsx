@@ -106,6 +106,15 @@ function panelText(): string {
  * sighted owner reads and cutting one would be an accessibility regression rather than a
  * simplification. Everything else counts, including field hints and warning bodies.
  */
+/** One section's own live region, since the tab has three and they must differ. */
+function statusIn(sectionTitle: string): string {
+  const heading = screen
+    .getAllByRole('heading', { level: 2 })
+    .find((candidate) => candidate.textContent === sectionTitle)
+  const status = heading?.closest('section')?.querySelector('[role="status"]')
+  return status?.textContent ?? '(no status region)'
+}
+
 function visibleParagraphs(sectionTitle: string): number {
   // By heading rather than by text: the moderation policy's `IP_HASH_SECRET` warning
   // names another section in bold, so `getByText` finds two elements for it.
@@ -183,6 +192,64 @@ describe('the tab is state, action and link, not a textbook (#216)', () => {
     }
   })
 
+  it('keeps the disclosures on the page rather than behind a link', async () => {
+    // **The two paragraphs #216 was not allowed to distil, and the reason a paragraph
+    // budget cannot be the only test on this tab.** CLAUDE.md's rule for a third-party
+    // provider is that the UI states what is sent and to whom *before* the toggle, so the
+    // state that matters is the one where nothing is connected — a link satisfies the
+    // reader who follows it and nobody else. Card rule 8 makes the same demand of
+    // Turnstile: it is the one feature that puts somebody else's script in a reader's
+    // browser, and it is the only item this tab recommends.
+    answering(() => json(200, report()))
+    mount()
+
+    await screen.findByText('Third-party spam service')
+    const provider = screen.getByText('Third-party spam service').closest('section')?.textContent
+    expect(provider).toContain('email address and their IP address to Automattic')
+    expect(provider).toContain('a disclosure you would then owe your readers')
+
+    const turnstile = screen.getByText('Turnstile bot check').closest('section')?.textContent
+    expect(turnstile).toContain('challenges.cloudflare.com')
+    // The no-reader-side-cookies promise, stated where an owner is being recommended the
+    // one Cloudflare setting that would break it.
+    expect(turnstile).toContain('stores nothing in a reader’s browser')
+    expect(turnstile).toContain('pre-clearance')
+  })
+
+  it('names the form in every save announcement, not just the one with no button', async () => {
+    // **Three live regions on one scrolling tab, and a screen-reader user has to be able to
+    // tell which one landed.** `useSettingsSave` takes the name as a required parameter so a
+    // fourth caller cannot quietly go back to a bare "Saved." — but a required parameter
+    // only forces *a* string, so the two forms the moderation fix did not prompt are the
+    // ones asserted here. Their announcements are driven for real rather than read off the
+    // source.
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ RESEND_API_KEY: true }))
+      if (call.method === 'GET') return json(200, settingsBody())
+      return json(200, settingsBody({ notifyTo: 'maya@maya.build', siteUrl: 'https://maya.build' }))
+    })
+    mount()
+
+    await screen.findByText('Email notifications')
+    fireEvent.change(screen.getByLabelText('Send notifications to'), {
+      target: { value: 'maya@maya.build' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }))
+    await waitFor(() => {
+      expect(statusIn('Email notifications')).toBe('Notification settings saved.')
+    })
+
+    fireEvent.change(screen.getByLabelText('Home page address'), {
+      target: { value: 'https://maya.build' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save site address' }))
+    await waitFor(() => {
+      expect(statusIn('Your site’s address')).toBe('Site address saved.')
+    })
+    // And the two are distinguishable, which is the property the parameter exists for.
+    expect(statusIn('Email notifications')).not.toBe(statusIn('Your site’s address'))
+  })
+
   it('sends the explanation to the docs rather than deleting it', async () => {
     // The other half of the cut: every section that lost prose keeps a way to the page
     // that now carries it. A link per section, not one link at the bottom of the tab.
@@ -249,7 +316,9 @@ describe('a deployment with nothing switched on', () => {
     for (const route of routes) {
       expect(route.getAttribute('href')).toBe('https://charcha.dev/secrets/')
     }
-    // Ahead of the command it is an alternative to, in every block that has one.
+    // Ahead of the command it is an alternative to. One comparison over the whole panel
+    // rather than per block, because `HowToSet` is the only thing that renders either
+    // string and it emits them in this order structurally.
     const text = panelText()
     expect(text.indexOf('Variables and Secrets')).toBeLessThan(text.indexOf('wrangler secret put'))
   })
@@ -854,7 +923,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     // And who says so, cited in the place the claim is made. The argument that a length
     // check is only a length check moved to charcha.dev with #216; the number's source
     // did not, because a floor asserted without one invites "says who".
-    expect(screen.getByRole('link', { name: /NIST states/ }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: /NIST requires/ }).getAttribute('href')).toBe(
       'https://pages.nist.gov/800-63-4/sp800-63b.html',
     )
   })

@@ -74,12 +74,20 @@ export function EmailSection({
 
   return (
     <Section title="Email notifications" status={on === null ? null : on ? <On /> : <Off />}>
+      {/*
+        No claim at all until the settings read lands, for the reason the badge above gives:
+        "nothing is emailed" and "partly set up" are both statements about rows this tab has
+        not read yet, and on a failed read the first one is indistinguishable from the truth.
+        `NotifyFields` renders the failure itself, immediately below.
+      */}
       <p>
-        {on === true
-          ? 'A short email to your inbox as comments arrive, rate-limited so a busy morning cannot spend a day’s sending allowance. The queue is the record either way.'
-          : missing.length === EMAIL_SECRETS.length && !hasFrom && !hasTo
-            ? 'Nothing is emailed when a comment arrives. New comments still reach the queue, which is the only place they show up.'
-            : 'Partly set up, so nothing is sent. The key and both addresses are needed together — a key with no recipient has nowhere to send.'}{' '}
+        {on === null
+          ? 'Reading what this deployment has stored.'
+          : on
+            ? 'A short email to your inbox as comments arrive, rate-limited so a busy morning cannot spend a day’s sending allowance. It is a prompt to come and look; the queue is the record.'
+            : missing.length === EMAIL_SECRETS.length && !hasFrom && !hasTo
+              ? 'Nothing is emailed when a comment arrives. New comments still reach the queue, which is the only place they show up.'
+              : 'Partly set up, so nothing is sent. The key and both addresses are needed together — a key with no recipient has nowhere to send.'}{' '}
         <OutboundLink href={DOCS.notifications}>How the emails work</OutboundLink>.
       </p>
 

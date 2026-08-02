@@ -188,8 +188,9 @@ export function Recommended() {
  * project.
  *
  * **The click path used to be spelled out here, and #216 is why it is a link now.** This
- * block renders in up to four sections at once, so the same six-step route was on the
- * page four times over — the single largest piece of repetition #216 counted. It is
+ * block renders in up to five sections at once — a short password and nothing configured
+ * puts it under every one of them — so the same six-step route was on the page five times
+ * over, the single largest piece of repetition #216 counted. It is
  * named first and linked rather than demoted: charcha.dev's page has the same route with
  * screenshots' worth of detail, and one click is not a terminal.
  * Enforced by test/dashboard/setup.test.tsx.
@@ -324,7 +325,7 @@ export function OutboundLink({ href, children }: { href: string; children: React
 }
 
 /**
- * A settings save, as one hook, because four controls on this tab now make one.
+ * A settings save, as one hook, because three controls on this tab now make one.
  *
  * **The `catch` is not defensive padding.** src/dashboard/api.ts is documented never to
  * reject, so reaching it is a bug in the callback — and a Save button that spun, stopped,
@@ -337,17 +338,19 @@ export function OutboundLink({ href, children }: { href: string; children: React
  * trimmed and a site URL comes back canonicalised, which is the feedback that teaches the
  * rule (the same argument site-settings.tsx makes for the allowlist).
  *
- * **`what` names the form in the announcement, and it is a parameter rather than a
- * constant because there are three of these on one scrolling tab.** A screen-reader user
- * hearing an unattributed "Saved." has no way to tell which of them landed — and the
- * moderation policy is the worst case, because it is the one control here that saves on a
- * radio with no button of its own for the announcement to be anchored to.
- * Enforced by test/dashboard/setup.test.tsx.
+ * **`what` names the form in the announcement, and it is required rather than defaulted
+ * because there are three of these on one scrolling tab.** A screen-reader user hearing an
+ * unattributed "Saved." has no way to tell which of them landed — and the moderation policy
+ * is the worst case, because it is the one control here that saves on a radio with no
+ * button of its own for the announcement to be anchored to. A default would have been a
+ * fourth caller's silent way back to the unattributed sentence; making it a parameter every
+ * call site has to answer puts that in the type rather than in this paragraph.
+ * All three sentences are asserted in test/dashboard/setup.test.tsx.
  */
 export function useSettingsSave(
   onExpired: () => void,
   onSaved: (settings: Settings) => void,
-  what = 'Settings',
+  what: string,
 ) {
   const [busy, setBusy] = React.useState(false)
   const [failure, setFailure] = React.useState<ApiFailure | null>(null)

@@ -73,8 +73,10 @@ export function TurnstileSection({ set }: { set: boolean }) {
           judges a comment measures the absence of something wrong, and a script written for this
           form passes all of them. Rate limiting bounds how many arrive, not whether any one of them
           is real. It is free and unmetered on the Cloudflare account you already have, and it is
-          also the one thing Charcha can put a third party into a reader’s browser — Cloudflare’s
-          widget, in an iframe on <code>challenges.cloudflare.com</code>.{' '}
+          also the only way Charcha puts a third party into a reader’s browser — Cloudflare’s
+          widget, in an iframe on <code>challenges.cloudflare.com</code>. Charcha itself still
+          stores nothing in a reader’s browser; Turnstile’s <i>pre-clearance</i> setting is the one
+          that would, and it is off unless you switch it on yourself.{' '}
           <OutboundLink href={DOCS.turnstile}>What it does, before you switch it on</OutboundLink>.
         </p>
       )}
@@ -96,7 +98,8 @@ export function TurnstileSection({ set }: { set: boolean }) {
         <code>data-turnstile-sitekey</code>, and the secret key goes on this Worker. Charcha cannot
         see your pages, so set both or neither — a secret key with no sitekey holds every comment
         for review, marked <code>turnstile: no-token-unverified-deployment</code>, while a sitekey
-        with no secret key is the harmless direction.
+        with no secret key is the harmless direction.{' '}
+        <OutboundLink href={DOCS.turnstile}>Where each key goes</OutboundLink>.
       </p>
       {!set && (
         <>

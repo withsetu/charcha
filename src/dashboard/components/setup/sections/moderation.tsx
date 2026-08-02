@@ -81,8 +81,8 @@ const POLICY_CHOICES: readonly {
  * no address hash is stored, so half the identity does not exist and `trust-returning`
  * trusts nobody — a setting that reads as on and does nothing at all. It renders only
  * when the secret report says the secret is missing; when that report could not be read
- * the tab is already showing its own failure alert above, so nothing here is quietly
- * absent.
+ * the tab is showing its own failure alert further down the page, so nothing here is
+ * quietly absent.
  *
  * **Ten paragraphs became four, and one of them is the radio descriptions (#216).** The
  * save is `useSettingsSave` now rather than a second copy of it: this section had grown
@@ -157,7 +157,15 @@ export function ModerationSection({
       <p>
         What happens to a comment none of the spam layers objected to. Everything they <i>do</i>{' '}
         object to is held for you whatever is chosen here.{' '}
-        <OutboundLink href={DOCS.policy}>What each one publishes</OutboundLink>.
+        {/* The link text has to promise the caveats as well as the choice: the page it
+            lands on carries what each policy publishes *and* the two facts the middle
+            option's description states without room to explain — how long trust lasts,
+            and that a shared connection can pass it around. Naming only the choice would
+            be the near-miss a reader blames themselves for. */}
+        <OutboundLink href={DOCS.policy}>
+          What each one publishes, and how long trust lasts
+        </OutboundLink>
+        .
       </p>
 
       <RadioGroup

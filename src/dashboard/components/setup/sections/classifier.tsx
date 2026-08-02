@@ -180,19 +180,30 @@ function Why() {
   return <OutboundLink href={DOCS.classifier}>How it learns, and what it costs</OutboundLink>
 }
 
+/**
+ * Working, and the state where the date is easiest to mis-attribute.
+ *
+ * **`updatedAt` is when *training* last succeeded, not when the owner last moderated**
+ * (`spam_model.updated_at`, src/db/index.ts), and the copy has to keep those apart. An
+ * earlier draft read "you have approved 41 and marked 38 as spam, most recently 3 days
+ * ago", which attributes the date to the owner's own activity — and on the exact failure
+ * this line exists to catch, training failing while moderating continues, that sentence
+ * becomes false about the reader's own behaviour: it tells somebody who approved a comment
+ * this morning that their last decision was three days ago. The next sentence then asks
+ * them to notice the date has stopped, which the one before it has just explained away.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
 function Trained({ report }: { report: ClassifierStatus }) {
   return (
     <p>
-      It is judging comments, and it learned how from you: you have {decisionsSoFar(report)}
-      {report.updatedAt !== null && (
-        <>
-          , most recently <LastLearned at={report.updatedAt} />
-        </>
-      )}
-      . <b>Holding is the most it can ever do</b> — it can never refuse a comment, and one it holds
+      It is judging comments, and it learned how from you: you have {decisionsSoFar(report)}.{' '}
+      <b>Holding is the most it can ever do</b> — it can never refuse a comment, and one it holds
       carries <code>{HELD_REASON}</code> beside it in the queue.{' '}
       {report.updatedAt !== null && (
-        <>If that date stops moving while you are still moderating, training has stopped. </>
+        <>
+          It last learned something <LastLearned at={report.updatedAt} />, and if that stops moving
+          while you are still moderating, training has stopped.{' '}
+        </>
       )}
       <Why />.
     </p>
