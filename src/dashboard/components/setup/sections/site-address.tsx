@@ -1,11 +1,19 @@
 import * as React from 'react'
-import { TriangleAlertIcon } from 'lucide-react'
 
 import type { Settings } from '../../../api'
 import { servedBySecret, writeSiteUrl } from '../../../api'
-import { Alert, AlertDescription, AlertTitle } from '../../../ui/alert'
 import { Skeleton } from '../../../ui/skeleton'
-import { Field, type Load, ReadFailed, SaveRow, Section, useSettingsSave } from '../primitives'
+import {
+  DOCS,
+  Field,
+  type Load,
+  OutboundLink,
+  ReadFailed,
+  SaveRow,
+  Section,
+  ServedBySecret,
+  useSettingsSave,
+} from '../primitives'
 
 /**
  * The site's own address (#207) — the setting that used to be `CHARCHA_SITE_URL`.
@@ -49,21 +57,11 @@ export function SiteAddressSection({
           <p>
             The home page of the site this deployment takes comments for. Nothing can work it out:
             this Worker’s own address is a <code>workers.dev</code> URL rather than your site, and
-            the address a comment reports is chosen by whoever posted it.
+            the address a comment reports is chosen by whoever posted it.{' '}
+            <OutboundLink href={DOCS.siteAddress}>What reads it</OutboundLink>.
           </p>
           {load.value.fromDeprecatedSecrets.includes('site_url') && (
-            <Alert>
-              <TriangleAlertIcon />
-              <AlertTitle>This is still coming from a secret you set with wrangler</AlertTitle>
-              <AlertDescription>
-                <p>
-                  It keeps working. The field below is empty because nothing has been saved here yet
-                  — Charcha will not show you a value out of a secret. Save it here, and you can
-                  then remove <code>CHARCHA_SITE_URL</code> with <code>wrangler secret delete</code>
-                  .
-                </p>
-              </AlertDescription>
-            </Alert>
+            <ServedBySecret names={['CHARCHA_SITE_URL']} />
           )}
           <form
             className="space-y-4"
@@ -90,9 +88,7 @@ export function SiteAddressSection({
               hint={
                 <>
                   Include the scheme — <code>https://example.com</code>, or{' '}
-                  <code>https://you.github.io/blog</code> if your site lives at a path. A
-                  third-party spam service needs it to identify your site, and it is the base for
-                  the link to a commented page.
+                  <code>https://you.github.io/blog</code> if your site lives at a path.
                 </>
               }
             />

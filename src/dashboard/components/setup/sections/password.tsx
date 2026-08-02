@@ -1,4 +1,4 @@
-import { HowToSet, OutboundLink, Section } from '../primitives'
+import { DOCS, HowToSet, OutboundLink, Section } from '../primitives'
 import { Badge } from '../../../ui/badge'
 
 /**
@@ -47,40 +47,31 @@ const MIN_DASHBOARD_PASSWORD_LENGTH = 15
  * and the copy does not invent one either: no "your 4-character password", no meter.
  * What it does disclose is the floor, to a reader who has already proved they hold the
  * password.
+ *
+ * Five paragraphs became two (#216). The floor's citation and the sign-out consequence
+ * both stayed, because a warning that leaves either out is a worse warning; what went is
+ * the reasoning about why a length check is only a length check, which charcha.dev now
+ * carries.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function DashboardPasswordSection() {
   return (
     <Section title="Dashboard password" status={<Badge>Short</Badge>}>
       <p>
-        Your <code>CHARCHA_DASHBOARD_PASSWORD</code> is shorter than {MIN_DASHBOARD_PASSWORD_LENGTH}{' '}
-        characters. It is the only credential for this dashboard — no second user, no second factor
-        and no reset — and everything behind it can approve, hide and delete comments on your site.
+        Your <code>CHARCHA_DASHBOARD_PASSWORD</code> is shorter than the{' '}
+        {MIN_DASHBOARD_PASSWORD_LENGTH} characters{' '}
+        <OutboundLink href={NIST_PASSWORD_URL}>NIST states</OutboundLink> for a password used on its
+        own. It is the only credential for this dashboard — no second user, no second factor and no
+        reset — and everything behind it can approve, hide and delete comments on your site.
       </p>
       <p>
-        <b>Nothing has stopped working and nothing will.</b> The password you have keeps working,
-        today and after any update: a deployment locked out of its own dashboard would have no way
-        back in, so Charcha will not do that to you. This screen is the only place that says
-        anything about it at all.
-      </p>
-      <p>
-        The minimum <OutboundLink href={NIST_PASSWORD_URL}>NIST states</OutboundLink> for a password
-        used on its own, without a second factor, is {MIN_DASHBOARD_PASSWORD_LENGTH} characters. It
-        is a length check and only a length check: a long password that has been in a breach
-        somewhere is no safer, and nothing here has looked. Generating a new one is what settles
-        both.
+        <b>Nothing has stopped working and nothing will</b>: a deployment locked out of its own
+        dashboard would have no way back in. Replace it with a generated value —{' '}
+        <code>openssl rand -base64 24</code> — kept in a password manager, and expect that to{' '}
+        <b>sign out every open session, including this one</b>.{' '}
+        <OutboundLink href={DOCS.password}>Why there is no reset</OutboundLink>.
       </p>
       <HowToSet names={['CHARCHA_DASHBOARD_PASSWORD']} verb="Replace" />
-      <p>
-        Use a generated value — <code>openssl rand -base64 24</code> — and keep it in a password
-        manager. It is typed once and never from memory, so there is nothing to gain from a
-        memorable one.
-      </p>
-      <p>
-        Replacing it <b>signs out every open session, including this one</b>, because sessions are
-        signed with a key derived from the password rather than stored. That is worth expecting
-        rather than discovering: it is also the only way to sign out a session you no longer trust.
-      </p>
     </Section>
   )
 }

@@ -77,8 +77,33 @@ export function useLoad<T>(
   return state
 }
 
-/** Where the long form of every instruction below lives. */
-export const README_URL = 'https://github.com/withsetu/charcha#turning-on-the-optional-features'
+/**
+ * Where the long form of every explanation on this tab lives (#216).
+ *
+ * **This tab used to carry the explanations itself, and that is what #216 measured: 62
+ * paragraphs to configure a comment system.** Each section now states what this
+ * deployment's answer is, offers the one thing to do about it, and links here for why.
+ * Nothing was deleted — every cut paragraph is on the page it points at, at length, for
+ * a reader who chose to be reading rather than one who came to change a setting.
+ *
+ * Deep links rather than one docs root, because a section that sends an owner to the
+ * front page has not saved them the search. The anchors are Starlight's slugs for the
+ * headings in charcha.dev's `src/content/docs`; they are a separate repository, so
+ * nothing here can typecheck them, and a section's link is asserted present rather than
+ * resolvable by test/dashboard/setup.test.tsx.
+ */
+export const DOCS = {
+  classifier: 'https://charcha.dev/spam/#7-the-classifier',
+  notifications: 'https://charcha.dev/notifications/',
+  origins: 'https://charcha.dev/getting-started/#tell-it-your-site-is-allowed',
+  password: 'https://charcha.dev/moderation/#signing-in',
+  policy: 'https://charcha.dev/moderation/#who-gets-published-without-you',
+  rateLimit: 'https://charcha.dev/spam/#4-rate-limit',
+  secrets: 'https://charcha.dev/secrets/',
+  siteAddress: 'https://charcha.dev/spam-providers/#turning-it-on',
+  spamProviders: 'https://charcha.dev/spam-providers/',
+  turnstile: 'https://charcha.dev/spam/#turnstile-is-two-keys-in-two-places',
+} as const
 
 /**
  * A name this tab can print a `wrangler secret put` line for.
@@ -155,12 +180,19 @@ export function Recommended() {
 }
 
 /**
- * The exact command, and the exact route for somebody who has no terminal.
+ * The exact command, and the route for somebody who has no terminal.
  *
  * Both, always, and that is the point rather than thoroughness: the person most likely
  * to be reading this clicked a Deploy button, so they have no checkout, no wrangler and
  * no API token — which is how #57 stayed unfixable for its author, who owns this
  * project.
+ *
+ * **The click path used to be spelled out here, and #216 is why it is a link now.** This
+ * block renders in up to four sections at once, so the same six-step route was on the
+ * page four times over — the single largest piece of repetition #216 counted. It is
+ * named first and linked rather than demoted: charcha.dev's page has the same route with
+ * screenshots' worth of detail, and one click is not a terminal.
+ * Enforced by test/dashboard/setup.test.tsx.
  */
 export function HowToSet({
   names,
@@ -172,7 +204,9 @@ export function HowToSet({
   return (
     <div className="space-y-2">
       <p>
-        {verb} {names.length === 1 ? 'it' : 'them'} from a checkout of your deployed repository:
+        {verb} {names.length === 1 ? 'it' : 'them'} from the Cloudflare dashboard —{' '}
+        <OutboundLink href={DOCS.secrets}>Variables and Secrets, in six clicks</OutboundLink> — or
+        from a checkout:
       </p>
       {/*
         `tabIndex` so the block can be scrolled without a mouse when a narrow window
@@ -195,13 +229,42 @@ export function HowToSet({
       >
         <code>{names.map((name) => `pnpm wrangler secret put ${name}`).join('\n')}</code>
       </pre>
-      <p>
-        Without a checkout, the Cloudflare dashboard sets the same names: <b>Workers &amp; Pages</b>{' '}
-        → your Worker → <b>Settings</b> → <b>Variables and Secrets</b> → <b>Add</b>, with the type
-        set to <b>Secret</b>, then <b>Deploy</b>. Either way it takes effect on the next request;
-        there is nothing to redeploy here.
-      </p>
     </div>
+  )
+}
+
+/**
+ * The #207 migration notice, once rather than in both sections that need it.
+ *
+ * The email addresses and the site address stopped being secrets and became settings, and
+ * a deployment still running on the old secrets has an empty field on this tab with a
+ * working value behind it. Two copies of that paragraph were two chances to word the same
+ * migration differently, on the screen that announces it.
+ */
+export function ServedBySecret({ names }: { names: readonly string[] }) {
+  const one = names.length === 1
+  return (
+    <Alert>
+      <TriangleAlertIcon />
+      <AlertTitle>
+        {one ? 'This is' : 'These are'} still coming from {one ? 'a secret' : 'secrets'} you set
+        with wrangler
+      </AlertTitle>
+      <AlertDescription>
+        <p>
+          {one ? 'It keeps' : 'They keep'} working. The {one ? 'field' : 'fields'} below{' '}
+          {one ? 'is' : 'are'} empty because Charcha will not show you a value out of a secret. Save{' '}
+          {one ? 'it' : 'them'} here and you can then remove{' '}
+          {names.map((name, index) => (
+            <React.Fragment key={name}>
+              {index > 0 && (index === names.length - 1 ? ' and ' : ', ')}
+              <code>{name}</code>
+            </React.Fragment>
+          ))}{' '}
+          with <code>wrangler secret delete</code>.
+        </p>
+      </AlertDescription>
+    </Alert>
   )
 }
 

@@ -3,7 +3,7 @@ import { GlobeIcon } from 'lucide-react'
 import type { Settings } from '../../../api'
 import { Button } from '../../../ui/button'
 import { Skeleton } from '../../../ui/skeleton'
-import { type Load, ReadFailed, Section } from '../primitives'
+import { DOCS, type Load, OutboundLink, ReadFailed, Section } from '../primitives'
 
 /**
  * The allowlist — the one item here that lives in the database rather than on `env`, and
@@ -14,6 +14,11 @@ import { type Load, ReadFailed, Section } from '../primitives'
  * badge: an empty list is a working default, not a feature that is switched off — a
  * fresh deployment accepts comments from its own address without anything being stored
  * (#57).
+ *
+ * **Two paragraphs, whether the list is empty or not (#216).** What this deployment's own
+ * address is doing there used to be said twice, once per branch, and the paragraph
+ * separating this list from Turnstile's hostname list is on charcha.dev now. What is left
+ * is the rule, this deployment's answer, and the button.
  */
 export function OriginsSection({ load, onEdit }: { load: Load<Settings>; onEdit: () => void }) {
   return (
@@ -29,40 +34,29 @@ export function OriginsSection({ load, onEdit }: { load: Load<Settings>; onEdit:
           <p>
             A page on any of these addresses may post comments to this deployment; a page anywhere
             else is refused. That is a browser rule, so what it stops is another site’s page posting
-            from a reader’s browser. It is not what stops a script — that is the spam layers and
-            this queue.
+            from a reader’s browser — not a script, which is what the spam layers and this queue are
+            for. <OutboundLink href={DOCS.origins}>Adding your site</OutboundLink>.
           </p>
-          {load.value.allowedOrigins.length === 0 ? (
-            <p>
-              No addresses listed yet.{' '}
-              {load.value.selfOrigin !== '' && (
-                <>
-                  This deployment’s own address, <code>{load.value.selfOrigin}</code>, is always
-                  allowed without being listed — but your site is a different address, so it has to
-                  be added before a page there can comment.
-                </>
-              )}
-            </p>
-          ) : (
-            <>
-              <ul className="space-y-1">
-                {load.value.allowedOrigins.map((origin) => (
-                  <li key={origin}>
-                    <code className="text-foreground">{origin}</code>
-                  </li>
-                ))}
-              </ul>
-              {load.value.selfOrigin !== '' && (
-                <p>
-                  This deployment’s own address, <code>{load.value.selfOrigin}</code>, is allowed as
-                  well, without being listed.
-                </p>
-              )}
-            </>
+          {load.value.allowedOrigins.length > 0 && (
+            <ul className="space-y-1">
+              {load.value.allowedOrigins.map((origin) => (
+                <li key={origin}>
+                  <code className="text-foreground">{origin}</code>
+                </li>
+              ))}
+            </ul>
           )}
           <p>
-            This is a Charcha setting. It is not Turnstile’s hostname list, which governs where the
-            widget may render and does nothing here.
+            {load.value.allowedOrigins.length === 0 && 'No addresses listed yet. '}
+            {load.value.selfOrigin !== '' && (
+              <>
+                This deployment’s own address, <code>{load.value.selfOrigin}</code>, is always
+                allowed without being listed
+                {load.value.allowedOrigins.length === 0 &&
+                  ' — but your site is a different address, so it has to be added before a page there can comment'}
+                .
+              </>
+            )}
           </p>
           <Button variant="outline" size="sm" onClick={onEdit}>
             <GlobeIcon aria-hidden="true" />

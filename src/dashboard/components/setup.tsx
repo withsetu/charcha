@@ -42,14 +42,7 @@ import * as React from 'react'
 
 import type { Settings } from '../api'
 import { readSettings, readSetup } from '../api'
-import {
-  type Load,
-  OutboundLink,
-  README_URL,
-  ReadFailed,
-  SectionSkeleton,
-  useLoad,
-} from './setup/primitives'
+import { type Load, ReadFailed, SectionSkeleton, useLoad } from './setup/primitives'
 import { ClassifierSection } from './setup/sections/classifier'
 import { EmailSection } from './setup/sections/email'
 import { IpHashSection } from './setup/sections/ip-hash'
@@ -109,11 +102,8 @@ export function Setup({
           the tests use to assert how many features are switched off.
         */}
         What this deployment has been given, and what it has not. Everything below carrying an On or
-        Off badge is optional — a Charcha that takes comments and holds them for you needs none of
-        it. The parts that are <em>credentials</em> cannot be set from this screen, because a Worker
-        cannot write its own secrets; everything else — the moderation policy, your notification
-        addresses, your site’s address and the allowed origins — is a setting, and settings are
-        edited here.
+        Off badge is optional. The parts that are <em>credentials</em> cannot be set from this
+        screen, because a Worker cannot write its own secrets; every setting is edited here.
       </p>
 
       {/*
@@ -135,7 +125,12 @@ export function Setup({
         this tab reachable rather than taking it down with the five sections that do
         depend on it.
       */}
-      <ModerationSection load={settings} secrets={secrets} onExpired={onExpired} />
+      <ModerationSection
+        load={settings}
+        secrets={secrets}
+        onExpired={onExpired}
+        onSaved={setSaved}
+      />
 
       {secrets.kind === 'loading' && (
         <>
@@ -205,11 +200,12 @@ export function Setup({
       */}
       <SiteAddressSection load={settings} onExpired={onExpired} onSaved={setSaved} />
       <OriginsSection load={settings} onEdit={onEditOrigins} />
-
-      <p className="text-sm text-muted-foreground">
-        The longer version of all of this is in the README, under{' '}
-        <OutboundLink href={README_URL}>Turning on the optional features</OutboundLink>.
-      </p>
+      {/*
+        No "the longer version is in the README" line at the foot any more (#216). Every
+        section links to the page that carries its own long version, which is a link a
+        reader follows from where the question occurred to them rather than one they scroll
+        past on the way out.
+      */}
     </div>
   )
 }
