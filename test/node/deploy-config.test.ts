@@ -646,7 +646,7 @@ declare global {
     expect(names).toHaveLength(2)
   })
 
-  it('names every secret this repository still reads only as a deprecated fallback', async () => {
+  it('names every secret this repository still reads only as a deprecated fallback', () => {
     // The list is the decision, and this is what makes changing it deliberate. #207 moved
     // three values into `settings` rows and left the secrets readable so an existing
     // deployment does not lose its notifications on the day it updates; #209 empties this.
