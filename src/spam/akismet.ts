@@ -110,15 +110,25 @@ export function akismetProvider(config: AkismetConfig): SpamProvider | null {
   if (!hasKey && !hasSite) return null
 
   if (!hasSite) {
-    announce('akismet:no-site-url', false, 'AKISMET_API_KEY is set but the site_url setting is not', {
-      fix: 'set your site’s address under Setup in your Charcha dashboard, or unset AKISMET_API_KEY to leave layer 8 off',
-    })
+    announce(
+      'akismet:no-site-url',
+      false,
+      'AKISMET_API_KEY is set but the site_url setting is not',
+      {
+        fix: 'set your site’s address under Setup in your Charcha dashboard, or unset AKISMET_API_KEY to leave layer 8 off',
+      },
+    )
     return null
   }
   if (!hasKey) {
-    announce('akismet:no-api-key', false, 'the site_url setting is set but AKISMET_API_KEY is not', {
-      fix: 'set AKISMET_API_KEY, or leave layer 8 off — every other spam layer runs without it',
-    })
+    announce(
+      'akismet:no-api-key',
+      false,
+      'the site_url setting is set but AKISMET_API_KEY is not',
+      {
+        fix: 'set AKISMET_API_KEY, or leave layer 8 off — every other spam layer runs without it',
+      },
+    )
     return null
   }
 

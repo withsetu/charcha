@@ -122,10 +122,7 @@ describe('a deployment with everything switched on', () => {
       // Configured includes the settings now, not only the secrets: email notifications
       // are the key *and* two addresses, and two of the three are rows since #207.
       () =>
-        json(
-          200,
-          settingsBody({ notifyFrom: 'comments@maya.build', notifyTo: 'maya@maya.build' }),
-        ),
+        json(200, settingsBody({ notifyFrom: 'comments@maya.build', notifyTo: 'maya@maya.build' })),
     )
     mount()
 
@@ -161,10 +158,7 @@ describe('email notifications, which are a key and two addresses or nothing (#20
     answering(
       () => json(200, report()),
       () =>
-        json(
-          200,
-          settingsBody({ notifyFrom: 'comments@maya.build', notifyTo: 'maya@maya.build' }),
-        ),
+        json(200, settingsBody({ notifyFrom: 'comments@maya.build', notifyTo: 'maya@maya.build' })),
     )
     mount()
 
@@ -190,15 +184,9 @@ describe('email notifications, which are a key and two addresses or nothing (#20
     mount()
 
     await screen.findByText('Email notifications')
-    expect((screen.getByLabelText('Send notifications to') as HTMLInputElement).value).toBe(
-      'maya@maya.build',
-    )
-    expect((screen.getByLabelText('Send them from') as HTMLInputElement).value).toBe(
-      'comments@maya.build',
-    )
-    expect((screen.getByLabelText('Sender name (optional)') as HTMLInputElement).value).toBe(
-      'maya.build comments',
-    )
+    expect(screen.getByLabelText('Send notifications to').value).toBe('maya@maya.build')
+    expect(screen.getByLabelText('Send them from').value).toBe('comments@maya.build')
+    expect(screen.getByLabelText('Sender name (optional)').value).toBe('maya.build comments')
   })
 
   it('sends the three settings when the form is saved, and shows the server’s answer back', async () => {
@@ -243,9 +231,7 @@ describe('email notifications, which are a key and two addresses or nothing (#20
       })
     })
     await waitFor(() => {
-      expect((screen.getByLabelText('Sender name (optional)') as HTMLInputElement).value).toBe(
-        'Charcha',
-      )
+      expect(screen.getByLabelText('Sender name (optional)').value).toBe('Charcha')
     })
     expect(stub.paths()).toContain('/admin/api/settings')
   })
@@ -287,14 +273,13 @@ describe('email notifications, which are a key and two addresses or nothing (#20
     // that reading as "your notifications are unconfigured".
     answering(
       () => json(200, report({ RESEND_API_KEY: true })),
-      () =>
-        json(200, settingsBody({ fromDeprecatedSecrets: ['notify_from', 'notify_to'] })),
+      () => json(200, settingsBody({ fromDeprecatedSecrets: ['notify_from', 'notify_to'] })),
     )
     mount()
 
     await screen.findByText('Email notifications')
     expect(panelText()).toContain('still coming from secrets you set with wrangler')
-    expect((screen.getByLabelText('Send notifications to') as HTMLInputElement).value).toBe('')
+    expect(screen.getByLabelText('Send notifications to').value).toBe('')
     // And it is reported as on, because it genuinely is.
     expect(panelText()).not.toContain('Partly set up')
   })
@@ -309,9 +294,7 @@ describe('your site’s address, which used to be a secret (#207)', () => {
     mount()
 
     await screen.findByText('Your site’s address')
-    expect((screen.getByLabelText('Home page address') as HTMLInputElement).value).toBe(
-      'https://maya.build',
-    )
+    expect(screen.getByLabelText('Home page address').value).toBe('https://maya.build')
     expect(panelText()).not.toContain('wrangler secret put CHARCHA_SITE_URL')
   })
 
@@ -337,9 +320,7 @@ describe('your site’s address, which used to be a secret (#207)', () => {
     // The canonical form the server stored, not the spelling that was typed — the same
     // feedback the allowlist gives.
     await waitFor(() => {
-      expect((screen.getByLabelText('Home page address') as HTMLInputElement).value).toBe(
-        'https://maya.build',
-      )
+      expect(screen.getByLabelText('Home page address').value).toBe('https://maya.build')
     })
   })
 
@@ -631,7 +612,10 @@ describe('the allowed origins, which are the one thing here that is editable', (
     answering(
       () => json(200, report()),
       () =>
-        json(200, settingsBody({ allowedOrigins: ['https://maya.build'], selfOrigin: 'https://c.example' })),
+        json(
+          200,
+          settingsBody({ allowedOrigins: ['https://maya.build'], selfOrigin: 'https://c.example' }),
+        ),
     )
     mount({ onEditOrigins })
 
@@ -648,8 +632,7 @@ describe('the allowed origins, which are the one thing here that is editable', (
     let stored = ['https://old.example']
     const stub = answering(
       () => json(200, report()),
-      () =>
-        json(200, settingsBody({ allowedOrigins: stored, selfOrigin: 'https://c.example' })),
+      () => json(200, settingsBody({ allowedOrigins: stored, selfOrigin: 'https://c.example' })),
     )
     const { rerender } = render(<Setup onEditOrigins={noop} onExpired={noop} originsSavedAt={0} />)
     expect(await screen.findByText('https://old.example')).toBeTruthy()

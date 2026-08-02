@@ -116,17 +116,14 @@ IP_HASH_SECRET=
 # A Resend API key. https://resend.com/docs/api-reference/introduction
 # RESEND_API_KEY=
 
-# The address notifications are sent *from*, on a domain verified in the Resend
-# account that issued the key above. A display name is allowed:
-# `Charcha <comments@example.com>`. A typo here is silent — no email arrives, and
-# absence is exactly what the feature looks like when it is switched off — which
-# is the other reason this is not a masked deploy-form field (#139).
-# CHARCHA_NOTIFY_FROM=
-
-# Where notifications go — your own inbox. This is the only address Charcha ever
-# mails, and clearing it is how you stop the emails: there is no unsubscribe link,
-# because there is nobody to unsubscribe but you.
-# CHARCHA_NOTIFY_TO=
+# The two addresses are **not here any more** (#207). Where notifications are sent
+# from and where they go are your own configuration rather than credentials, so
+# they are settings rows edited under **Setup** in your Charcha dashboard — no
+# terminal, no redeploy. A sender name lives beside them (#208).
+#
+# `CHARCHA_NOTIFY_FROM` and `CHARCHA_NOTIFY_TO` are still read on a deployment that
+# set them before this changed, and only until the matching field is saved. See
+# README, **Turning on the optional features**.
 
 # Third-party spam checking (#11, layer 7) — both together, or the layer is off.
 #
@@ -157,10 +154,13 @@ IP_HASH_SECRET=
 # https://akismet.com/developers/comment-check/
 # AKISMET_API_KEY=
 
-# Your site's home page — `https://example.com`, or `https://you.github.io/blog`
-# if the site lives at a path. Akismet requires it (`blog`) and matches it against
-# the sites authorised on your key, and it is the base for the permalink sent with
-# each check. Nothing can derive it: this Worker's own address is a workers.dev
-# URL rather than your site, and the URL the embed reports is chosen by whoever
-# posted the comment. Setting this without AKISMET_API_KEY leaves layer 7 off.
-# CHARCHA_SITE_URL=
+# Your site's home page is **not here any more** (#207). It is the public address
+# of your own website rather than a credential, so it is a settings row edited
+# under **Setup** in your Charcha dashboard. Akismet requires it (`blog`) and
+# matches it against the sites authorised on your key, and it is the base for the
+# permalink sent with each check — so saving the key without it leaves layer 7 off,
+# and one line in your Worker's log says which half is missing.
+#
+# `CHARCHA_SITE_URL` is still read on a deployment that set it before this changed,
+# and only until the field is saved. See README, **Turning on the optional
+# features**.

@@ -180,7 +180,8 @@ export function resolveSiteSettings(
   // silently lost a character is the failure src/notify/from.ts refuses to ship, and this
   // is the same decision on the read side.
   const storedName = usable(values.get(NOTIFY_FROM_NAME_SETTING), Number.MAX_SAFE_INTEGER)
-  const notifyFromName = storedName !== null && fromNameProblem(storedName) === null ? storedName : null
+  const notifyFromName =
+    storedName !== null && fromNameProblem(storedName) === null ? storedName : null
 
   return {
     moderationPolicy,

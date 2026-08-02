@@ -66,7 +66,11 @@ describe('when the owner has not configured notifications', () => {
     // Absence of an API key is a valid state, not a fault (#14). A deployment that
     // never sets one still takes comments, and never learns about Resend at all.
     const { bodies, fetchImpl } = recorder()
-    const notifier = createNotifier({}, { from: null, to: null, fromName: null }, { fetch: fetchImpl })
+    const notifier = createNotifier(
+      {},
+      { from: null, to: null, fromName: null },
+      { fetch: fetchImpl },
+    )
 
     await expect(notifier.commentCreated(eventFor())).resolves.toBeUndefined()
     expect(bodies).toHaveLength(0)
@@ -78,17 +82,13 @@ describe('when the owner has not configured notifications', () => {
     // account and no owner email anywhere in the schema.
     const { bodies, fetchImpl } = recorder()
 
-    await createNotifier(
-      KEY,
-      { ...SETTINGS, to: null },
-      { fetch: fetchImpl },
-    ).commentCreated(eventFor())
+    await createNotifier(KEY, { ...SETTINGS, to: null }, { fetch: fetchImpl }).commentCreated(
+      eventFor(),
+    )
 
-    await createNotifier(
-      KEY,
-      { ...SETTINGS, from: null },
-      { fetch: fetchImpl },
-    ).commentCreated(eventFor())
+    await createNotifier(KEY, { ...SETTINGS, from: null }, { fetch: fetchImpl }).commentCreated(
+      eventFor(),
+    )
 
     expect(bodies).toHaveLength(0)
   })
@@ -137,7 +137,10 @@ describe('when the owner has configured notifications', () => {
     const { bodies, fetchImpl } = recorder()
     const budget = sendBudget()
 
-    for (const fromName of ['Charcha\r\nBcc: victim@example.com', 'Charcha <security@bank.example>']) {
+    for (const fromName of [
+      'Charcha\r\nBcc: victim@example.com',
+      'Charcha <security@bank.example>',
+    ]) {
       await createNotifier(
         KEY,
         { ...SETTINGS, fromName },

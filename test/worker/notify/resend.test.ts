@@ -181,7 +181,10 @@ describe('the From line (#208)', () => {
   it('composes the name and the address into the one field Resend takes', async () => {
     const { calls, fetchImpl } = resend({ id: 'x' })
 
-    await sendEmail({ ...message, fromName: 'maya.build comments' }, { apiKey: API_KEY, fetch: fetchImpl })
+    await sendEmail(
+      { ...message, fromName: 'maya.build comments' },
+      { apiKey: API_KEY, fetch: fetchImpl },
+    )
 
     expect(calls[0]?.body.from).toBe('maya.build comments <comments@maya.build>')
   })

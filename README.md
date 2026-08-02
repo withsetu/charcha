@@ -132,24 +132,39 @@ Turnstile is also the one thing that can put a third party in your reader's brow
 is why it is off until you do this and [documented plainly](docs/theming.md#turnstile)
 when you do.
 
-**An email when a comment arrives.** All three of these together, or the feature is
+**An email when a comment arrives.** A key and two addresses, together, or the feature is
 simply off — a key with no recipient has nowhere to send, and Charcha has no owner
-address anywhere in its schema to guess one from:
+address anywhere in its schema to guess one from.
+
+The key is a credential, so it is set the same way the others are:
 
 ```sh
 pnpm wrangler secret put RESEND_API_KEY
-pnpm wrangler secret put CHARCHA_NOTIFY_FROM
-pnpm wrangler secret put CHARCHA_NOTIFY_TO
 ```
 
-`CHARCHA_NOTIFY_FROM` must be on a domain
+**The two addresses are not secrets, and are set in your dashboard instead** — open
+**Setup** and fill in *Send notifications to* and *Send them from*. They are the public
+address of your own inbox and an address on a domain you verified; treating them as
+credentials cost a terminal and a redeploy to change a value printed on your own site.
+There is a third, optional field beside them: a **sender name**, which is what your mail
+client shows instead of the bare address — `maya.build comments <comments@maya.build>`
+rather than `comments@maya.build`.
+
+The *from* address must be on a domain
 [verified in Resend](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain)
 under the same account as the key — Resend's own `resend.dev` sender can only mail your
-Resend account's own address, and anything else is answered 403. `CHARCHA_NOTIFY_TO` is
-your inbox, and it is the only address Charcha ever mails; clearing it is how you stop
+Resend account's own address, and anything else is answered 403. The *to* address is your
+inbox, and it is the only address Charcha ever mails; clearing that field is how you stop
 the emails, because there is no unsubscribe link and nobody to unsubscribe but you.
-**Check both addresses for typos before you paste them.** The failure mode is silence,
+**Check both addresses for typos before you save them.** The failure mode is silence,
 and silence is indistinguishable from the feature being switched off.
+
+> **Upgrading from a version that used secrets for these?** `CHARCHA_NOTIFY_FROM` and
+> `CHARCHA_NOTIFY_TO` are still read, so nothing stopped working — but only until you save
+> the matching field in **Setup**, which then wins. Save them there and remove the old
+> secrets with `pnpm wrangler secret delete CHARCHA_NOTIFY_FROM` and
+> `pnpm wrangler secret delete CHARCHA_NOTIFY_TO`. Your Worker's log carries one line
+> saying so while a deployment is still on the old path. The fallback will be removed.
 
 What arrives is one short plain-text email per comment: the page, the commenter's name,
 an excerpt, and a reminder to open the queue. It is sent after the reader's comment has
@@ -196,19 +211,24 @@ is skipped altogether for a comment something else already held: Akismet's Pro p
 slow, or your subscription lapses, the layer simply has no opinion — nobody loses a
 comment over it.
 
-Both values or neither:
+Two things, and either alone leaves the layer off. The key is a credential:
 
 ```sh
 pnpm wrangler secret put AKISMET_API_KEY
-pnpm wrangler secret put CHARCHA_SITE_URL
 ```
 
-`CHARCHA_SITE_URL` is your site's home page — `https://example.com`, or
-`https://you.github.io/blog` if it lives at a path. Akismet requires it and matches it
-against the sites authorised on your key. Nothing can derive it for you: your Worker's own
-address is a `workers.dev` URL rather than your site, and the URL the embed reports is
+**Your site's address is not**, so it is a field in your dashboard: open **Setup** and fill
+in *Your site's address*. It is your home page — `https://example.com`, or
+`https://you.github.io/blog` if your site lives at a path. Akismet requires it and matches
+it against the sites authorised on your key. Nothing can derive it for you: your Worker's
+own address is a `workers.dev` URL rather than your site, and the URL the embed reports is
 chosen by whoever posted the comment. Setting one of the two without the other leaves the
 layer off and writes one line to your Worker's log saying which half is missing.
+
+> **Upgrading from a version that used a secret for this?** `CHARCHA_SITE_URL` is still
+> read, so nothing stopped working — but only until you save *Your site's address* in
+> **Setup**, which then wins. Save it there and remove the old secret with
+> `pnpm wrangler secret delete CHARCHA_SITE_URL`. The fallback will be removed.
 
 Turning it off again is `pnpm wrangler secret delete AKISMET_API_KEY`. The other seven
 layers do not know it existed.

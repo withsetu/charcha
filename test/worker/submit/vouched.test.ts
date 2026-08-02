@@ -41,7 +41,11 @@ let bodyCounter = 0
  * the row — the setting is what an owner edits, and a test that handed the pipeline the
  * answer directly would pass on a deployment where the row was never read.
  */
-async function post(options: { verdict: SpamVerdict; email?: string | null; noIpSecret?: boolean }) {
+async function post(options: {
+  verdict: SpamVerdict
+  email?: string | null
+  noIpSecret?: boolean
+}) {
   bodyCounter += 1
   const email = options.email === undefined ? 'rahul@kanwar.example' : options.email
   const { moderationPolicy } = await readSiteSettings(db, {})

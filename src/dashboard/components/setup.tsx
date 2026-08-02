@@ -1003,10 +1003,7 @@ function EmailSection({
   const on = value === null ? null : missing.length === 0 && hasFrom && hasTo
 
   return (
-    <Section
-      title="Email notifications"
-      status={on === null ? null : on ? <On /> : <Off />}
-    >
+    <Section title="Email notifications" status={on === null ? null : on ? <On /> : <Off />}>
       {on === true ? (
         <p>
           A short email to your inbox as comments arrive — up to five back to back, and then a
@@ -1256,9 +1253,9 @@ function SiteAddressSection({
               hint={
                 <>
                   Include the scheme — <code>https://example.com</code>, or{' '}
-                  <code>https://you.github.io/blog</code> if your site lives at a path. A third-party
-                  spam service needs it to identify your site, and it is the base for the link to a
-                  commented page.
+                  <code>https://you.github.io/blog</code> if your site lives at a path. A
+                  third-party spam service needs it to identify your site, and it is the base for
+                  the link to a commented page.
                 </>
               }
             />

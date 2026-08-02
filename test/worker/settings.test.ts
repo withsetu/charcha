@@ -120,7 +120,12 @@ describe('readSiteSettings', () => {
     // `wrangler d1 execute` can put in this column, and these values reach an outbound
     // request.
     await writeSetting(db, NOTIFY_TO_SETTING, `${'a'.repeat(MAX_EMAIL_ADDRESS_LENGTH)}@x`, 1)
-    await writeSetting(db, SITE_URL_SETTING, `https://x.example/${'a'.repeat(MAX_SITE_URL_LENGTH)}`, 1)
+    await writeSetting(
+      db,
+      SITE_URL_SETTING,
+      `https://x.example/${'a'.repeat(MAX_SITE_URL_LENGTH)}`,
+      1,
+    )
 
     const settings = await readSiteSettings(db, NOTHING)
 

@@ -423,7 +423,10 @@ function rowValue(values: Map<string, string>, key: string, resolved: string | n
 }
 
 /** What the resolver produced for one of the three settings a secret can still serve. */
-function resolvedFor(resolved: { siteUrl: string | null; notifyFrom: string | null; notifyTo: string | null }, key: string): string | null {
+function resolvedFor(
+  resolved: { siteUrl: string | null; notifyFrom: string | null; notifyTo: string | null },
+  key: string,
+): string | null {
   if (key === SITE_URL_SETTING) return resolved.siteUrl
   if (key === NOTIFY_FROM_SETTING) return resolved.notifyFrom
   return resolved.notifyTo

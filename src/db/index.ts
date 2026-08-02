@@ -903,7 +903,9 @@ export async function readSettings(
   // end up with none, and spending a query to select nothing is a query spent.
   if (wanted.length === 0) return new Map()
   if (wanted.length > MAX_SETTINGS_BATCH) {
-    throw new Error(`too many settings keys: ${String(wanted.length)} > ${String(MAX_SETTINGS_BATCH)}`)
+    throw new Error(
+      `too many settings keys: ${String(wanted.length)} > ${String(MAX_SETTINGS_BATCH)}`,
+    )
   }
 
   const { results } = await db
