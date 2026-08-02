@@ -17,7 +17,13 @@
 // from the body's.
 
 import { describe, expect, it } from 'vitest'
-import { MAX_FROM_NAME_LENGTH, formatFrom, fromNameProblem } from '../../../src/notify/from'
+import {
+  MAX_EMAIL_ADDRESS_LENGTH,
+  MAX_FROM_NAME_LENGTH,
+  addressProblem,
+  formatFrom,
+  fromNameProblem,
+} from '../../../src/notify/from'
 
 describe('fromNameProblem', () => {
   it('accepts an ordinary display name', () => {
@@ -142,5 +148,49 @@ describe('formatFrom', () => {
       const line = formatFrom('comments@maya.build', name)
       expect(line, name).toBe('comments@maya.build')
     }
+  })
+})
+
+describe('addressProblem', () => {
+  // The predicate both ends of the settings path apply: src/admin/settings.ts refuses on
+  // it loudly, `resolveSiteSettings` in src/settings.ts drops a stored row that fails it.
+  // One rule, because two would be two answers to what the Worker will actually send.
+  it('accepts the addresses people really have', () => {
+    for (const value of [
+      'comments@maya.build',
+      'a.b+c@example.co.uk',
+      "o'brien@example.com",
+      'maya@localhost',
+    ]) {
+      expect(addressProblem(value), value).toBeNull()
+    }
+  })
+
+  it('refuses anything without exactly one @, with something either side', () => {
+    for (const value of ['maya.build', 'maya@@maya.build', 'maya@', '@maya.build', '@']) {
+      expect(addressProblem(value), value).not.toBeNull()
+    }
+  })
+
+  it('refuses the separators and brackets that would change what a header means', () => {
+    // A comma or a semicolon in a `to` is a second recipient to some parsers; angle
+    // brackets and quotes are the display-name delimiters.
+    for (const value of [
+      'a@b.example,c@evil.example',
+      'a@b.example;c@evil.example',
+      'Charcha <a@b.example>',
+      'a"b@c.example',
+      'a b@c.example',
+    ]) {
+      expect(addressProblem(value), value).not.toBeNull()
+    }
+  })
+
+  it('says where a display name belongs, rather than only refusing it', () => {
+    expect(addressProblem('Charcha <a@b.example>')).toContain('name field')
+  })
+
+  it('refuses an address past the cap', () => {
+    expect(addressProblem(`${'a'.repeat(MAX_EMAIL_ADDRESS_LENGTH)}@x.example`)).not.toBeNull()
   })
 })

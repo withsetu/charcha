@@ -935,14 +935,48 @@ export async function writeSetting(
   value: string,
   now: number,
 ): Promise<void> {
-  await db
-    .prepare(
-      `insert into settings (key, value, updated_at)
+  await writeSettings(db, [[key, value]], now)
+}
+
+/** The settings upsert, as a constant so both writers send the same statement. */
+export const WRITE_SETTING_SQL = `insert into settings (key, value, updated_at)
        values (?1, ?2, ?3)
-       on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+       on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at`
+
+/**
+ * Several `settings` rows, all of them or none (#207).
+ *
+ * **`batch`, because validating atomically and then writing one row at a time is only
+ * half of an atomic save.** `handleWriteSettings` refuses the whole body if any field is
+ * bad, which is right — but a run of separate upserts can still fail on the fourth and
+ * leave the first three committed while the caller answers 500. An owner would then have
+ * a save reported as failed that had cleared their recipient and not their sender.
+ *
+ * "Batched statements are SQL transactions. If a statement in the sequence fails, then an
+ * error is returned for that specific statement, and it aborts or rolls back the entire
+ * sequence" — https://developers.cloudflare.com/d1/worker-api/d1-database/, checked
+ * 2026-08-02. It is also one round trip rather than six.
+ *
+ * **Nothing on a public path may reach this**, for the reason `readSetting`'s counterpart
+ * gives: the write budget is 100k rows/day against 5M reads, so a settings write reachable
+ * from the read or submit path would let traffic spend the day's comments. The only caller
+ * is the authenticated dashboard (src/admin/settings.ts).
+ * Enforced by test/worker/admin/settings.test.ts.
+ */
+export async function writeSettings(
+  db: D1Database,
+  rows: readonly (readonly [key: string, value: string])[],
+  now: number,
+): Promise<void> {
+  if (rows.length === 0) return
+  if (rows.length > MAX_SETTINGS_BATCH) {
+    throw new Error(
+      `too many settings rows: ${String(rows.length)} > ${String(MAX_SETTINGS_BATCH)}`,
     )
-    .bind(key, value, now)
-    .run()
+  }
+
+  const statement = db.prepare(WRITE_SETTING_SQL)
+  await db.batch(rows.map(([key, value]) => statement.bind(key, value, now)))
 }
 
 /** The `settings` key holding the moderation policy (#173). */

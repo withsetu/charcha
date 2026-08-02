@@ -281,6 +281,62 @@ describe('email notifications, which are a key and two addresses or nothing (#20
     expect(panelText()).toContain('looks exactly like the feature being switched off')
   })
 
+  it('does not clear the fallback when the owner saves without touching the addresses', async () => {
+    // **The failure this whole migration exists to prevent, arriving through the screen
+    // that announces the migration.** On the fallback the address boxes are empty because
+    // this surface refuses to render a secret's value — not because the owner emptied
+    // them. An owner who types only a sender name and saves must not thereby write two
+    // empty rows, kill the fallback and stop their own notifications, with "Saved." on
+    // screen. Found in review.
+    let saved: unknown = null
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ RESEND_API_KEY: true }))
+      if (call.method === 'GET') {
+        return json(200, settingsBody({ fromDeprecatedSecrets: ['notify_from', 'notify_to'] }))
+      }
+      saved = call.body
+      return json(200, settingsBody({ fromDeprecatedSecrets: ['notify_from', 'notify_to'] }))
+    })
+    mount()
+
+    await screen.findByText('Email notifications')
+    fireEvent.change(screen.getByLabelText('Sender name (optional)'), {
+      target: { value: 'Charcha' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }))
+
+    await waitFor(() => {
+      expect(saved).not.toBeNull()
+    })
+    // The name, and only the name. An absent field leaves its row alone; an empty one
+    // would clear it.
+    expect(saved).toEqual({ notifyFromName: 'Charcha' })
+  })
+
+  it('still lets the owner clear an address they have actually saved', async () => {
+    // The other half, and what stops the guard above from becoming "this field can never
+    // be emptied". Once a row exists the key leaves `fromDeprecatedSecrets`, so an empty
+    // box is an instruction again.
+    let saved: unknown = null
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ RESEND_API_KEY: true }))
+      if (call.method === 'GET') {
+        return json(200, settingsBody({ notifyTo: 'maya@maya.build', notifyFrom: 'c@maya.build' }))
+      }
+      saved = call.body
+      return json(200, settingsBody({ notifyFrom: 'c@maya.build' }))
+    })
+    mount()
+
+    await screen.findByText('Email notifications')
+    fireEvent.change(screen.getByLabelText('Send notifications to'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }))
+
+    await waitFor(() => {
+      expect(saved).toEqual({ notifyFrom: 'c@maya.build', notifyTo: '', notifyFromName: '' })
+    })
+  })
+
   it('says where the value is coming from when a deprecated secret is still serving it', async () => {
     // The #207 migration, on screen. The value is not rendered — #158's rule is that this
     // surface shows no secret's value — so the field is empty and the alert is what stops
@@ -336,6 +392,31 @@ describe('your site’s address, which used to be a secret (#207)', () => {
     await waitFor(() => {
       expect(fieldValue('Home page address')).toBe('https://maya.build')
     })
+  })
+
+  it('does not clear the fallback when the owner saves without typing an address', async () => {
+    // The site-address half of the same failure: an empty box that is empty because
+    // `CHARCHA_SITE_URL` is supplying the value is not an instruction to clear it, and
+    // clearing it would switch layer 8 off on a deployment that was paying for it.
+    let saved: unknown = null
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report())
+      if (call.method === 'GET') {
+        return json(200, settingsBody({ fromDeprecatedSecrets: ['site_url'] }))
+      }
+      saved = call.body
+      return json(200, settingsBody())
+    })
+    mount()
+
+    await screen.findByText('Your site’s address')
+    fireEvent.click(screen.getByRole('button', { name: 'Save site address' }))
+
+    // Nothing was sent at all — there is no field to save and nothing to clear.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save site address' })).toBeTruthy()
+    })
+    expect(saved).toBeNull()
   })
 
   it('has no On or Off badge, because empty is a working default', async () => {

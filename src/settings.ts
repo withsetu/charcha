@@ -25,16 +25,26 @@
 //
 // **Everything here is untrusted input, whoever wrote it.** The dashboard is the only
 // writer, but `wrangler d1 execute` reaches this table and a row can predate a validator.
-// So every value is trimmed, capped, and dropped rather than repaired when it is unusable
-// — which is the same shape `getIpHashRetentionDays` and `parseAllowedOrigins` already
-// have, and card rule 5 in the one place a settings row reaches an outbound request.
+// So every value is trimmed, capped, and run back through the *same* predicate the write
+// path refuses on — `addressProblem` and `fromNameProblem` from src/notify/from.ts, and
+// `siteHomeUrl`'s parser by way of the canonical form the write stored — and dropped
+// rather than repaired when it is unusable. That is the same shape
+// `getIpHashRetentionDays` and `parseAllowedOrigins` already have, and card rule 5 in the
+// one place a settings row reaches an outbound request. The difference from the write path
+// is only how it fails: there the owner is standing at the field and is told which
+// character was refused; here there is nobody to tell and the value is simply not used.
 //
 // Enforced by test/worker/settings.test.ts.
 
 import { MODERATION_POLICY_SETTING, readSettings } from './db'
 import { parseModerationPolicy } from './moderation/policy'
 import type { ModerationPolicy } from './moderation/policy'
-import { MAX_FROM_NAME_LENGTH, fromNameProblem } from './notify/from'
+import {
+  MAX_EMAIL_ADDRESS_LENGTH,
+  MAX_FROM_NAME_LENGTH,
+  addressProblem,
+  fromNameProblem,
+} from './notify/from'
 import { announceOnce } from './spam/log'
 
 /** The `settings` key holding the site this deployment takes comments for (#207). */
@@ -61,14 +71,14 @@ export const NOTIFY_FROM_NAME_SETTING = 'notify_from_name'
 export const MAX_SITE_URL_LENGTH = 2048
 
 /**
- * The longest email address this will read back.
+ * Re-exported so the cap is one number.
  *
- * Generous rather than derived: 254 is past any address a person types into a field, and
- * the point of the cap is that one exists before a stored value is put in a header, not
- * that it is exactly the protocol's.
+ * It is declared beside `addressProblem` in src/notify/from.ts, which is the rule both the
+ * dashboard's write path and this module's read path apply — a second constant here would
+ * be a second answer to "how long is too long" on the two values that reach a mail header.
  * Enforced by test/worker/settings.test.ts.
  */
-export const MAX_EMAIL_ADDRESS_LENGTH = 254
+export { MAX_EMAIL_ADDRESS_LENGTH }
 
 /**
  * The cap on the *deprecated* `CHARCHA_NOTIFY_FROM` secret, which is wider than an address.
@@ -172,6 +182,27 @@ function rowOrSecret(
 }
 
 /**
+ * The address, or null when it is not one this project will send to or from.
+ *
+ * `allowDisplayName` is the deprecated secret's shape, and it is a *narrow* exemption
+ * rather than a looser check: the value must parse as `Something <bare@address>` and the
+ * part inside the brackets is what `addressProblem` then judges. So a comma'd or
+ * space-separated value is refused either way, and only the one documented legacy spelling
+ * survives.
+ * Enforced by test/worker/settings.test.ts.
+ */
+function usableAddress(value: string | null, { allowDisplayName }: { allowDisplayName: boolean }) {
+  if (value === null) return null
+
+  const inner = /^[^<>]*<([^<>]+)>$/.exec(value)?.[1]
+  if (inner !== undefined) {
+    if (!allowDisplayName) return null
+    return addressProblem(inner.trim()) === null ? value : null
+  }
+  return addressProblem(value) === null ? value : null
+}
+
+/**
  * Turns the raw rows into the owner's configuration.
  *
  * Pure and separate from the read, so the resolution rules — the fallback, the caps, the
@@ -208,19 +239,36 @@ export function resolveSiteSettings(
       env.CHARCHA_SITE_URL,
       MAX_SITE_URL_LENGTH,
     ),
-    notifyFrom: rowOrSecret(
-      values,
-      NOTIFY_FROM_SETTING,
-      'CHARCHA_NOTIFY_FROM',
-      env.CHARCHA_NOTIFY_FROM,
-      MAX_LEGACY_NOTIFY_FROM_LENGTH,
+    // **Run back through the write path's own validator, and that is the same
+    // second-layer argument src/notify/from.ts makes for the display name.** A row can
+    // predate the check or be written straight into D1 with `wrangler d1 execute`, and
+    // these two go into the Resend payload's `from` and `to` — so an address the
+    // dashboard would have refused is dropped here rather than sent. Card rule 5 does not
+    // stop at the commenter.
+    //
+    // `notifyFrom` is checked only when it is a bare address: the deprecated secret
+    // documented `Name <address>`, which `addressProblem` refuses by design, and refusing
+    // it here would switch off the notifications of exactly the deployments the fallback
+    // exists for. `formatFrom` is what copes with that shape.
+    notifyFrom: usableAddress(
+      rowOrSecret(
+        values,
+        NOTIFY_FROM_SETTING,
+        'CHARCHA_NOTIFY_FROM',
+        env.CHARCHA_NOTIFY_FROM,
+        MAX_LEGACY_NOTIFY_FROM_LENGTH,
+      ),
+      { allowDisplayName: true },
     ),
-    notifyTo: rowOrSecret(
-      values,
-      NOTIFY_TO_SETTING,
-      'CHARCHA_NOTIFY_TO',
-      env.CHARCHA_NOTIFY_TO,
-      MAX_EMAIL_ADDRESS_LENGTH,
+    notifyTo: usableAddress(
+      rowOrSecret(
+        values,
+        NOTIFY_TO_SETTING,
+        'CHARCHA_NOTIFY_TO',
+        env.CHARCHA_NOTIFY_TO,
+        MAX_EMAIL_ADDRESS_LENGTH,
+      ),
+      { allowDisplayName: false },
     ),
     notifyFromName,
   }

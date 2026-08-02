@@ -54,10 +54,15 @@ export const MAX_FROM_NAME_LENGTH = 64
  *   - `@` makes a display name read as an address.
  *   - `(` `)` `[` `]` are comment and domain-literal delimiters.
  *
- * Refusing all of them is what lets the composed value stay *unquoted*: with no specials
- * in it a display name is a run of atoms, so there is no quoting to get right and no
- * escaping to get wrong — the same shape of argument src/notify/message.ts makes for
- * shipping no HTML part.
+ * Refusing all of them is what lets the composed value stay *unquoted*, and there is one
+ * honest caveat in that: `.` is not in `atext` either, so a name containing one is a valid
+ * `phrase` under RFC 5322's `obs-phrase` production rather than under the strict one. It is
+ * kept because `maya.build comments` is the case this exemption was made for and every
+ * parser in the path — Resend's, and the mail clients past it — accepts it. What refusing
+ * the *rest* buys is that there is no quoting to get right and no escaping to get wrong,
+ * which is the same shape of argument src/notify/message.ts makes for shipping no HTML
+ * part. A stricter reading would mean quoting whenever a `.` appears, and a quoting
+ * routine is exactly the thing that argument is trying not to own.
  * Enforced by test/worker/notify/from.test.ts.
  */
 const FORBIDDEN_IN_FROM_NAME = /["\\<>,;:@()[\]]/
@@ -109,6 +114,54 @@ export function fromNameProblem(name: string): string | null {
     return 'A sender name cannot contain invisible or text-reordering characters. Retype it rather than pasting it.'
   }
 
+  return null
+}
+
+/**
+ * The longest email address this will accept.
+ *
+ * Generous rather than derived: 254 is past any address a person types into a field, and
+ * the point of the cap is that one exists before a stored value is put in a header, not
+ * that it is exactly the protocol's.
+ */
+export const MAX_EMAIL_ADDRESS_LENGTH = 254
+
+/**
+ * Why this is not an address a notification can use, or null when it is.
+ *
+ * **Deliberately not an RFC 5322 parser.** The failure this has to prevent is a value that
+ * would change what the `From:` header means or that the provider will simply reject, and
+ * the shape that does both is the same short list `fromNameProblem` refuses in a display
+ * name: whitespace, angle brackets, quotes and the separators. Beyond that, whether
+ * `a.b+c@example.co.uk` is deliverable is Resend's question and not this project's, and a
+ * stricter check would refuse working addresses to no benefit — the symptom of which is an
+ * owner who cannot save the address that works.
+ *
+ * The one *positive* requirement is a single `@` with something either side, because a
+ * value without one is not an address by any reading and is the typo worth catching at the
+ * field rather than in a 403 from Resend three days later.
+ *
+ * **It lives here rather than beside the dashboard's write path, because both ends need
+ * it.** src/admin/settings.ts refuses on it loudly, naming the field; `resolveSiteSettings`
+ * in src/settings.ts drops a row that fails it, for the reason this whole file exists — a
+ * row can predate the check or be written straight into D1 with `wrangler d1 execute`, and
+ * these two values go into the Resend payload's `from` and `to`. Two copies of the rule
+ * would be two rules that can disagree about what the Worker will actually send.
+ *
+ * Sentences with no subject, so a caller can put the field's name in front of one.
+ * Enforced by test/worker/notify/from.test.ts and test/worker/admin/settings.test.ts.
+ */
+export function addressProblem(value: string): string | null {
+  if (value.length > MAX_EMAIL_ADDRESS_LENGTH) {
+    return `is longer than ${String(MAX_EMAIL_ADDRESS_LENGTH)} characters, which is not an email address.`
+  }
+  if (/[\s<>"\\,;:]/.test(value)) {
+    return `cannot contain spaces, angle brackets, quotes or separators. Put a sender name in the name field instead — it holds up to ${String(MAX_FROM_NAME_LENGTH)} characters.`
+  }
+  const at = value.indexOf('@')
+  if (at < 1 || at !== value.lastIndexOf('@') || at === value.length - 1) {
+    return `is not an email address: “${value}” needs one @, with a name before it and a domain after it.`
+  }
   return null
 }
 

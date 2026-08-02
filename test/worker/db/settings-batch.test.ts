@@ -86,9 +86,25 @@ describe('readSettings', () => {
     await expect(readSettings(db, keys)).rejects.toThrow(/settings/i)
   })
 
-  it('de-duplicates keys, so a repeated key does not widen the statement', () => {
-    // The placeholder count has to match the bound values, and a caller composing key
-    // lists from two modules is exactly how a duplicate arrives.
+  it('de-duplicates keys, so a repeated key does not widen the statement', async () => {
+    // **Driven through `readSettings`, not asserted against `settingsBatchSql`.** The
+    // first version of this test only checked the SQL builder's placeholders, which is
+    // true whatever the caller passes — deleting the `new Set` left it green. The dedup is
+    // load-bearing for the cap below: a caller composing key lists from two modules could
+    // otherwise trip the throw on seventeen keys that are twelve distinct ones.
+    await writeSetting(db, 'a', 'one', 1)
+    const repeated = Array.from({ length: MAX_SETTINGS_BATCH + 4 }, () => 'a')
+
+    const sent = await statementsDuring(async () => {
+      expect(await readSettings(db, repeated)).toEqual(new Map([['a', 'one']]))
+    })
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('?1')
+    expect(sent[0]).not.toContain('?2')
+  })
+
+  it('builds one placeholder per key, and no more', () => {
     expect(settingsBatchSql(2)).toContain('?1, ?2')
     expect(settingsBatchSql(2)).not.toContain('?3')
   })

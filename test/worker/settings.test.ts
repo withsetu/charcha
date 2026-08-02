@@ -9,7 +9,7 @@
 
 import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { writeSetting } from '../../src/db'
+import { MAX_SETTINGS_BATCH, writeSetting } from '../../src/db'
 import {
   MAX_EMAIL_ADDRESS_LENGTH,
   MAX_SITE_URL_LENGTH,
@@ -133,6 +133,44 @@ describe('readSiteSettings', () => {
     expect(settings.siteUrl).toBeNull()
   })
 
+  it('ignores a stored address that would not pass the dashboard’s check', async () => {
+    // The second layer under the write path, for the same reason the display name has one:
+    // a row can predate the check or be written straight into D1 with `wrangler d1
+    // execute`, and these two values go into the Resend payload's `from` and `to`. A
+    // comma'd recipient is the shape that matters — some parsers read it as two.
+    await writeSetting(db, NOTIFY_TO_SETTING, 'maya@maya.build,attacker@evil.example', 1)
+    await writeSetting(db, NOTIFY_FROM_SETTING, 'not-an-address', 1)
+
+    const settings = await readSiteSettings(db, NOTHING)
+
+    expect(settings.notifyTo).toBeNull()
+    expect(settings.notifyFrom).toBeNull()
+  })
+
+  it('keeps the one legacy shape the deprecated secret documented', async () => {
+    // `Name <address>` in `notify_from` only, and only when the part inside the brackets
+    // is itself an address — the exemption is narrow rather than a looser check, because
+    // refusing it outright would switch off exactly the deployments the fallback exists
+    // for.
+    const settings = await readSiteSettings(db, {
+      CHARCHA_NOTIFY_FROM: 'Charcha <comments@maya.build>',
+      CHARCHA_NOTIFY_TO: 'Maya <maya@maya.build>',
+    })
+
+    expect(settings.notifyFrom).toBe('Charcha <comments@maya.build>')
+    // Not on the recipient: nothing ever documented that shape for it, and a display name
+    // there is a value nobody typed on purpose.
+    expect(settings.notifyTo).toBeNull()
+  })
+
+  it('refuses a legacy shape whose bracketed part is not an address', async () => {
+    const settings = await readSiteSettings(db, {
+      CHARCHA_NOTIFY_FROM: 'Charcha <a@b.example,c@evil.example>',
+    })
+
+    expect(settings.notifyFrom).toBeNull()
+  })
+
   it('ignores a stored display name that would not pass the dashboard’s check', async () => {
     // Fail closed on the read as well as the write (#208): a row can predate the check or
     // be written straight into D1.
@@ -156,7 +194,8 @@ describe('readSiteSettings', () => {
   })
 
   it('asks for no more keys than the batched read will take', () => {
-    // A list this project can add to without noticing it has passed the cap.
-    expect(SUBMISSION_SETTINGS.length).toBeLessThanOrEqual(16)
+    // A list this project can add to without noticing it has passed the cap. Against the
+    // constant rather than against 16, so moving the cap moves both.
+    expect(SUBMISSION_SETTINGS.length).toBeLessThanOrEqual(MAX_SETTINGS_BATCH)
   })
 })

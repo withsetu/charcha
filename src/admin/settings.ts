@@ -39,11 +39,10 @@ import {
   parseAllowedOrigins,
   selfOrigin,
 } from '../cors'
-import { MODERATION_POLICY_SETTING, readSettings, writeSetting } from '../db'
+import { MODERATION_POLICY_SETTING, readSettings, writeSettings } from '../db'
 import { MODERATION_POLICIES, isModerationPolicy } from '../moderation/policy'
-import { MAX_FROM_NAME_LENGTH, fromNameProblem } from '../notify/from'
+import { addressProblem, fromNameProblem } from '../notify/from'
 import {
-  MAX_EMAIL_ADDRESS_LENGTH,
   MAX_SITE_URL_LENGTH,
   NOTIFY_FROM_NAME_SETTING,
   NOTIFY_FROM_SETTING,
@@ -243,11 +242,13 @@ export async function handleWriteSettings(c: AdminContext): Promise<Response> {
     writes.push([ALLOWED_ORIGINS_SETTING, value])
   }
 
-  // One statement per field that was sent, and none until every field has passed.
-  // `writeSetting` is one upsert, so this is at most six writes on a request one
-  // authenticated person makes by clicking Save.
-  const at = now()
-  for (const [key, value] of writes) await writeSetting(c.env.DB, key, value, at)
+  // **One batch, and none of it until every field has passed.** Validating atomically and
+  // then writing row by row is only half an atomic save: a D1 failure on the fourth upsert
+  // of six would leave the first three committed while this handler answers 500, so a save
+  // the owner was told had failed would have cleared their recipient and not their sender.
+  // `writeSettings` is `db.batch`, which D1 documents as a transaction that rolls the whole
+  // sequence back. See src/db/index.ts.
+  await writeSettings(c.env.DB, writes, now())
 
   // The saved settings, read back from the database rather than echoed from the request:
   // the dashboard renders this, and it must show the canonicalised origins the public
@@ -312,8 +313,8 @@ function checkedRows(data: {
       rows.push([key, ''])
       continue
     }
-    const problem = addressProblem(trimmed, label)
-    if (problem !== null) return { problem }
+    const problem = addressProblem(trimmed)
+    if (problem !== null) return { problem: `${label} ${problem}` }
     rows.push([key, trimmed])
   }
 
@@ -327,36 +328,6 @@ function checkedRows(data: {
   }
 
   return { rows }
-}
-
-/**
- * Why this is not an address a notification can use, or null when it is.
- *
- * **Deliberately not an RFC 5322 parser.** The failure this has to prevent is a value that
- * would change what the `From:` header means or that the provider will simply reject, and
- * the shape that does both is the same short list src/notify/from.ts refuses in a display
- * name: whitespace, angle brackets, quotes and the separators. Beyond that, whether
- * `a.b+c@example.co.uk` is deliverable is Resend's question and not this project's, and a
- * stricter check here would refuse working addresses to no benefit — the symptom of which
- * is an owner who cannot save the address that works.
- *
- * The one *positive* requirement is a single `@` with something either side, because a
- * value without one is not an address by any reading and is the typo worth catching at the
- * field rather than in a 403 from Resend three days later.
- * Enforced by test/worker/admin/settings.test.ts.
- */
-function addressProblem(value: string, label: string): string | null {
-  if (value.length > MAX_EMAIL_ADDRESS_LENGTH) {
-    return `${label} is longer than ${String(MAX_EMAIL_ADDRESS_LENGTH)} characters, which is not an email address.`
-  }
-  if (/[\s<>"\\,;:]/.test(value)) {
-    return `${label} cannot contain spaces, angle brackets, quotes or separators. Put a sender name in the name field instead — it holds up to ${String(MAX_FROM_NAME_LENGTH)} characters.`
-  }
-  const at = value.indexOf('@')
-  if (at < 1 || at !== value.lastIndexOf('@') || at === value.length - 1) {
-    return `“${value}” is not an email address. It needs one @, with a name before it and a domain after it.`
-  }
-  return null
 }
 
 /**

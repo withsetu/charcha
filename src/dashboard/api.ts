@@ -447,11 +447,32 @@ export function writeSiteUrl(siteUrl: string): Promise<ApiResult<Settings>> {
   return settingsRequest({ method: 'PUT', path: '/settings', body: { siteUrl } })
 }
 
-/** The three notification settings, saved together because one form holds them (#207, #208). */
+/**
+ * The settings whose value is still coming from the secret they replaced, as a set.
+ *
+ * A helper rather than a `.includes` at each call site, because the *reason* is the same
+ * every time and is worth one place to state it: the dashboard renders no secret's value,
+ * so a field for one of these is empty for a reason that has nothing to do with the owner
+ * having cleared it (#158, #207).
+ */
+export function servedBySecret(settings: Settings, key: string): boolean {
+  return settings.fromDeprecatedSecrets.includes(key)
+}
+
+/**
+ * The three notification settings, saved together because one form holds them (#207, #208).
+ *
+ * **Every field is optional, and omitting one is not the same as sending it empty.** The
+ * endpoint leaves an absent field alone and *clears* the row for an empty one — and
+ * clearing is what stops a deployment still on the deprecated secrets from falling back to
+ * them. So a field the owner never typed into has to be left out rather than sent blank.
+ * See `NotifyFields` in src/dashboard/components/setup.tsx, which is where that decision is
+ * made and where getting it wrong turned somebody's notifications off.
+ */
 export interface NotifySettingsInput {
-  notifyFrom: string
-  notifyTo: string
-  notifyFromName: string
+  notifyFrom?: string
+  notifyTo?: string
+  notifyFromName?: string
 }
 
 /**

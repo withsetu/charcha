@@ -47,6 +47,7 @@ import {
   readSettings,
   readSetup,
   writeModerationPolicy,
+  servedBySecret,
   writeNotifySettings,
   writeSiteUrl,
 } from '../api'
@@ -949,6 +950,23 @@ function Field({
   )
 }
 
+/**
+ * One field of a settings body, or nothing at all when sending it would clear a row the
+ * owner never filled in.
+ *
+ * See the call site in `NotifyFields` for why an empty box is not always an instruction.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function omitUntyped(
+  key: string,
+  field: 'notifyFrom' | 'notifyTo',
+  value: string,
+  settings: Settings,
+): Record<string, string> {
+  if (value === '' && servedBySecret(settings, key)) return {}
+  return { [field]: value }
+}
+
 /** The save button every settings form on this tab uses, so they cannot drift apart. */
 function SaveRow({ busy, label }: { busy: boolean; label: string }) {
   return (
@@ -1104,10 +1122,23 @@ function NotifyFields({
         // the browser rather than merely unhandled — the same arrangement as the sign-in
         // form and the origins dialog.
         event.preventDefault()
+        // **A field that is empty *and* being served by a deprecated secret is left out
+        // of the body, not sent blank.** The endpoint clears a row for an empty string
+        // and leaves an absent field alone, and these boxes are empty because this
+        // surface refuses to render a secret's value — not because the owner emptied
+        // them. Sending `''` here would write a row, kill the fallback, and stop the
+        // notifications of a deployment that was working, with "Saved." on screen. Found
+        // in review; it is the exact failure the fallback exists to prevent, arriving
+        // through the screen that announces the fallback.
+        //
+        // The owner can still clear a value they *have* saved: once a row exists the key
+        // is no longer in `fromDeprecatedSecrets`, so an empty field is an instruction
+        // again.
+        // Enforced by test/dashboard/setup.test.tsx.
         save(() =>
           writeNotifySettings({
-            notifyFrom: fields.from,
-            notifyTo: fields.to,
+            ...omitUntyped('notify_from', 'notifyFrom', fields.from, load.value),
+            ...omitUntyped('notify_to', 'notifyTo', fields.to, load.value),
             notifyFromName: fields.name,
           }),
         )
@@ -1238,7 +1269,12 @@ function SiteAddressSection({
             noValidate
             onSubmit={(event) => {
               event.preventDefault()
-              save(() => writeSiteUrl(draft ?? load.value.siteUrl))
+              const value = draft ?? load.value.siteUrl
+              // The same rule `NotifyFields` follows: an empty box that is empty because
+              // a secret is supplying the value is not an instruction to clear it. There
+              // is nothing to send, so the save is a no-op rather than a row write.
+              if (value === '' && servedBySecret(load.value, 'site_url')) return
+              save(() => writeSiteUrl(value))
             }}
           >
             <Field
