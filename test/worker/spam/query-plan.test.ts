@@ -91,9 +91,10 @@ describe("the classifier's model read (#10)", () => {
 
   it('answers the Setup tab from the same one row, and never selects the weights', async () => {
     // #177's read. Authenticated and rare, so the plan is not the reason it is here —
-    // the column list is. D1 converts a BLOB to a JavaScript `Array` of byte values, so
-    // a `select *` would build 16,384 numbers at this model's expected width and hand
-    // them to a screen that has nothing to say about them. Asserted against the constant
+    // the column list is. D1 converts a BLOB to a JavaScript `Array` of byte values — one
+    // number per byte — so a `select *` would build 4,096 of them at this model's
+    // expected 1,024 dimensions, and up to 16,384 at the MAX_MODEL_DIMS ceiling, for a
+    // screen that has nothing to say about any of them. Asserted against the constant
     // src/db actually sends, so a later edit that widened it fails here.
     const plan = await planOf(READ_SPAM_MODEL_STATUS_SQL)
 

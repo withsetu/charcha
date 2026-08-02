@@ -21,14 +21,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { SETUP_SECRETS } from '../../src/dashboard/api'
 import { Triage } from '../../src/dashboard/components/triage'
 import {
+  allSecretsSet,
   comment,
   decision,
   json,
   queuePage,
   settingsBody,
+  setupBody,
   stubFetch,
   unhandled,
   type FetchStub,
@@ -48,15 +49,12 @@ async function mountQueue(): Promise<FetchStub> {
     }
     // The Setup tab's two reads (#158). Answered rather than refused, because `4` is now
     // a binding this file drives and the panel behind it fetches on mount.
-    if (call.path === '/admin/api/setup') {
-      // Derived from SETUP_SECRETS rather than written out, because `readSetup` refuses
-      // a report missing a name it expects — so a hand-written literal here turns any
-      // future secret into six timeouts in this file rather than one clear failure.
-      return json(200, {
-        secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, false])),
-        shortPassword: false,
-      })
-    }
+    //
+    // From the shared fixture rather than a literal, because `readSetup` refuses a report
+    // missing any field it expects — so a hand-written body here turns any future one
+    // into six timeouts in this file rather than one clear failure. #177's `classifier`
+    // is the field that proved it.
+    if (call.path === '/admin/api/setup') return json(200, setupBody())
     if (call.path === '/admin/api/settings') {
       return json(200, settingsBody())
     }
@@ -257,11 +255,8 @@ describe('the shortcut listener', () => {
         })
       }
       if (call.path === '/admin/api/setup') {
-        // Derived from SETUP_SECRETS — see the note on the other fixture in this file.
-        return json(200, {
-          secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, true])),
-          shortPassword: false,
-        })
+        // The shared fixture — see the note on the other one in this file.
+        return json(200, setupBody({ secrets: allSecretsSet() }))
       }
       if (call.path === '/admin/api/settings') {
         return json(200, settingsBody())

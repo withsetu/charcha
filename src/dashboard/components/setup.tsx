@@ -24,10 +24,10 @@
 // documented history on #57.
 //
 // **And it is not a nag.** A deployment with everything on finds no recommendation, no
-// badge urging anything and no command to run — four sections that only report. Not
-// four *short* ones: Turnstile keeps the two paragraphs about its sitekey in the `On`
-// state, because #104 is invisible from here and has to stay readable on a deployment
-// that looks finished.
+// badge urging anything and no command to run — sections that only report. Not *short*
+// ones: Turnstile keeps the two paragraphs about its sitekey in the `On` state, because
+// #104 is invisible from here and has to stay readable on a deployment that looks
+// finished.
 //
 // **This file is now the panel and the composition order, and nothing else** (#197). One
 // section per optional feature lives in ./setup/sections, and the pieces they share in
@@ -50,6 +50,7 @@ import {
   SectionSkeleton,
   useLoad,
 } from './setup/primitives'
+import { ClassifierSection } from './setup/sections/classifier'
 import { EmailSection } from './setup/sections/email'
 import { IpHashSection } from './setup/sections/ip-hash'
 import { ModerationSection } from './setup/sections/moderation'
@@ -131,7 +132,7 @@ export function Setup({
         order still opens on the decision.
 
         It renders on its own read, so a `setup` failure leaves the one editable policy on
-        this tab reachable rather than taking it down with the four sections that do
+        this tab reachable rather than taking it down with the five sections that do
         depend on it.
       */}
       <ModerationSection load={settings} secrets={secrets} onExpired={onExpired} />
@@ -154,7 +155,7 @@ export function Setup({
       {secrets.kind === 'ready' && (
         <>
           {/*
-            Turnstile leads the optional three, because it is the one this tab
+            Turnstile leads the optional sections, because it is the one this tab
             recommends (#174) and reading order is the only prominence a tab of equal
             sections has to give.
 
@@ -174,9 +175,22 @@ export function Setup({
           />
           <IpHashSection set={secrets.value.secrets.IP_HASH_SECRET} />
           {/*
-            Last of the four, deliberately. Reading order is this tab's only prominence,
-            and the three above are things a deployer is being encouraged to switch on;
-            this is the one whose default — off — is the recommendation.
+            The two spam layers that have something to report, in the order the pipeline
+            runs them: the classifier is layer 7 and the third-party service is layer 8
+            (CLAUDE.md). That is also the privacy ordering — the classifier runs inside
+            this deployment and transmits nothing, and the section under it is the only
+            feature in Charcha that sends anything about a reader anywhere. The other way
+            round would put the disclosure before the thing it is a trade against.
+
+            It is the one section here with no secret behind it: layer 7 needs no
+            configuration at all, which is exactly why nothing on this screen could say
+            whether it was running (#177).
+          */}
+          <ClassifierSection report={secrets.value.classifier} />
+          {/*
+            Last, deliberately. Reading order is this tab's only prominence, and the ones
+            above are things a deployer is being encouraged to switch on; this is the one
+            whose default — off — is the recommendation.
           */}
           <SpamServiceSection set={secrets.value.secrets.AKISMET_API_KEY} />
         </>

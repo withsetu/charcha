@@ -6,7 +6,7 @@
 // section uses belongs in that section's file, where its reason is next to its only
 // reader. `omitUntyped` is the worked example: it lives in ./sections/email.tsx.
 //
-// Split out of a single 1,547-line setup.tsx, with no behaviour change. What made that
+// Split out of a single 1,583-line setup.tsx, with no behaviour change. What made that
 // move verifiable is the exact heading sequence asserted in test/dashboard/setup.test.tsx
 // — the composition order is load-bearing (#174 puts Turnstile first, #158 says the tab
 // must stay quiet when everything is configured), so a move that reordered anything fails
@@ -95,7 +95,7 @@ export const README_URL = 'https://github.com/withsetu/charcha#turning-on-the-op
  * a rename of this one is `pnpm check:deploy`, which fails a secret `src/` reads that is
  * in neither `.dev.vars.example` nor README.md.
  */
-export type SettableSecret = SetupSecret | 'CHARCHA_DASHBOARD_PASSWORD'
+type SettableSecret = SetupSecret | 'CHARCHA_DASHBOARD_PASSWORD'
 
 /**
  * One section of the tab.
@@ -238,7 +238,7 @@ export function SectionSkeleton() {
 }
 
 /**
- * An external link, styled and safe, since this tab now has five of them.
+ * An external link, styled and safe, since three sections of this tab need one.
  *
  * `noreferrer` as well as `noopener`: the document is already served
  * `referrer-policy: no-referrer` (src/dashboard/document.ts), and this says the same
@@ -329,7 +329,7 @@ export function useSettingsSave(onExpired: () => void, onSaved: (settings: Setti
   return { busy, save, status, saveFailed: failure !== null }
 }
 
-/** One labelled text field, since this tab now has five of them. */
+/** One labelled text field, since two sections of this tab have four between them. */
 export function Field({
   id,
   label,

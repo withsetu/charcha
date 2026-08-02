@@ -58,12 +58,12 @@ describe('the cold-start gate, as the classifier applies it', () => {
     // Both classes gate independently (MIN_LABELS_PER_CLASS): a site with three hundred
     // spam decisions and four ham ones has no ham model, and a status derived from a
     // single total would call that trained.
-    expect(
-      classifierStatus(stored({ hamCount: MIN_LABELS_PER_CLASS - 1 }), true).state,
-    ).toBe('learning')
-    expect(
-      classifierStatus(stored({ spamCount: MIN_LABELS_PER_CLASS - 1 }), true).state,
-    ).toBe('learning')
+    expect(classifierStatus(stored({ hamCount: MIN_LABELS_PER_CLASS - 1 }), true).state).toBe(
+      'learning',
+    )
+    expect(classifierStatus(stored({ spamCount: MIN_LABELS_PER_CLASS - 1 }), true).state).toBe(
+      'learning',
+    )
   })
 
   it('is trained at exactly the threshold in both, which is where the layer starts speaking', () => {

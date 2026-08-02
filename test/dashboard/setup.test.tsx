@@ -7,12 +7,21 @@
 // shortcut, and the queue keys being inert while it is in front — is
 // test/dashboard/shortcuts.test.tsx and test/dashboard/triage.test.tsx.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { SETUP_SECRETS, type SetupSecret } from '../../src/dashboard/api'
+import { SETUP_SECRETS, type ClassifierStatus, type SetupSecret } from '../../src/dashboard/api'
 import { Setup } from '../../src/dashboard/components/setup'
-import { apiError, json, settingsBody, stubFetch, unhandled, type Responder } from './harness'
+import {
+  apiError,
+  classifierBody as classifier,
+  json,
+  settingsBody,
+  setupBody,
+  stubFetch,
+  unhandled,
+  type Responder,
+} from './harness'
 
 function noop() {
   return
@@ -25,11 +34,16 @@ function noop() {
  * `shortPassword: false` is the default because it is the uneventful deployment, which
  * is what most of the assertions below are about.
  */
-function report(set: Partial<Record<SetupSecret, boolean>> = {}, shortPassword = false) {
-  return {
+function report(
+  set: Partial<Record<SetupSecret, boolean>> = {},
+  shortPassword = false,
+  classifierStatus: ClassifierStatus = classifier(),
+) {
+  return setupBody({
     secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, set[name] ?? false])),
     shortPassword,
-  }
+    classifier: classifierStatus,
+  })
 }
 
 /**
@@ -147,6 +161,242 @@ describe('a deployment with everything switched on', () => {
     // Including the one item this tab recommends (#174): a recommendation that still
     // shows after it has been taken is the nag #158 ruled out.
     expect(panelText()).not.toContain('Recommended')
+  })
+})
+
+describe('the spam classifier, which trains itself and says nothing until it can (#177)', () => {
+  /** The classifier section alone — several others print counts and commands too. */
+  async function section(): Promise<HTMLElement> {
+    const heading = await screen.findByText('Spam classifier')
+    const found = heading.closest('section')
+    if (found === null) throw new Error('the classifier heading is not inside a section')
+    return found
+  }
+
+  function showing(status: Partial<ClassifierStatus>) {
+    answering(() => json(200, report({}, false, classifier(status))))
+    mount()
+  }
+
+  it('sits between the local layers and the one that transmits, in pipeline order', async () => {
+    // Layer 7 then layer 8 (CLAUDE.md), which is also the privacy ordering: this one runs
+    // inside the deployment and sends nothing, and the section under it is the only
+    // feature in Charcha that sends anything about a reader anywhere. The other way round
+    // would put the disclosure before the thing it is a trade against.
+    answering(() => json(200, report()))
+    mount()
+
+    await screen.findByText('Spam classifier')
+    expect(
+      screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
+    ).toEqual([
+      'Moderation policy',
+      'Turnstile bot check',
+      'Email notifications',
+      'Per-commenter rate limiting',
+      'Spam classifier',
+      'Third-party spam service',
+      'Your site’s address',
+      'Allowed origins',
+    ])
+  })
+
+  it('leads with what is missing, not with a statistic', async () => {
+    // #177's own worked example, and its own instruction: "the spam classifier starts
+    // helping after 30 approvals and 30 spam decisions; you have 6 and 40". The number
+    // that changes what the owner does is 24, and it is the one they cannot work out
+    // from a progress bar without doing the subtraction themselves.
+    showing({ state: 'learning', hamCount: 6, spamCount: 40, updatedAt: 1_800_000_000 })
+
+    expect((await section()).textContent).toContain('24 more approvals')
+  })
+
+  it('names both remaining classes when both are short, counted separately', async () => {
+    showing({ state: 'learning', hamCount: 6, spamCount: 28 })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('24 more approvals')
+    expect(text).toContain('2 more spam decisions')
+  })
+
+  it('says which buttons teach it, because that is the action the number implies', async () => {
+    // The half #177 says is missing: an owner cannot know they are 24 approvals away, or
+    // that approving is the thing that gets them there. Delete is named as *not* teaching
+    // it, because that is the guess a reader would otherwise make (src/spam/train.ts).
+    showing({ state: 'learning', hamCount: 6, spamCount: 40 })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('Approve')
+    expect(text).toContain('Delete does not')
+  })
+
+  it('says the badge word Learning rather than borrowing On or Off', async () => {
+    // A layer that is running and abstaining is neither. Calling it Off would send an
+    // owner to switch on something that is already on; calling it On would claim it is
+    // judging comments when it is not.
+    showing({ state: 'learning', hamCount: 6, spamCount: 40 })
+
+    expect((await section()).textContent).toContain('Learning')
+    expect(screen.getAllByText('Off')).toHaveLength(4)
+  })
+
+  it('reports a deployment that has trained nothing without implying a failure', async () => {
+    showing({ state: 'learning', hamCount: 0, spamCount: 0, updatedAt: null })
+
+    expect((await section()).textContent).toContain('has not learned anything yet')
+  })
+
+  it('is quiet once it is trained, and says what it does with what it learned', async () => {
+    showing({
+      state: 'trained',
+      hamCount: 41,
+      spamCount: 38,
+      updatedAt: 1_800_000_000,
+    })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('41')
+    expect(text).toContain('38')
+    // The authority the layer actually has, stated where an owner reads about it: it can
+    // hold a comment and it can never refuse one (src/spam/classifier.ts).
+    expect(text).toContain('never refuse')
+    expect(text).not.toContain('wrangler')
+  })
+
+  it('names the reason it writes, so the owner can go and see it working', async () => {
+    // The strongest evidence available that the model is doing something, and it costs
+    // nothing: `CLASSIFIER_REASON` is on every comment this layer held, in the queue the
+    // owner is already looking at. The Turnstile section makes the same move with
+    // `turnstile: no-token-unverified-deployment`.
+    showing({ state: 'trained', hamCount: 41, spamCount: 38, updatedAt: 1_800_000_000 })
+
+    expect((await section()).textContent).toContain('classifier: similar-to-spam')
+  })
+
+  it('says when it last learned, which is the only symptom a stalled trainer has', async () => {
+    // Relative to the real clock rather than a frozen one: `findBy` needs timers to
+    // advance, and `vi.useFakeTimers()` here deadlocks the query instead of pinning the
+    // date. Three days back is well inside `formatAge`'s relative window and far enough
+    // from its boundaries that nothing here depends on when the suite runs.
+    const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
+    showing({ state: 'trained', hamCount: 41, spamCount: 38, updatedAt: threeDaysAgo })
+
+    expect((await section()).textContent).toContain('3 days ago')
+  })
+
+  it('says the layer never runs when there is no binding, and how to give it one', async () => {
+    // Distinguishable from *cold* by what it asks for: a binding rather than more
+    // moderating. Nothing else on the deployment is affected, which the copy says
+    // outright — a warning about a spam layer reads as a threat to the queue otherwise.
+    showing({ state: 'no-binding', hamCount: 6, spamCount: 40 })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('no Workers AI binding')
+    expect(text).toContain('Bindings')
+    expect(text).toContain('Off')
+  })
+
+  it('says the stored decisions survive a missing binding rather than reading as lost', async () => {
+    showing({ state: 'no-binding', hamCount: 6, spamCount: 40 })
+
+    expect((await section()).textContent).toContain('still stored')
+  })
+
+  it('does not claim a training history a deployment with no binding never had', async () => {
+    showing({ state: 'no-binding', hamCount: 0, spamCount: 0, updatedAt: null })
+
+    expect((await section()).textContent).not.toContain('still stored')
+  })
+
+  it('says weights from another model are being ignored, and what the next decision costs', async () => {
+    // The silent failure: every count reads healthy and the layer abstains on every
+    // comment. src/spam/train.ts resets on the next decision, so the honest thing to say
+    // is what that reset discards — not "trained" and not "learning".
+    showing({ state: 'model-changed', hamCount: 412, spamCount: 380 })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('412')
+    expect(text).toContain('not carried over')
+    expect(text).toContain('Off')
+  })
+
+  it('shows no score, accuracy or percentage in any state', async () => {
+    // #175 has not calibrated a threshold, so there is no number anybody could honestly
+    // read as "how good is it" — and a percentage on a dashboard is believed. The
+    // assertion is on every state at once, because the tempting place to add one is
+    // whichever state a later reader thinks looks thin.
+    for (const state of ['no-binding', 'learning', 'trained', 'model-changed'] as const) {
+      cleanup()
+      showing({ state, hamCount: 41, spamCount: 38, updatedAt: 1_800_000_000 })
+
+      const text = (await section()).textContent ?? ''
+      expect(text, state).not.toMatch(/%|accuracy|confidence|precision|recall/i)
+    }
+  })
+
+  it('refuses a report with no classifier verdict rather than inventing one', async () => {
+    // `undefined` would render as *no binding* or as zeroes — either one is a confident
+    // answer nobody sent, on the screen an owner opened to find out. The same rule
+    // `shortPassword` follows (#120).
+    const { secrets, shortPassword } = report()
+    answering(() => json(200, { secrets, shortPassword }))
+    mount()
+
+    await screen.findByText('Could not read what is configured')
+    expect(screen.queryByText('Spam classifier')).toBeNull()
+  })
+
+  it('refuses a state this dashboard does not know, rather than rendering nothing', async () => {
+    // The drift `SETUP_SECRETS` warns about, in its second form: the union is written out
+    // in src/dashboard/api.ts because that project cannot import from src/spam. A Worker
+    // that grew a fifth state would otherwise render as a section with no words in it.
+    answering(() =>
+      json(200, { ...report(), classifier: { ...classifier(), state: 'quantum-superposition' } }),
+    )
+    mount()
+
+    await screen.findByText('Could not read what is configured')
+    expect(screen.queryByText('Spam classifier')).toBeNull()
+  })
+
+  it('counts agree with their nouns, including at one', async () => {
+    // A deployment is in `model-changed` from its *first* decision — src/spam/train.ts
+    // writes the row then — so one is an ordinary number in this copy rather than an edge
+    // case, and "The 1 approvals" is what shipped before a cold read of the diff.
+    showing({ state: 'model-changed', hamCount: 1, spamCount: 1 })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('1 approval and 1 spam decision')
+    expect(text).not.toContain('1 approvals')
+  })
+
+  it('says one more approval, not one more approvals, on the last decision before it starts', async () => {
+    showing({ state: 'learning', hamCount: 29, spamCount: 40 })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('1 more approval')
+    expect(text).not.toContain('1 more approvals')
+  })
+
+  it('refuses an unusable timestamp rather than crashing the tab on it', async () => {
+    // `new Date(1e300).toISOString()` throws a RangeError, and this dashboard has no error
+    // boundary — so an unchecked value here unmounts the whole tree on the one screen an
+    // owner opened to find out what was wrong.
+    answering(() => json(200, { ...report(), classifier: { ...classifier(), updatedAt: 1e300 } }))
+    mount()
+
+    await screen.findByText('Could not read what is configured')
+    expect(screen.queryByText('Spam classifier')).toBeNull()
+  })
+
+  it('refuses counts that are not numbers, rather than printing them', async () => {
+    answering(() =>
+      json(200, { ...report(), classifier: { ...classifier(), hamCount: '6 or so' } }),
+    )
+    mount()
+
+    await screen.findByText('Could not read what is configured')
+    expect(panelText()).not.toContain('6 or so')
   })
 })
 
@@ -445,6 +695,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
       'Turnstile bot check',
       'Email notifications',
       'Per-commenter rate limiting',
+      'Spam classifier',
       'Third-party spam service',
       'Your site’s address',
       'Allowed origins',
@@ -566,6 +817,7 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
       'Turnstile bot check',
       'Email notifications',
       'Per-commenter rate limiting',
+      'Spam classifier',
       'Third-party spam service',
       'Your site’s address',
       'Allowed origins',

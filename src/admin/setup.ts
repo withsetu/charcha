@@ -140,10 +140,13 @@ export function secretReport(env: SetupEnv): SecretReport {
  * put together by hand or a binding since removed — rare, silent, and until now announced
  * only as one `spam_layer_inactive` line per isolate.
  *
- * It reads the binding and never calls it. Workers AI has no local simulation and every
- * call spends neurons, so "is it there" is the only question this surface may ask of it —
- * a health check here would bill the owner for loading a settings screen.
- * Enforced by test/worker/admin/setup.test.ts.
+ * It reads the binding and is **intended** never to call it: Workers AI has no local
+ * simulation and every call spends neurons, so "is it there" is the only question this
+ * surface may ask of it — a health check here would bill the owner for opening a settings
+ * screen. Worded as intent rather than fact on purpose. No test can catch a call added
+ * later, because no test in this project may touch `env.AI` at all (vitest.config.ts), so
+ * a spy here would need account credentials to prove anything. What the tests do cover is
+ * the *absence* case, in test/worker/admin/setup.test.ts.
  */
 function hasAiBinding(env: Partial<Pick<Env, 'AI'>>): boolean {
   return env.AI !== undefined
@@ -157,6 +160,11 @@ function hasAiBinding(env: Partial<Pick<Env, 'AI'>>): boolean {
  * classifier's state cannot be, because it is a history of the owner's own moderation
  * decisions and those live in `spam_model`. `readSpamModelStatus` deliberately does not
  * select the weights — see src/db.
+ *
+ * The seek is asserted in test/worker/spam/query-plan.test.ts. The *count* is intent
+ * rather than an enforced invariant — nothing here spies on D1 — and it is worth holding
+ * anyway: this handler answers a tab the owner opens repeatedly, and every read added
+ * here is one more thing that can fail after `authenticated` has already succeeded.
  *
  * **It reads that row and nothing here can write it.** The row is written by exactly one
  * thing, a human moderation decision through src/spam/train.ts, which is the whole of

@@ -1508,11 +1508,11 @@ export async function readSpamModel(db: D1Database): Promise<StoredSpamModel | n
  *
  * **A second statement rather than a second reader of READ_SPAM_MODEL_SQL, and the
  * omitted column is the whole reason.** D1 hands a BLOB back as a JavaScript `Array` of
- * byte values, so selecting `weights` here would build a 16,384-element array — at the
- * 1,024 dimensions this model is expected to produce — and hand it to a screen that
- * cannot say anything about it. `updated_at` is the column this one adds: a classifier
- * that silently stopped learning has no other symptom, and the submission path has no
- * use for it.
+ * byte values — one number per byte — so selecting `weights` here would build a 4,096-
+ * element array at the 1,024 dimensions this model is expected to produce, and up to
+ * 16,384 at the MAX_MODEL_DIMS ceiling, to hand a screen that cannot say anything about
+ * it. `updated_at` is the column this one adds: a classifier that silently stopped
+ * learning has no other symptom, and the submission path has no use for it.
  *
  * Still one rowid seek against a table `CHECK (id = 1)` forbids a second row in, so it
  * costs the authenticated read exactly what the public one costs.
