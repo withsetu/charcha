@@ -161,18 +161,20 @@ describe('the report', () => {
     expect(body.secrets.RESEND_API_KEY).toBe(false)
   })
 
-  it('reports the three email secrets separately, because two of three is off', async () => {
-    // The half-configured case the tab exists for: a key and a recipient with no
-    // from-address sends nothing, and nothing anywhere says so.
+  it('does not report the notification addresses, which stopped being secrets (#207)', async () => {
+    // They are `settings` rows now, answered by `GET /admin/api/settings` where the rest
+    // of the owner's editable configuration already lives. Reporting them here as well
+    // would be a second answer to one question — the reason the allowlist was never in
+    // this report either. The email section on the Setup tab reads both endpoints and
+    // combines them, so nothing was lost by taking them out.
     setEvery(undefined)
     configureSecret('RESEND_API_KEY', 're_test')
-    configureSecret('CHARCHA_NOTIFY_TO', 'maya@example.com')
 
     const body = await readBody()
 
     expect(body.secrets.RESEND_API_KEY).toBe(true)
-    expect(body.secrets.CHARCHA_NOTIFY_TO).toBe(true)
-    expect(body.secrets.CHARCHA_NOTIFY_FROM).toBe(false)
+    expect(Object.keys(body.secrets)).not.toContain('CHARCHA_NOTIFY_TO')
+    expect(Object.keys(body.secrets)).not.toContain('CHARCHA_NOTIFY_FROM')
   })
 
   it('calls a blank secret unset, the way the code that reads it does', async () => {

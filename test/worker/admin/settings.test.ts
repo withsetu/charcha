@@ -7,11 +7,13 @@
 // well, and both of those are kill-shot targets on the PR.
 
 import { env, exports } from 'cloudflare:workers'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALLOWED_ORIGINS_SETTING, MAX_ALLOWED_ORIGINS, readAllowedOrigins } from '../../../src/cors'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import { MODERATION_POLICY_SETTING, getModerationPolicy } from '../../../src/db'
 import { MODERATION_POLICIES } from '../../../src/moderation/policy'
+import { formatFrom } from '../../../src/notify/from'
+import { readSiteSettings } from '../../../src/settings'
 import {
   TEST_PASSWORD,
   configurePassword,
@@ -397,5 +399,198 @@ describe('the moderation policy', () => {
     const response = await write({}, { origin })
 
     expect(response.status).toBe(400)
+  })
+})
+
+// The four settings #207 and #208 moved off `env`, driven through the real endpoint and
+// read back through the functions the Worker itself uses — `readSiteSettings` rather than
+// a `select` written out here, so what these assert is what a submission will act on.
+describe('the settings that used to be secrets (#207, #208)', () => {
+  interface FullBody extends SettingsBody {
+    siteUrl: string
+    notifyFrom: string
+    notifyTo: string
+    notifyFromName: string
+    fromDeprecatedSecrets: string[]
+  }
+
+  async function full(): Promise<FullBody> {
+    return (await read()).json()
+  }
+
+  it('is all-empty on a deployment nobody has configured', async () => {
+    const body = await full()
+
+    expect(body.siteUrl).toBe('')
+    expect(body.notifyFrom).toBe('')
+    expect(body.notifyTo).toBe('')
+    expect(body.notifyFromName).toBe('')
+    expect(body.fromDeprecatedSecrets).toEqual([])
+  })
+
+  it('saves them, and the Worker reads back what was saved', async () => {
+    const response = await write(
+      {
+        siteUrl: 'https://maya.build/blog',
+        notifyFrom: 'comments@maya.build',
+        notifyTo: 'maya@maya.build',
+        notifyFromName: 'maya.build comments',
+      },
+      { origin },
+    )
+
+    expect(response.status).toBe(200)
+    // Through the reader the submission path uses, not through a query written here: the
+    // point of the round trip is that the Worker will act on this, and a `select` would
+    // only prove the row exists.
+    const settings = await readSiteSettings(db, {})
+    expect(settings.siteUrl).toBe('https://maya.build/blog')
+    expect(settings.notifyFrom).toBe('comments@maya.build')
+    expect(settings.notifyTo).toBe('maya@maya.build')
+    expect(settings.notifyFromName).toBe('maya.build comments')
+  })
+
+  it('canonicalises the site URL through the function layer 8 uses', async () => {
+    // Stored as the value the provider will send, not as the spelling that was pasted —
+    // so the dashboard cannot accept an address that then announces itself unusable on
+    // the next comment (#107's shape).
+    await write({ siteUrl: 'https://Maya.Build/blog/?utm_source=x#top' }, { origin })
+
+    expect((await readSiteSettings(db, {})).siteUrl).toBe('https://maya.build/blog')
+  })
+
+  it('refuses a site URL that is not one, and stores nothing', async () => {
+    const response = await write({ siteUrl: 'maya.build' }, { origin })
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('maya.build')
+    expect((await readSiteSettings(db, {})).siteUrl).toBeNull()
+  })
+
+  it('refuses an address that is not one, naming it', async () => {
+    for (const value of ['maya.build', 'maya@@maya.build', 'maya@', '@maya.build']) {
+      const response = await write({ notifyTo: value }, { origin })
+
+      expect(response.status, value).toBe(400)
+    }
+    expect((await readSiteSettings(db, {})).notifyTo).toBeNull()
+  })
+
+  it('refuses an address carrying a display name, and says where the name goes', async () => {
+    // The two are separate fields now (#208), so a pasted `Charcha <a@b>` is a value that
+    // would compose into `Name <Charcha <a@b>>` if it were let through.
+    const response = await write({ notifyFrom: 'Charcha <comments@maya.build>' }, { origin })
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('name field')
+  })
+
+  it('clears a row when the field is sent empty, and leaves it alone when absent', async () => {
+    await write({ notifyTo: 'maya@maya.build', notifyFrom: 'comments@maya.build' }, { origin })
+
+    await write({ notifyTo: '' }, { origin })
+
+    const settings = await readSiteSettings(db, {})
+    expect(settings.notifyTo).toBeNull()
+    // The other field was not in the body, so it is untouched — the lost-update rule #173
+    // established, now across six fields rather than two.
+    expect(settings.notifyFrom).toBe('comments@maya.build')
+  })
+
+  it('saves nothing at all when one field in the body is refused', async () => {
+    await write({ notifyTo: 'maya@maya.build' }, { origin })
+
+    const response = await write(
+      { notifyTo: 'someone@else.example', siteUrl: 'not-a-url' },
+      { origin },
+    )
+
+    expect(response.status).toBe(400)
+    expect((await readSiteSettings(db, {})).notifyTo).toBe('maya@maya.build')
+  })
+
+  it('reports which settings a deprecated secret is still serving, without its value', async () => {
+    // #158's rule holds even though these are no longer secrets: the dashboard renders no
+    // secret's value, so the field stays empty and this list is how the tab says where the
+    // working value is coming from.
+    expect((await full()).fromDeprecatedSecrets).toEqual([])
+
+    // `env` is one object shared by every test file in the isolate, so what was there is
+    // put back — the rule test/worker/admin/env.ts states for the dashboard password.
+    const mutable = env as unknown as { CHARCHA_NOTIFY_TO?: string }
+    const before = mutable.CHARCHA_NOTIFY_TO
+    mutable.CHARCHA_NOTIFY_TO = 'maya@old.example'
+    try {
+      const withSecret = await full()
+
+      expect(withSecret.fromDeprecatedSecrets).toEqual(['notify_to'])
+      // The value never leaves the Worker. #158's rule survives the settings stopping
+      // being secrets: this surface shows a status, never a credential's contents, and a
+      // field prefilled from one is a value the owner would save without deciding to.
+      expect(JSON.stringify(withSecret)).not.toContain('maya@old.example')
+      expect(withSecret.notifyTo).toBe('')
+
+      // And a row wins over it, which is what makes the migration a migration.
+      await write({ notifyTo: 'maya@new.example' }, { origin })
+      const withRow = await full()
+      expect(withRow.fromDeprecatedSecrets).toEqual([])
+      expect(withRow.notifyTo).toBe('maya@new.example')
+    } finally {
+      if (before === undefined) delete mutable.CHARCHA_NOTIFY_TO
+      else mutable.CHARCHA_NOTIFY_TO = before
+    }
+  })
+
+  it('costs one settings statement, not one per row', async () => {
+    // The read answers seven values. One `where key in (…)` is what keeps adding the
+    // eighth free, which is the same rule the submission path follows (#207).
+    const prepare = db.prepare.bind(db)
+    const sent: string[] = []
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      sent.push(sql)
+      return prepare(sql)
+    })
+    await read()
+    spy.mockRestore()
+
+    expect(sent.filter((sql) => sql.includes('from settings'))).toHaveLength(1)
+  })
+})
+
+describe('the From: display name, which is the one setting that reaches a mail header (#208)', () => {
+  it('refuses a name that could forge a header line, and stores nothing', async () => {
+    for (const name of [
+      'Charcha\r\nBcc: victim@example.com',
+      'Charcha <security@bank.example>',
+      'Charcha " comments',
+      'Charcha, Support',
+      'security@bank.example',
+      'Charcha‮comments',
+      'a'.repeat(65),
+    ]) {
+      const response = await write({ notifyFromName: name }, { origin })
+
+      expect(response.status, name).toBe(400)
+    }
+
+    expect((await readSiteSettings(db, {})).notifyFromName).toBeNull()
+  })
+
+  it('names the character it refused, rather than answering “invalid”', async () => {
+    const response = await write({ notifyFromName: 'Charcha <a@b>' }, { origin })
+
+    expect(await response.text()).toContain('<')
+  })
+
+  it('accepts an ordinary name, and it reaches the From line as a display name only', async () => {
+    await write(
+      { notifyFrom: 'comments@maya.build', notifyFromName: 'maya.build comments' },
+      { origin },
+    )
+    const settings = await readSiteSettings(db, {})
+
+    expect(formatFrom(settings.notifyFrom ?? '', settings.notifyFromName)).toBe(
+      'maya.build comments <comments@maya.build>',
+    )
   })
 })
