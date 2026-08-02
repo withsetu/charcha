@@ -70,8 +70,12 @@ const QUOTE_PREFIX = '> '
  *     *within* a line, which is enough to make a `From:` line render as something
  *     other than what is stored. This is the case a column-0 rule does not cover,
  *     which is why the character filter exists alongside it rather than instead of it.
+ *
+ * Exported because src/notify/from.ts refuses the same set in the owner's display name
+ * (#208) — one class rather than a second copy that can drift. What that file adds is CR,
+ * LF and tab, which a plain-text body legitimately contains and a header does not.
  */
-const CONTROL_CHARACTERS =
+export const CONTROL_CHARACTERS =
   // eslint-disable-next-line no-control-regex -- the control characters are the point of this expression
   /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g
 

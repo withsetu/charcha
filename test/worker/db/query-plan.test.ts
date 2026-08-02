@@ -10,6 +10,7 @@ import {
   PURGE_IP_HASH_SQL,
   REPLY_TARGET_SQL,
   STATUS_COUNTS_SQL,
+  settingsBatchSql,
 } from '../../../src/db'
 
 const db = env.DB
@@ -257,6 +258,18 @@ describe('the ip_hash purge', () => {
     const plan = await planOf(PURGE_IP_HASH_SQL, 1000)
 
     expect(plan).toMatch(/USING INDEX comments_by_ip/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+})
+
+describe('the batched settings read', () => {
+  // On the public submission path (#207), where every settings row this project has
+  // is read in one statement. `settings.key` is the primary key, so `in (…)` is a run
+  // of seeks — a scan here would grow with however many settings a deployment has
+  // accumulated, on the request a spammer chooses the rate of.
+  it('seeks the primary key rather than scanning the settings table', async () => {
+    const plan = await planOf(settingsBatchSql(3), 'a', 'b', 'c')
+
     expect(plan).not.toMatch(/\bSCAN\b/)
   })
 })

@@ -850,6 +850,70 @@ export async function readSetting(db: D1Database, key: string): Promise<string |
 }
 
 /**
+ * The most keys one batched settings read will ask for.
+ *
+ * A bound on the statement rather than on the caller: `settingsBatchSql` builds one
+ * placeholder per key, so an unbounded list would build an unbounded statement. Every
+ * caller passes a module-level constant today, which is why this is a backstop rather
+ * than a live limit — and card rule 5's habit is that a size cap exists before somebody
+ * builds the list from a request. Sixteen is well past the six rows this project has.
+ * Enforced by test/worker/db/settings-batch.test.ts.
+ */
+export const MAX_SETTINGS_BATCH = 16
+
+/**
+ * The batched settings read, as a function of how many keys are asked for, so the query
+ * plan can be asserted against the statement this project actually sends.
+ *
+ * `key` is the primary key, so `in (…)` is a run of seeks rather than a scan whatever
+ * else the table has accumulated.
+ * Enforced by test/worker/db/settings-batch.test.ts.
+ */
+export function settingsBatchSql(count: number): string {
+  const placeholders = Array.from({ length: count }, (_, index) => `?${String(index + 1)}`)
+  return `select key, value from settings where key in (${placeholders.join(', ')})`
+}
+
+/**
+ * Several `settings` rows in **one** statement (#207).
+ *
+ * **The count is the point, not the convenience.** `readSetting` costs one seek per row,
+ * and #207 moves three values off `env` into this table while #208 adds a fourth — so the
+ * submission path would go from two potential settings reads to six, and the next setting
+ * would make it seven. CLAUDE.md's rule is that the query count stays *constant* rather
+ * than merely low, because the 50-query invocation budget throws rather than slows down.
+ * One statement per read makes the seventh setting free.
+ *
+ * **A Map rather than a record, because absent and empty are different answers.** The
+ * deprecated `env` fallback (#207) applies only when the owner has never written the row;
+ * a row they deliberately emptied means "none", and a lookup that could not tell the two
+ * apart would silently restore the secret the setting replaced. `has` is that distinction.
+ *
+ * Returns the raw strings and validates nothing, exactly as `readSetting` does: every
+ * setting has its own idea of a usable value, and all of them are untrusted input
+ * regardless of who wrote them.
+ * Enforced by test/worker/db/settings-batch.test.ts.
+ */
+export async function readSettings(
+  db: D1Database,
+  keys: readonly string[],
+): Promise<Map<string, string>> {
+  const wanted = [...new Set(keys)]
+  // No keys, no statement. A caller composing a key list from two modules can legitimately
+  // end up with none, and spending a query to select nothing is a query spent.
+  if (wanted.length === 0) return new Map()
+  if (wanted.length > MAX_SETTINGS_BATCH) {
+    throw new Error(`too many settings keys: ${String(wanted.length)} > ${String(MAX_SETTINGS_BATCH)}`)
+  }
+
+  const { results } = await db
+    .prepare(settingsBatchSql(wanted.length))
+    .bind(...wanted)
+    .all<{ key: string; value: string }>()
+  return new Map(results.map((row) => [row.key, row.value]))
+}
+
+/**
  * Sets one `settings` row, creating it on first write.
  *
  * One statement, so two dashboard tabs saving at once cannot interleave into a row
