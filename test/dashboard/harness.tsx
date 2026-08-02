@@ -172,3 +172,25 @@ export function currentRow(): Element | null {
 export function expectFocusIsCurrentRow(): void {
   expect(document.activeElement).toBe(currentRow())
 }
+
+/**
+ * A `GET /admin/api/settings` body with every field the client validates (#207).
+ *
+ * One helper rather than a literal per test file, because `settingsRequest` in
+ * src/dashboard/api.ts refuses a body missing any of them — which is the point of that
+ * check, and would otherwise mean every settings fixture in this directory has to be
+ * remembered separately the next time a setting is added.
+ */
+export function settingsBody(overrides: Record<string, unknown> = {}) {
+  return {
+    allowedOrigins: [],
+    selfOrigin: 'https://comments.example.com',
+    moderationPolicy: 'hold-all',
+    siteUrl: '',
+    notifyFrom: '',
+    notifyTo: '',
+    notifyFromName: '',
+    fromDeprecatedSecrets: [],
+    ...overrides,
+  }
+}

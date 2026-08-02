@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { SETUP_SECRETS, type SetupSecret } from '../../src/dashboard/api'
 import { Setup } from '../../src/dashboard/components/setup'
-import { apiError, json, stubFetch, unhandled, type Responder } from './harness'
+import { apiError, json, settingsBody, stubFetch, unhandled, type Responder } from './harness'
 
 function noop() {
   return
@@ -33,14 +33,13 @@ function report(set: Partial<Record<SetupSecret, boolean>> = {}, shortPassword =
 }
 
 /**
- * The settings body, with `moderationPolicy` on it because `readSettings` validates that
- * field and refuses a body without one (#173).
+ * The settings body of a deployment that has configured nothing.
+ *
+ * Every field is present because `readSettings` validates each of them and refuses a body
+ * missing one (#173, #207) — see `settingsBody` in ./harness.tsx, which is what keeps that
+ * list in one place across this directory.
  */
-const NO_ORIGINS = {
-  allowedOrigins: [],
-  selfOrigin: 'https://comments.example.com',
-  moderationPolicy: 'hold-all',
-}
+const NO_ORIGINS = settingsBody()
 
 /** Answers both of the panel's reads, and refuses anything else loudly. */
 function answering(setup: () => Response, settings: () => Response = () => json(200, NO_ORIGINS)) {
@@ -87,10 +86,10 @@ describe('a deployment with nothing switched on', () => {
     const commands = [...document.querySelectorAll('pre')].map((block) => block.textContent ?? '')
     expect(commands.join('\n')).toContain('pnpm wrangler secret put TURNSTILE_SECRET_KEY')
     expect(commands.join('\n')).toContain('pnpm wrangler secret put IP_HASH_SECRET')
-    // The email trio is one block, because they are set together or not at all.
-    expect(commands).toContain(
-      'pnpm wrangler secret put RESEND_API_KEY\npnpm wrangler secret put CHARCHA_NOTIFY_FROM\npnpm wrangler secret put CHARCHA_NOTIFY_TO',
-    )
+    // Email notifications are one secret since #207 — the two addresses stopped being
+    // secrets and became fields on this screen, so the command block shrank to the key.
+    expect(commands).toContain('pnpm wrangler secret put RESEND_API_KEY')
+    expect(commands.join('\n')).not.toContain('CHARCHA_NOTIFY')
   })
 
   it('gives the dashboard route too, because most deployers have no terminal', async () => {
@@ -118,8 +117,15 @@ describe('a deployment with everything switched on', () => {
   it('is quiet: no instructions, and nothing to do', async () => {
     // Not a nag, and not congratulatory either. A finished deployment has no commands on
     // this screen at all.
-    answering(() =>
-      json(200, report(Object.fromEntries(SETUP_SECRETS.map((name) => [name, true])))),
+    answering(
+      () => json(200, report(Object.fromEntries(SETUP_SECRETS.map((name) => [name, true])))),
+      // Configured includes the settings now, not only the secrets: email notifications
+      // are the key *and* two addresses, and two of the three are rows since #207.
+      () =>
+        json(
+          200,
+          settingsBody({ notifyFrom: 'comments@maya.build', notifyTo: 'maya@maya.build' }),
+        ),
     )
     mount()
 
@@ -133,20 +139,137 @@ describe('a deployment with everything switched on', () => {
   })
 })
 
-describe('email notifications, which are three secrets or nothing', () => {
-  it('reports a half-configured deployment as off, and says which half', async () => {
-    answering(() => json(200, report({ RESEND_API_KEY: true, CHARCHA_NOTIFY_TO: true })))
+describe('email notifications, which are a key and two addresses or nothing (#207)', () => {
+  it('reports a half-configured deployment as off, whichever half is missing', async () => {
+    // The key set and no recipient. It is still all-or-nothing, and the badge has to say
+    // off — a deployment that reads as on and sends nothing is #107 on this screen.
+    answering(
+      () => json(200, report({ RESEND_API_KEY: true })),
+      () => json(200, settingsBody({ notifyFrom: 'comments@maya.build' })),
+    )
     mount()
 
     await screen.findByText('Email notifications')
     expect(panelText()).toContain('Partly set up, so nothing is sent')
-    // Every one of the three is listed with its own state, which is the whole of "say
-    // which are missing".
-    expect(screen.getAllByText('Set').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getAllByText('Not set').length).toBeGreaterThanOrEqual(1)
-    // And only the missing one is in the command block.
+    // The key is set, so no command block for it, and the addresses are fields rather
+    // than status rows.
+    expect(panelText()).not.toContain('wrangler secret put RESEND_API_KEY')
+    expect(screen.getByLabelText('Send notifications to')).toBeTruthy()
+  })
+
+  it('reports the missing key as off even when both addresses are saved', async () => {
+    answering(
+      () => json(200, report()),
+      () =>
+        json(
+          200,
+          settingsBody({ notifyFrom: 'comments@maya.build', notifyTo: 'maya@maya.build' }),
+        ),
+    )
+    mount()
+
+    await screen.findByText('Email notifications')
+    expect(panelText()).toContain('Partly set up, so nothing is sent')
     const commands = [...document.querySelectorAll('pre')].map((block) => block.textContent ?? '')
-    expect(commands).toContain('pnpm wrangler secret put CHARCHA_NOTIFY_FROM')
+    expect(commands).toContain('pnpm wrangler secret put RESEND_API_KEY')
+  })
+
+  it('puts the saved addresses in the fields, so an owner can see what is stored', async () => {
+    answering(
+      () => json(200, report({ RESEND_API_KEY: true })),
+      () =>
+        json(
+          200,
+          settingsBody({
+            notifyFrom: 'comments@maya.build',
+            notifyTo: 'maya@maya.build',
+            notifyFromName: 'maya.build comments',
+          }),
+        ),
+    )
+    mount()
+
+    await screen.findByText('Email notifications')
+    expect((screen.getByLabelText('Send notifications to') as HTMLInputElement).value).toBe(
+      'maya@maya.build',
+    )
+    expect((screen.getByLabelText('Send them from') as HTMLInputElement).value).toBe(
+      'comments@maya.build',
+    )
+    expect((screen.getByLabelText('Sender name (optional)') as HTMLInputElement).value).toBe(
+      'maya.build comments',
+    )
+  })
+
+  it('sends the three settings when the form is saved, and shows the server’s answer back', async () => {
+    let saved: unknown = null
+    const stub = stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ RESEND_API_KEY: true }))
+      if (call.method === 'GET') return json(200, settingsBody())
+      saved = call.body
+      // Trimmed by the server, which is what the field must show afterwards rather than
+      // what was typed.
+      return json(
+        200,
+        settingsBody({
+          notifyFrom: 'comments@maya.build',
+          notifyTo: 'maya@maya.build',
+          notifyFromName: 'Charcha',
+        }),
+      )
+    })
+    mount()
+
+    await screen.findByText('Email notifications')
+    fireEvent.change(screen.getByLabelText('Send notifications to'), {
+      target: { value: 'maya@maya.build' },
+    })
+    fireEvent.change(screen.getByLabelText('Send them from'), {
+      target: { value: 'comments@maya.build' },
+    })
+    // Untrimmed on purpose, and on the one field that keeps what is typed: an `input`
+    // of type `email` or `url` strips surrounding whitespace itself, so only this field
+    // can show that the *server's* answer is what the form ends up displaying.
+    fireEvent.change(screen.getByLabelText('Sender name (optional)'), {
+      target: { value: '  Charcha  ' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }))
+
+    await waitFor(() => {
+      expect(saved).toEqual({
+        notifyFrom: 'comments@maya.build',
+        notifyTo: 'maya@maya.build',
+        notifyFromName: '  Charcha  ',
+      })
+    })
+    await waitFor(() => {
+      expect((screen.getByLabelText('Sender name (optional)') as HTMLInputElement).value).toBe(
+        'Charcha',
+      )
+    })
+    expect(stub.paths()).toContain('/admin/api/settings')
+  })
+
+  it('shows the server’s refusal verbatim rather than restating the rules (#208)', async () => {
+    // The sender name is the one field on this tab whose value reaches a mail header, and
+    // the Worker names the character it refused (src/admin/settings.ts). A second copy of
+    // those rules here is two lists that can disagree on the field where being wrong
+    // writes a From: line.
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ RESEND_API_KEY: true }))
+      if (call.method === 'GET') return json(200, settingsBody())
+      return apiError(400, 'BAD_REQUEST', 'A sender name cannot contain “<”.')
+    })
+    mount()
+
+    await screen.findByText('Email notifications')
+    fireEvent.change(screen.getByLabelText('Sender name (optional)'), {
+      target: { value: 'Charcha <security@bank.example>' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }))
+
+    expect(await screen.findByText(/A sender name cannot contain/)).toBeTruthy()
+    expect(panelText()).toContain('Nothing on this deployment has been changed')
   })
 
   it('says the from-address needs a verified domain, and that failure is silence', async () => {
@@ -156,6 +279,78 @@ describe('email notifications, which are three secrets or nothing', () => {
     await screen.findByText('Email notifications')
     expect(panelText()).toContain('verified with your email provider')
     expect(panelText()).toContain('looks exactly like the feature being switched off')
+  })
+
+  it('says where the value is coming from when a deprecated secret is still serving it', async () => {
+    // The #207 migration, on screen. The value is not rendered — #158's rule is that this
+    // surface shows no secret's value — so the field is empty and the alert is what stops
+    // that reading as "your notifications are unconfigured".
+    answering(
+      () => json(200, report({ RESEND_API_KEY: true })),
+      () =>
+        json(200, settingsBody({ fromDeprecatedSecrets: ['notify_from', 'notify_to'] })),
+    )
+    mount()
+
+    await screen.findByText('Email notifications')
+    expect(panelText()).toContain('still coming from secrets you set with wrangler')
+    expect((screen.getByLabelText('Send notifications to') as HTMLInputElement).value).toBe('')
+    // And it is reported as on, because it genuinely is.
+    expect(panelText()).not.toContain('Partly set up')
+  })
+})
+
+describe('your site’s address, which used to be a secret (#207)', () => {
+  it('puts the saved value in a field rather than a wrangler command', async () => {
+    answering(
+      () => json(200, report()),
+      () => json(200, settingsBody({ siteUrl: 'https://maya.build' })),
+    )
+    mount()
+
+    await screen.findByText('Your site’s address')
+    expect((screen.getByLabelText('Home page address') as HTMLInputElement).value).toBe(
+      'https://maya.build',
+    )
+    expect(panelText()).not.toContain('wrangler secret put CHARCHA_SITE_URL')
+  })
+
+  it('sends only the site address, so a save here cannot undo anything else', async () => {
+    let saved: unknown = null
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report())
+      if (call.method === 'GET') return json(200, settingsBody())
+      saved = call.body
+      return json(200, settingsBody({ siteUrl: 'https://maya.build' }))
+    })
+    mount()
+
+    await screen.findByText('Your site’s address')
+    fireEvent.change(screen.getByLabelText('Home page address'), {
+      target: { value: 'https://maya.build/' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save site address' }))
+
+    await waitFor(() => {
+      expect(saved).toEqual({ siteUrl: 'https://maya.build/' })
+    })
+    // The canonical form the server stored, not the spelling that was typed — the same
+    // feedback the allowlist gives.
+    await waitFor(() => {
+      expect((screen.getByLabelText('Home page address') as HTMLInputElement).value).toBe(
+        'https://maya.build',
+      )
+    })
+  })
+
+  it('has no On or Off badge, because empty is a working default', async () => {
+    answering(() => json(200, report()))
+    mount()
+
+    const heading = await screen.findByText('Your site’s address')
+    const section = heading.closest('section')
+    expect(section?.textContent).not.toContain('Off')
+    expect(section?.textContent).not.toContain('On ')
   })
 })
 
@@ -175,6 +370,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
       'Email notifications',
       'Per-commenter rate limiting',
       'Third-party spam service',
+      'Your site’s address',
       'Allowed origins',
     ])
   })
@@ -295,6 +491,7 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
       'Email notifications',
       'Per-commenter rate limiting',
       'Third-party spam service',
+      'Your site’s address',
       'Allowed origins',
     ])
   })
@@ -434,11 +631,7 @@ describe('the allowed origins, which are the one thing here that is editable', (
     answering(
       () => json(200, report()),
       () =>
-        json(200, {
-          allowedOrigins: ['https://maya.build'],
-          selfOrigin: 'https://c.example',
-          moderationPolicy: 'hold-all',
-        }),
+        json(200, settingsBody({ allowedOrigins: ['https://maya.build'], selfOrigin: 'https://c.example' })),
     )
     mount({ onEditOrigins })
 
@@ -456,11 +649,7 @@ describe('the allowed origins, which are the one thing here that is editable', (
     const stub = answering(
       () => json(200, report()),
       () =>
-        json(200, {
-          allowedOrigins: stored,
-          selfOrigin: 'https://c.example',
-          moderationPolicy: 'hold-all',
-        }),
+        json(200, settingsBody({ allowedOrigins: stored, selfOrigin: 'https://c.example' })),
     )
     const { rerender } = render(<Setup onEditOrigins={noop} onExpired={noop} originsSavedAt={0} />)
     expect(await screen.findByText('https://old.example')).toBeTruthy()
@@ -478,15 +667,23 @@ describe('the allowed origins, which are the one thing here that is editable', (
     expect(reads()).toBe(2)
   })
 
-  it('does not offer a save button for anything a Worker cannot write', async () => {
-    // A Worker cannot set its own secrets, so a control that looked like it could would
-    // be a dead button. The only one on this panel is the origins editor.
+  it('offers a control for every setting and none for any secret', async () => {
+    // **The line #158 drew, restated now that four settings are editable here.** A Worker
+    // cannot write its own secrets, so a Save button beside one would be a dead control —
+    // and every button on this panel has to belong to something that genuinely lives in
+    // the database. `Off` sections for `TURNSTILE_SECRET_KEY`, `IP_HASH_SECRET`,
+    // `AKISMET_API_KEY` and `RESEND_API_KEY` are all rendered by this fixture, so a
+    // button that had crept onto one of them would be in this list.
     answering(() => json(200, report()))
     mount()
 
     await screen.findByText('Email notifications')
     const buttons = screen.getAllByRole('button').map((button) => button.textContent)
-    expect(buttons).toEqual(['Edit allowed origins'])
+    expect(buttons).toEqual([
+      'Save notification settings',
+      'Save site address',
+      'Edit allowed origins',
+    ])
   })
 })
 
@@ -554,13 +751,17 @@ describe('what it refuses to do', () => {
 
     await screen.findByText('Could not read what is configured')
     // Both reads fail offline, and every section that depended on one says so rather
-    // than any of them silently rendering as an answer. Three, not two: the settings
-    // read feeds the moderation policy as well as the allowlist (#173), and a policy
-    // control that rendered `hold-all` as selected on a failed read would be telling
-    // an owner their comments are being held on the strength of nothing.
-    expect(screen.getAllByText(/Check your connection/)).toHaveLength(3)
+    // than any of them silently rendering as an answer — an empty address field on a
+    // failed read reads as *not configured*, which is indistinguishable from the truth,
+    // the same argument #173 made for the policy control not rendering `hold-all` as
+    // Four rather than three: the site address is a settings section of its own now
+    // (#207). The notification form is not a fifth, because it lives inside the Email
+    // section, which the *setup* read gates — on a total outage that section is absent
+    // rather than showing a failure alert of its own.
+    expect(screen.getAllByText(/Check your connection/)).toHaveLength(4)
     expect(screen.getByText('Could not read the allowed origins')).toBeTruthy()
     expect(screen.getByText('Could not read the moderation policy')).toBeTruthy()
+    expect(screen.getByText('Could not read your site’s address')).toBeTruthy()
   })
 
   it('ends the session on a 401, the way every other call on this surface does', async () => {
@@ -616,6 +817,19 @@ describe('the moderation policy', () => {
     return screen.getByRole('radio', { name })
   }
 
+  /**
+   * The moderation section's own status line.
+   *
+   * Scoped since #207: the notification form and the site-address form each have one too,
+   * so an unscoped `getByRole('status')` finds three and throws.
+   */
+  function policyStatus(): string {
+    const section = screen.getByText('Moderation policy').closest('section')
+    if (section === null) throw new Error('the Moderation policy heading is not inside a section')
+    const status = section.querySelector('[role="status"]')
+    return status?.textContent ?? ''
+  }
+
   it('shows the policy this deployment is on, not a guess', async () => {
     stubFetch(policyResponder('trust-returning'))
     mount()
@@ -669,7 +883,9 @@ describe('the moderation policy', () => {
     fireEvent.click(option(/trust a commenter/i))
 
     await waitFor(() => {
-      expect(screen.getByRole('status').textContent).toContain('saved')
+      // Scoped: the notification and site-address forms each have a status line of their
+      // own now, so an unscoped `getByRole('status')` finds three.
+      expect(policyStatus()).toContain('saved')
     })
     expect(option(/hold every comment/i).getAttribute('aria-checked')).toBe('true')
   })

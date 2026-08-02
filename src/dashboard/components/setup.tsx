@@ -369,9 +369,10 @@ export function Setup({
         */}
         What this deployment has been given, and what it has not. Everything below carrying an On or
         Off badge is optional — a Charcha that takes comments and holds them for you needs none of
-        it — and none of <em>those</em> are set from this screen, because a Worker cannot write its
-        own secrets. The moderation policy and the allowed origins are settings rather than secrets,
-        and those two are edited here.
+        it. The parts that are <em>credentials</em> cannot be set from this screen, because a Worker
+        cannot write its own secrets; everything else — the moderation policy, your notification
+        addresses, your site’s address and the allowed origins — is a setting, and settings are
+        edited here.
       </p>
 
       {/*

@@ -23,7 +23,16 @@ import { describe, expect, it } from 'vitest'
 
 import { SETUP_SECRETS } from '../../src/dashboard/api'
 import { Triage } from '../../src/dashboard/components/triage'
-import { comment, decision, json, queuePage, stubFetch, unhandled, type FetchStub } from './harness'
+import {
+  comment,
+  decision,
+  json,
+  queuePage,
+  settingsBody,
+  stubFetch,
+  unhandled,
+  type FetchStub,
+} from './harness'
 
 function noop() {
   return
@@ -49,7 +58,7 @@ async function mountQueue(): Promise<FetchStub> {
       })
     }
     if (call.path === '/admin/api/settings') {
-      return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+      return json(200, settingsBody())
     }
     return unhandled(call)
   })
@@ -255,7 +264,7 @@ describe('the shortcut listener', () => {
         })
       }
       if (call.path === '/admin/api/settings') {
-        return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+        return json(200, settingsBody())
       }
       return unhandled(call)
     })
