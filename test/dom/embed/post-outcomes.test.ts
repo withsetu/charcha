@@ -23,7 +23,8 @@ const API = 'https://comments.example.com'
 const CONFIG: EmbedConfig = { api: API, thread: null, styles: 'inherit', turnstileSitekey: null }
 
 const READ_FAILED = 'Comments could not be loaded.'
-const POSTED_PENDING = 'Thanks — your comment is awaiting review. Only you can see it here.'
+const POSTED_PENDING =
+  'Thanks — your comment is awaiting review. It will appear here once it is approved. Nothing is kept in your browser, so reloading clears this note.'
 const POSTED_PUBLISHED = 'Thanks — your comment is published.'
 const POSTED_UNSHOWN =
   'Your comment was received, but it could not be shown here. ' +

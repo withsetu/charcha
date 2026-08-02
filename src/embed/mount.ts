@@ -42,7 +42,20 @@ import type { TurnstileApi, TurnstileGate } from './turnstile'
 
 const LOADING = 'Loading comments…'
 const READ_FAILED = 'Comments could not be loaded.'
-const POSTED_PENDING = 'Thanks — your comment is awaiting review. Only you can see it here.'
+// **The last clause is the whole of #200, and it is there because the alternative
+// is barred.** "Only you can see it here" was the previous wording, and it reads as
+// a promise that the comment is being kept — so the reload that clears it reads as
+// data loss, which is the conclusion the owner reached on charcha.dev's own thread.
+//
+// The reflex fix is to keep the pending comment in `localStorage`. That is card
+// rule 8, and the claim it would falsify is published in absolute terms — its value
+// is that a sceptic can confirm it in devtools in five seconds, which a version with
+// one exception cannot offer. So the receipt says what happens instead: the note is
+// not kept, and saying so turns a suspected bug into the promise being visible.
+// Enforced by test/dom/embed/post-outcomes.test.ts.
+const POSTED_PENDING =
+  'Thanks — your comment is awaiting review. It will appear here once it is approved. ' +
+  'Nothing is kept in your browser, so reloading clears this note.'
 const POSTED_PUBLISHED = 'Thanks — your comment is published.'
 /**
  * The third outcome of an accepted comment: the server took it, and sent back
