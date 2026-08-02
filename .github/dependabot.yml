@@ -110,3 +110,28 @@ updates:
         dependency-type: 'development'
         patterns:
           - '*'
+        # Minor and patch only, so a major never rides in beside routine bumps.
+        # #199 was seven dev updates in one PR, three of them majors, and it
+        # failed on `typescript-eslint does not support TS 7.0` — which named the
+        # culprit only by luck. With two majors in one batch the second one's
+        # breakage would have been attributed to the first, which is the failure
+        # CLAUDE.md's one-dependency-per-change rule exists to prevent.
+        #
+        # Anything excluded from a group gets its own pull request rather than
+        # being dropped: "any outdated dependencies that do not match a rule are
+        # updated in individual pull requests". So a major still arrives, alone,
+        # with a changelog somebody reads and a CI run that means something.
+        #
+        # The bare `minor` / `patch` spelling is the one groups take. The
+        # `version-update:semver-*` form belongs to `ignore`, and using it here
+        # produces a group that silently matches nothing.
+        # Source, checked 2026-08-02:
+        #   https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+        #
+        # Two majors are known to be waiting behind this and neither should be
+        # merged by reflex: `typescript` 7 is ahead of what typescript-eslint
+        # supports, and `@types/node` should track `.nvmrc` (22) rather than
+        # latest, or this project typechecks against APIs its runtime lacks.
+        update-types:
+          - 'minor'
+          - 'patch'
