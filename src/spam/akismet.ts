@@ -110,13 +110,13 @@ export function akismetProvider(config: AkismetConfig): SpamProvider | null {
   if (!hasKey && !hasSite) return null
 
   if (!hasSite) {
-    announce('akismet:no-site-url', false, 'AKISMET_API_KEY is set but CHARCHA_SITE_URL is not', {
-      fix: 'set CHARCHA_SITE_URL to your site’s home page URL, or unset AKISMET_API_KEY to leave layer 8 off',
+    announce('akismet:no-site-url', false, 'AKISMET_API_KEY is set but the site_url setting is not', {
+      fix: 'set your site’s address under Setup in your Charcha dashboard, or unset AKISMET_API_KEY to leave layer 8 off',
     })
     return null
   }
   if (!hasKey) {
-    announce('akismet:no-api-key', false, 'CHARCHA_SITE_URL is set but AKISMET_API_KEY is not', {
+    announce('akismet:no-api-key', false, 'the site_url setting is set but AKISMET_API_KEY is not', {
       fix: 'set AKISMET_API_KEY, or leave layer 8 off — every other spam layer runs without it',
     })
     return null
@@ -128,8 +128,8 @@ export function akismetProvider(config: AkismetConfig): SpamProvider | null {
     // unusable one means every check would spend a metered call to be told
     // `invalid` — the site owner paying, per comment, for an answer that cannot
     // arrive.
-    announce('akismet:bad-site-url', false, 'CHARCHA_SITE_URL is not an http(s) URL', {
-      fix: 'set CHARCHA_SITE_URL to an absolute URL, scheme included — https://example.com',
+    announce('akismet:bad-site-url', false, 'the site_url setting is not an http(s) URL', {
+      fix: 'set your site’s address to an absolute URL, scheme included — https://example.com',
     })
     return null
   }
@@ -313,7 +313,7 @@ function reportAlert(response: Response): void {
 }
 
 /**
- * The `blog` value, or `null` if the owner's `CHARCHA_SITE_URL` cannot be one.
+ * The `blog` value, or `null` if the owner's `site_url` setting cannot be one.
  *
  * Query and fragment are dropped — Akismet wants "the front page or home URL", and
  * a `?utm_source` pasted in from a browser bar would make the site unrecognisable

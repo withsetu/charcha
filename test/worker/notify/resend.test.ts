@@ -12,7 +12,8 @@ import type { EmailMessage } from '../../../src/notify/resend'
 const API_KEY = 'test-not-a-real-key'
 
 const message: EmailMessage = {
-  from: 'Charcha <comments@maya.build>',
+  fromAddress: 'comments@maya.build',
+  fromName: 'Charcha',
   to: 'maya@maya.build',
   subject: 'New comment awaiting moderation',
   text: 'A new comment is waiting.',
@@ -70,7 +71,9 @@ describe('sendEmail — the documented request', () => {
 
     expect(Object.keys(calls[0]?.body ?? {}).sort()).toEqual(['from', 'subject', 'text', 'to'])
     expect(calls[0]?.body).toEqual({
-      from: message.from,
+      // Composed here from the two fields the message carries separately (#208) — the
+      // one shape Resend documents, `Name <email@example.com>`.
+      from: 'Charcha <comments@maya.build>',
       to: message.to,
       subject: message.subject,
       text: message.text,
@@ -167,5 +170,34 @@ describe('sendEmail — failure, which must never become an exception', () => {
     })
 
     expect(outcome).toEqual({ ok: true, id: null })
+  })
+})
+
+describe('the From line (#208)', () => {
+  // The display name is owner configuration that ends up in a mail header, which makes it
+  // the highest-risk string this project sends. `formatFrom` is the guard and
+  // test/worker/notify/from.test.ts is where its rules are pinned; these two assert that
+  // the payload actually goes through it, which is the part a refactor could quietly undo.
+  it('composes the name and the address into the one field Resend takes', async () => {
+    const { calls, fetchImpl } = resend({ id: 'x' })
+
+    await sendEmail({ ...message, fromName: 'maya.build comments' }, { apiKey: API_KEY, fetch: fetchImpl })
+
+    expect(calls[0]?.body.from).toBe('maya.build comments <comments@maya.build>')
+  })
+
+  it('never lets a display name change which address the mail claims to be from', async () => {
+    const { calls, fetchImpl } = resend({ id: 'x' })
+
+    for (const fromName of [
+      'Charcha\r\nBcc: victim@example.com',
+      'Charcha <security@bank.example>',
+      'a"b',
+      null,
+    ]) {
+      await sendEmail({ ...message, fromName }, { apiKey: API_KEY, fetch: fetchImpl })
+    }
+
+    for (const call of calls) expect(call.body.from).toBe('comments@maya.build')
   })
 })

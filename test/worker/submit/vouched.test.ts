@@ -15,6 +15,7 @@
 import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { MODERATION_POLICY_SETTING, writeSetting } from '../../../src/db'
+import { readSiteSettings } from '../../../src/settings'
 import { runSubmission } from '../../../src/submit/pipeline'
 import type { SpamCheck, SpamVerdict } from '../../../src/submit/spam'
 
@@ -32,9 +33,18 @@ function verdict(action: SpamVerdict): SpamCheck {
 
 let bodyCounter = 0
 
-function post(options: { verdict: SpamVerdict; email?: string | null; noIpSecret?: boolean }) {
+/**
+ * One public submission, through the same two steps the route takes (#207): resolve every
+ * settings row in one read, then run the pipeline with the policy that read produced.
+ *
+ * Written this way rather than passing a policy literal so that these tests still exercise
+ * the row — the setting is what an owner edits, and a test that handed the pipeline the
+ * answer directly would pass on a deployment where the row was never read.
+ */
+async function post(options: { verdict: SpamVerdict; email?: string | null; noIpSecret?: boolean }) {
   bodyCounter += 1
   const email = options.email === undefined ? 'rahul@kanwar.example' : options.email
+  const { moderationPolicy } = await readSiteSettings(db, {})
   return runSubmission(
     {
       authorName: 'Rahul Kanwar',
@@ -50,6 +60,7 @@ function post(options: { verdict: SpamVerdict; email?: string | null; noIpSecret
         headers: { 'cf-connecting-ip': '203.0.113.9' },
       }),
       now: t0,
+      moderationPolicy,
       // Passed by default, so the identity the returning-commenter path needs actually
       // exists and the tests below distinguish "not trusted" from "not identifiable".
       ...(options.noIpSecret === true ? {} : { ipSecret: IP_SECRET }),

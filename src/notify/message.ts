@@ -166,8 +166,14 @@ export function buildOwnerNotification(event: CommentCreatedEvent, suppressed = 
   lines.push(
     'Open the moderation queue in your Charcha dashboard to approve or reject it.',
     '',
-    'You are getting this because CHARCHA_NOTIFY_TO is set on your Charcha Worker.',
-    'Unset it to stop these emails.',
+    // Names the surface the owner can act on rather than the secret it used to be
+    // (#207). "Unset CHARCHA_NOTIFY_TO" was an instruction that needed a terminal, a
+    // checkout and wrangler; the setting is a field on a page they are already signed in
+    // to. The deprecated secret is still read when the row was never written, and an
+    // owner in that state is told so once per isolate in their Worker's log rather than
+    // in every email — see rowOrSecret in src/settings.ts.
+    'You are getting this because a notification address is set on your Charcha deployment.',
+    'Clear it under Setup in your Charcha dashboard to stop these emails.',
   )
 
   return {

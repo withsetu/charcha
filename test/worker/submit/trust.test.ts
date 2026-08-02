@@ -14,6 +14,7 @@
 import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { MODERATION_POLICY_SETTING, writeSetting } from '../../../src/db'
+import { readSiteSettings } from '../../../src/settings'
 import { runSubmission } from '../../../src/submit/pipeline'
 import { allowAllSpamCheck } from '../../../src/submit/spam'
 import type { SpamCheck, SpamVerdict } from '../../../src/submit/spam'
@@ -47,10 +48,19 @@ interface PostOptions {
 
 let bodyCounter = 0
 
-/** One public submission, with everything the trust decision reads made explicit. */
-function post(options: PostOptions = {}) {
+/**
+ * One public submission, through the same two steps the route takes (#207): resolve every
+ * settings row in one statement, then run the pipeline with the policy that read produced.
+ *
+ * The settings read goes through the *same* binding the pipeline gets, which is what keeps
+ * the query-budget block below counting the whole of what a submission costs — and what
+ * makes the failing-database cases cover the read that now happens first.
+ */
+async function post(options: PostOptions = {}) {
   bodyCounter += 1
   const email = options.email === undefined ? REGULAR : options.email
+  const database = options.db ?? db
+  const { moderationPolicy } = await readSiteSettings(database, {})
   return runSubmission(
     {
       authorName: 'Rahul Kanwar',
@@ -59,10 +69,11 @@ function post(options: PostOptions = {}) {
       ...(email === null ? {} : { authorEmail: email }),
     },
     {
-      db: options.db ?? db,
+      db: database,
       spamCheck: options.spamCheck ?? allowAllSpamCheck,
       request: requestFrom(options.from ?? HER_ADDRESS),
       now: t0,
+      moderationPolicy,
       ipSecret: IP_SECRET,
     },
   )
@@ -354,10 +365,19 @@ describe('the query budget', () => {
    * numbers below do not move with the number of comments on the page, in the thread, or
    * in the commenter's history, which is what the fixture's forty comments check.
    *
-   * The baseline is `getOrCreateThread` + `insertComment`; `allowAllSpamCheck` reads
-   * nothing. A trust decision adds at most two: the policy row, and the identity seek.
+   * The baseline is the settings read + `getOrCreateThread` + `insertComment`;
+   * `allowAllSpamCheck` reads nothing. A trust decision adds at most one: the identity
+   * seek.
+   *
+   * **The settings read is one statement and it is in the baseline, which is #207.** It
+   * used to be a `readSetting` for the policy, conditional on the commenter having given
+   * an email — so a comment with an address cost one more than a comment without. Now the
+   * moderation policy, the site URL layer 8 needs and the notifier's two addresses and
+   * display name are one `where key in (…)`, and the constant that would have grown to
+   * five does not move at all. The seventh setting will cost nothing either.
    */
-  const BASELINE = 2
+  const SETTINGS_READ = 1
+  const BASELINE = SETTINGS_READ + 2
 
   function counting(): { statements: string[]; wrapped: D1Database } {
     const statements: string[] = []
@@ -380,15 +400,28 @@ describe('the query budget', () => {
     expect(statements).toHaveLength(BASELINE)
   })
 
-  it('costs one extra — the policy row — on the default deployment', async () => {
+  it('costs the same on the default deployment as under a policy that publishes', async () => {
+    // The reads a submission makes no longer depend on which policy is stored: the row is
+    // in the batch either way. What differs is only whether the identity seek below is
+    // reached.
     const { statements, wrapped } = counting()
 
     await post({ db: wrapped })
 
-    expect(statements).toHaveLength(BASELINE + 1)
+    expect(statements).toHaveLength(BASELINE)
   })
 
-  it('costs two extra under trust-returning, whatever the commenter has posted', async () => {
+  it('reads every setting in one statement, not one per row', async () => {
+    // The property the constant above rests on, asserted directly rather than inferred
+    // from a total that a second settings read would also satisfy.
+    const { statements, wrapped } = counting()
+
+    await post({ db: wrapped })
+
+    expect(statements.filter((sql) => sql.includes('from settings'))).toHaveLength(1)
+  })
+
+  it('costs one extra under trust-returning, whatever the commenter has posted', async () => {
     await trustReturning()
     for (let i = 0; i < 40; i += 1) {
       await post({ body: `An earlier comment from the same person, number ${i}.` })
@@ -399,13 +432,14 @@ describe('the query budget', () => {
     const result = await post({ db: wrapped })
 
     expect(result.outcome).toBe('published')
-    expect(statements).toHaveLength(BASELINE + 2)
+    expect(statements).toHaveLength(BASELINE + 1)
   })
 
   it('costs nothing extra for a comment a layer held', async () => {
-    // A held comment cannot be published whatever the policy says, so asking is spending
-    // a query on an answer nobody reads — the same argument `reviewOnly` makes in
-    // src/spam/layer.ts.
+    // A held comment cannot be published whatever the policy says, so the identity seek is
+    // never reached — the same argument `reviewOnly` makes in src/spam/layer.ts. The
+    // settings read still happens, because it happens before the layers run and the
+    // notifier's addresses come out of it.
     await trustReturning()
     const { statements, wrapped } = counting()
 

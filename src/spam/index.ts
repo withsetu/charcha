@@ -56,7 +56,7 @@ import { classifierLayer } from './classifier'
 import type { ClassifierConfig } from './classifier'
 import { contentLayer } from './content'
 import type { ContentConfig } from './content'
-import type { SpamEnv } from './env'
+import type { SpamConfig } from './env'
 import { honeypotLayer } from './honeypot'
 import { runLayers } from './layer'
 import type { SpamLayer } from './layer'
@@ -105,14 +105,14 @@ export interface SpamCheckOverrides {
 /**
  * Builds the check the Worker's POST /comments route runs.
  *
- * Configuration comes from `env` — four optional secrets, none of which a one-click
- * deploy sets — and thresholds come from constants that #66 will move to the
- * `settings` table. `overrides` exists so tests can inject a siteverify stand-in,
- * pin a threshold, and stand in for the third-party provider; nothing in production
- * passes it.
+ * Configuration comes from three optional secrets, none of which a one-click deploy sets,
+ * plus the `site_url` setting the caller resolved (#207) — and thresholds come from
+ * constants that #66 will move to the `settings` table. `overrides` exists so tests can
+ * inject a siteverify stand-in, pin a threshold, and stand in for the third-party
+ * provider; nothing in production passes it.
  */
 export function createSpamCheck(
-  env: SpamEnv,
+  env: SpamConfig,
   overrides: SpamCheckOverrides = {},
 ): SpamCheck & {
   /** The assembled order, for the test that pins it. Never branched on. */
@@ -130,9 +130,12 @@ export function createSpamCheck(
       overrides.provider ?? {
         provider: akismetProvider({
           apiKey: env.AKISMET_API_KEY,
-          siteUrl: env.CHARCHA_SITE_URL,
+          // The `site_url` setting, resolved by the caller (#207) — including the
+          // fallback to the deprecated `CHARCHA_SITE_URL` secret, which happens in
+          // src/settings.ts so that this file has one source for it rather than two.
+          siteUrl: env.siteUrl ?? undefined,
         }),
-        siteUrl: env.CHARCHA_SITE_URL,
+        siteUrl: env.siteUrl ?? undefined,
       },
     ),
   ]

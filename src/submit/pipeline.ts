@@ -10,14 +10,9 @@
 
 import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
-import {
-  getModerationPolicy,
-  getOrCreateThread,
-  insertComment,
-  isReplyTarget,
-  readCommenterTrust,
-} from '../db'
+import { getOrCreateThread, insertComment, isReplyTarget, readCommenterTrust } from '../db'
 import type { StoredComment } from '../db'
+import type { ModerationPolicy } from '../moderation/policy'
 import type { Notifier } from '../notify'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { clientIp, hashIp, usableIpSecret } from '../spam/ip'
@@ -38,6 +33,21 @@ export interface SubmitDeps {
    * until the owner names one. See src/page-key.ts.
    */
   significantParams?: readonly string[]
+  /**
+   * The moderation policy (#173), read by the caller rather than here (#207).
+   *
+   * **It used to be a `getModerationPolicy` call inside `autoApproved`, and moving it out
+   * is what makes the settings cost on this path constant.** Every settings row this
+   * request needs now comes from one batched statement in the route
+   * (`readSiteSettings`, src/settings.ts), so the sixth setting costs no query — where
+   * a read per row would have made the policy one of six seeks.
+   *
+   * Absent means `hold-all`, which is both the default on every deployment and the
+   * fail-closed answer: a caller who forgot to resolve the policy holds comments for
+   * review rather than publishing a stranger's.
+   * Enforced by test/worker/submit/trust.test.ts.
+   */
+  moderationPolicy?: ModerationPolicy
   strings?: CommentStrings
   /**
    * The HMAC key for `comments.ip_hash`. Absent means no hash is stored at all,
@@ -161,6 +171,7 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     verdict,
     ipHash,
     authorEmail: comment.authorEmail ?? null,
+    policy: deps.moderationPolicy ?? 'hold-all',
   })
 
   // No status is passed: insertComment derives it from byOwner — which this public
@@ -208,10 +219,12 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
  * path where failing open would publish a stranger's comment.
  *
  * **A database error is deliberately not caught here, and that is closed rather than
- * open.** Either read throwing propagates out of `runSubmission` as it does for
+ * open.** The remaining read throwing propagates out of `runSubmission` as it does for
  * `getOrCreateThread` and `insertComment`, so the reader gets an error and is told their
  * comment did not post — which is true, because `insertComment` is downstream of this
- * line and never ran. A `catch` returning `false` would be the tempting shape and the
+ * line and never ran. The same holds one step earlier, for the batched settings read the
+ * policy now arrives from: it happens before the spam check, and a failure there is a 500
+ * with nothing stored. A `catch` returning `false` would be the tempting shape and the
  * wrong one: it would store the comment as `pending` while reporting success, which is
  * the right *status* reached by hiding a fault the deployment needs to know about.
  * Enforced by test/worker/submit/trust.test.ts.
@@ -240,6 +253,8 @@ async function autoApproved(input: {
   verdict: SpamVerdict
   ipHash: string | null
   authorEmail: string | null
+  /** Already read, from the one batched settings statement this request makes (#207). */
+  policy: ModerationPolicy
 }): Promise<boolean> {
   // A layer objected. Neither history nor a provider's good opinion overrules a live
   // signal, and this single line is what makes that true for both paths below.
@@ -250,11 +265,11 @@ async function autoApproved(input: {
   // no email, no address hash, no history. That is the difference from the path below,
   // where the whole question is whether we recognise a person.
   //
-  // One read, and only for a deployment that configured a provider at all: nothing
-  // else in the pipeline can produce a `vouch`, so this line is unreachable on a
-  // deployment that opted into nothing.
+  // No read at all any more: the policy came from the request's one batched settings
+  // statement (#207). Nothing else in the pipeline can produce a `vouch`, so this line is
+  // unreachable on a deployment that opted into nothing.
   if (input.verdict.action === 'vouch') {
-    return (await getModerationPolicy(input.db)) === 'trust-vouched'
+    return input.policy === 'trust-vouched'
   }
 
   // `allow` from here down — the returning-commenter path, unchanged from #173.
@@ -268,15 +283,15 @@ async function autoApproved(input: {
   if (ipHash === null || ipHash === '') return false
   if (authorEmail === null || authorEmail === '') return false
 
-  // Read second, because the answer is the same for every commenter on a deployment
-  // that has not changed it — and that is every deployment until somebody does.
+  // Checked second, because the answer is the same for every commenter on a deployment
+  // that has not changed it — and that is every deployment until somebody does. It costs
+  // nothing now that the policy arrives with the request rather than being read here.
   //
   // `trust-vouched` is listed here as well as above because the policies are a ladder
   // rather than a menu: an owner who turned on the stronger one did not thereby ask to
   // stop trusting the regulars they had already approved.
   // Enforced by test/worker/submit/vouched.test.ts.
-  const policy = await getModerationPolicy(input.db)
-  if (policy !== 'trust-returning' && policy !== 'trust-vouched') return false
+  if (input.policy !== 'trust-returning' && input.policy !== 'trust-vouched') return false
 
   const trust = await readCommenterTrust(input.db, authorEmail, ipHash)
   // Revocation is `spammed`, and it wins over any number of approvals. Marking a
