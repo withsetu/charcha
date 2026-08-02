@@ -42,10 +42,18 @@ import type {
   SetupSecret,
   Settings,
 } from '../api'
-import { MODERATION_POLICIES, readSettings, readSetup, writeModerationPolicy } from '../api'
+import {
+  MODERATION_POLICIES,
+  readSettings,
+  readSetup,
+  writeModerationPolicy,
+  writeNotifySettings,
+  writeSiteUrl,
+} from '../api'
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group'
 import { Skeleton } from '../ui/skeleton'
@@ -146,17 +154,19 @@ const NIST_PASSWORD_URL = 'https://pages.nist.gov/800-63-4/sp800-63b.html'
 const MIN_DASHBOARD_PASSWORD_LENGTH = 15
 
 /**
- * The three that make email notifications work, in the order the README sets them.
+ * The one secret email notifications still need (#207).
  *
- * Typed against `SetupSecret` rather than as bare strings, which is what makes a rename
- * on the Worker's side a type error here instead of a section that quietly reports a
- * feature it is no longer asking about.
+ * It used to be three. The other two were the owner's own addresses rather than
+ * credentials, so they are `settings` rows now and this section *edits* them instead of
+ * telling the owner to open a terminal — see `NotifyFields` below.
+ *
+ * Still a list rather than a bare constant: it is what the command block and the status
+ * row map over, and a second provider's key (#158 says not to hard-code Resend) joins it
+ * here rather than by rewriting the section. Typed against `SetupSecret`, which is what
+ * makes a rename on the Worker's side a type error here instead of a section that quietly
+ * reports a feature it is no longer asking about.
  */
-const EMAIL_SECRETS = [
-  'RESEND_API_KEY',
-  'CHARCHA_NOTIFY_FROM',
-  'CHARCHA_NOTIFY_TO',
-] as const satisfies readonly SetupSecret[]
+const EMAIL_SECRETS = ['RESEND_API_KEY'] as const satisfies readonly SetupSecret[]
 
 /**
  * A name this tab can print a `wrangler secret put` line for.
@@ -329,7 +339,24 @@ export function Setup({
   // Two reads, landing independently: a settings failure must not hide the secret report
   // or the other way round, because either one alone is still worth the trip.
   const secrets = useLoad(readSetup, onExpired)
-  const settings = useLoad(readSettings, onExpired, originsSavedAt)
+  const loaded = useLoad(readSettings, onExpired, originsSavedAt)
+
+  // **What a save on this tab answered with, held here rather than re-read.** Four
+  // sections now write settings and several of them read each other's — the email badge
+  // depends on the notification rows, and the allowlist section on the origins dialog — so
+  // a save has to update the whole tab's picture. The response body *is* that picture
+  // (src/admin/settings.ts answers the same shape for a read and a write), so holding it
+  // costs nothing and a second GET after every save would be one more request to fail
+  // after the first had already succeeded.
+  const [saved, setSaved] = React.useState<Settings | null>(null)
+  const settings: Load<Settings> =
+    saved !== null && loaded.kind === 'ready' ? { kind: 'ready', value: saved } : loaded
+
+  // A fresh read supersedes anything a save left here: `originsSavedAt` bumps when the
+  // origins dialog saves, and the value it answered with is newer than ours.
+  React.useEffect(() => {
+    setSaved(null)
+  }, [originsSavedAt])
 
   return (
     <div className="space-y-4">
@@ -398,7 +425,12 @@ export function Setup({
             the recommendation, the badge and the command are all gone by then.
           */}
           <TurnstileSection set={secrets.value.secrets.TURNSTILE_SECRET_KEY} />
-          <EmailSection secrets={secrets.value.secrets} />
+          <EmailSection
+            secrets={secrets.value.secrets}
+            settings={settings}
+            onExpired={onExpired}
+            onSaved={setSaved}
+          />
           <IpHashSection set={secrets.value.secrets.IP_HASH_SECRET} />
           {/*
             Last of the four, deliberately. Reading order is this tab's only prominence,
@@ -409,6 +441,14 @@ export function Setup({
         </>
       )}
 
+      {/*
+        The two "which addresses are yours" settings, together and last. They are the same
+        kind of statement — the owner naming their own site — which is the argument #207
+        made for `site_url` being a row at all; putting them apart would leave a reader
+        wondering which of the two the comment box actually checks. The allowlist keeps
+        the final position it has held since #158.
+      */}
+      <SiteAddressSection load={settings} onExpired={onExpired} onSaved={setSaved} />
       <OriginsSection load={settings} onEdit={onEditOrigins} />
 
       <p className="text-sm text-muted-foreground">
@@ -791,44 +831,439 @@ function DashboardPasswordSection() {
 }
 
 /**
- * Email notifications: three secrets, all or nothing.
+ * A settings save, as one hook, because four controls on this tab now make one.
+ *
+ * **The `catch` is not defensive padding.** src/dashboard/api.ts is documented never to
+ * reject, so reaching it is a bug in the callback — and a Save button that spun, stopped,
+ * and saved nothing is the worst outcome a settings control has. CLAUDE.md's rule is that
+ * every unawaited async owes the user a specific message; this is the one place four
+ * controls pay it.
+ *
+ * `saved` is set from the **server's answer**, never from what was sent, so what the field
+ * shows afterwards is what the deployment will actually apply — an address comes back
+ * trimmed and a site URL comes back canonicalised, which is the feedback that teaches the
+ * rule (the same argument site-settings.tsx makes for the allowlist).
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function useSettingsSave(onExpired: () => void, onSaved: (settings: Settings) => void) {
+  const [busy, setBusy] = React.useState(false)
+  const [failure, setFailure] = React.useState<ApiFailure | null>(null)
+  const [announcement, setAnnouncement] = React.useState('')
+
+  function save(request: () => Promise<ApiResult<Settings>>) {
+    if (busy) return
+    setBusy(true)
+    setFailure(null)
+    setAnnouncement('')
+    void request()
+      .then((result) => {
+        if (!result.ok) {
+          if (result.failure.code === 'UNAUTHORIZED') onExpired()
+          else setFailure(result.failure)
+          return
+        }
+        onSaved(result.value)
+        setAnnouncement('Saved.')
+      })
+      .catch(() => {
+        setFailure(DASHBOARD_BUG)
+      })
+      .finally(() => {
+        setBusy(false)
+      })
+  }
+
+  const status = (
+    <>
+      {/* A status line rather than a toast: these forms are inline on a scrolling tab, so
+          there is nowhere a toast would reliably be seen, and a screen-reader user has to
+          hear the save land. */}
+      <p className="sr-only" role="status">
+        {announcement}
+      </p>
+      {failure !== null && (
+        <Alert variant="destructive">
+          <TriangleAlertIcon />
+          <AlertTitle>Not saved</AlertTitle>
+          <AlertDescription>
+            {/* The server's own sentence, verbatim: it names the value it refused and,
+                for a sender name, the character. Rewording it here would be a second set
+                of rules that can drift from the ones the Worker enforces. */}
+            <p>{failure.message} Nothing on this deployment has been changed.</p>
+          </AlertDescription>
+        </Alert>
+      )}
+    </>
+  )
+
+  return { busy, save, status, saveFailed: failure !== null }
+}
+
+/** One labelled text field, since this tab now has five of them. */
+function Field({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+  disabled,
+  invalid,
+  placeholder,
+  type = 'text',
+}: {
+  id: string
+  label: string
+  hint: React.ReactNode
+  value: string
+  onChange: (value: string) => void
+  disabled: boolean
+  invalid: boolean
+  placeholder?: string
+  type?: 'text' | 'email' | 'url'
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id} className="text-foreground">
+        {label}
+      </Label>
+      <Input
+        id={id}
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        disabled={disabled}
+        aria-invalid={invalid || undefined}
+        aria-describedby={`${id}-hint`}
+        onChange={(event) => {
+          onChange(event.target.value)
+        }}
+      />
+      <p id={`${id}-hint`} className="text-sm text-muted-foreground">
+        {hint}
+      </p>
+    </div>
+  )
+}
+
+/** The save button every settings form on this tab uses, so they cannot drift apart. */
+function SaveRow({ busy, label }: { busy: boolean; label: string }) {
+  return (
+    <div className="flex justify-end">
+      <Button type="submit" size="sm" disabled={busy}>
+        {busy && <LoaderCircleIcon aria-hidden="true" className="animate-spin" />}
+        {busy ? 'Saving…' : label}
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * Email notifications: one secret, and three settings the owner edits here (#207, #208).
+ *
+ * **What changed, and why it is the point of the section rather than a detail.** This used
+ * to be three secrets and a `wrangler secret put` block. Two of the three were never
+ * secrets — an address on a domain the owner verified, and their own inbox — so telling
+ * them to open a terminal for those was asking for a checkout, wrangler and an API token
+ * to change a value printed on their own site. They are rows now, and the section edits
+ * them. The key is still a credential and is still read-only status plus instructions,
+ * which is #158's line and it has not moved.
  *
  * The provider is named only where it is unavoidable — inside `RESEND_API_KEY`, which is
  * the string an owner has to type. The prose says "your email provider", so widening this
  * when a second provider lands is a change to the secret list rather than to the copy.
+ *
+ * **It is still all-or-nothing, and the badge says so from the resolved state**, not from
+ * the rows: a deployment still running on the deprecated secrets is genuinely *on*, and a
+ * tab that called it off would send its owner to reconfigure something that works.
+ * Enforced by test/dashboard/setup.test.tsx.
  */
-function EmailSection({ secrets }: { secrets: Record<SetupSecret, boolean> }) {
+function EmailSection({
+  secrets,
+  settings,
+  onExpired,
+  onSaved,
+}: {
+  secrets: Record<SetupSecret, boolean>
+  settings: Load<Settings>
+  onExpired: () => void
+  onSaved: (settings: Settings) => void
+}) {
   const missing = EMAIL_SECRETS.filter((name) => !secrets[name])
+  const value = settings.kind === 'ready' ? settings.value : null
+  const legacy = value?.fromDeprecatedSecrets ?? []
+  const hasFrom = (value?.notifyFrom ?? '') !== '' || legacy.includes('notify_from')
+  const hasTo = (value?.notifyTo ?? '') !== '' || legacy.includes('notify_to')
+  // Unknown until the settings read lands. `null` renders no badge rather than *Off*,
+  // because "off" is a claim and a pending read is not one — the same rule the two
+  // `Load` states everywhere else on this tab follow.
+  const on = value === null ? null : missing.length === 0 && hasFrom && hasTo
 
   return (
-    <Section title="Email notifications" status={missing.length === 0 ? <On /> : <Off />}>
-      {missing.length === 0 ? (
+    <Section
+      title="Email notifications"
+      status={on === null ? null : on ? <On /> : <Off />}
+    >
+      {on === true ? (
         <p>
-          A short email to the address in <code>CHARCHA_NOTIFY_TO</code> as comments arrive — up to
-          five back to back, and then a slower rate, so a busy morning cannot spend a day’s sending
-          allowance in ten minutes. The next email that does go out says how many arrived while it
-          was quiet. The queue is the record either way: the email is a prompt to come and look, and
-          it is never the thing that missed one.
+          A short email to your inbox as comments arrive — up to five back to back, and then a
+          slower rate, so a busy morning cannot spend a day’s sending allowance in ten minutes. The
+          next email that does go out says how many arrived while it was quiet. The queue is the
+          record either way: the email is a prompt to come and look, and it is never the thing that
+          missed one.
         </p>
       ) : (
+        <p>
+          {missing.length === EMAIL_SECRETS.length && !hasFrom && !hasTo
+            ? 'Nothing is emailed when a comment arrives. New comments still reach the queue, which is the only place they show up.'
+            : 'Partly set up, so nothing is sent. The key and both addresses are needed together — a key with no recipient has nowhere to send, and Charcha holds no owner address anywhere to guess one from.'}
+        </p>
+      )}
+
+      {missing.length > 0 && (
         <>
-          <p>
-            {missing.length === EMAIL_SECRETS.length
-              ? 'Nothing is emailed when a comment arrives. New comments still reach the queue, which is the only place they show up.'
-              : 'Partly set up, so nothing is sent. All three are needed together — a key with no recipient has nowhere to send, and Charcha holds no owner address anywhere to guess one from.'}
-          </p>
           <ul className="space-y-1">
             {EMAIL_SECRETS.map((name) => (
               <SecretRow key={name} name={name} set={secrets[name]} />
             ))}
           </ul>
           <p>
-            <code>CHARCHA_NOTIFY_FROM</code> has to be on a domain verified with your email provider
-            under the same account as the key. Mail from an unverified domain is refused — and from
-            your side that refusal looks exactly like the feature being switched off, so check both
-            addresses for typos before you paste them.
+            The key is a credential, so it is the one part of this that cannot be set from here — a
+            Worker cannot write its own secrets.
           </p>
           <HowToSet names={missing} />
+        </>
+      )}
+
+      <NotifyFields load={settings} onExpired={onExpired} onSaved={onSaved} />
+    </Section>
+  )
+}
+
+/**
+ * The three notification settings, as one form with one Save button.
+ *
+ * One request rather than three, because they are one decision: the two addresses are
+ * useless apart, and a display name saved without the address it decorates would be a half
+ * save the owner watched succeed. The body still carries only these three fields, so
+ * saving here cannot overwrite the allowlist or the moderation policy edited in another
+ * tab — the lost-update rule #173 established.
+ *
+ * **The sender name's rules are the server's, and this does not restate them.** A refusal
+ * comes back naming the character it refused (src/admin/settings.ts), and that sentence is
+ * what the owner reads. Copying the rules into the placeholder would be two lists that can
+ * disagree, on the one field where being wrong writes a `From:` header.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function NotifyFields({
+  load,
+  onExpired,
+  onSaved,
+}: {
+  load: Load<Settings>
+  onExpired: () => void
+  onSaved: (settings: Settings) => void
+}) {
+  const [draft, setDraft] = React.useState<{ from: string; to: string; name: string } | null>(null)
+  const ids = React.useId()
+  const { busy, save, status, saveFailed } = useSettingsSave(onExpired, (settings) => {
+    setDraft({
+      from: settings.notifyFrom,
+      to: settings.notifyTo,
+      name: settings.notifyFromName,
+    })
+    onSaved(settings)
+  })
+
+  if (load.kind === 'loading') return <Skeleton className="h-3 w-3/5" />
+  if (load.kind === 'failed') {
+    return <ReadFailed what="Could not read the notification settings" failure={load.failure} />
+  }
+
+  // The loaded rows until the owner types, then their own edit, then whatever the server
+  // answered with. Read here rather than in an effect so a settings re-read cannot
+  // overwrite something half-typed.
+  const fields = draft ?? {
+    from: load.value.notifyFrom,
+    to: load.value.notifyTo,
+    name: load.value.notifyFromName,
+  }
+  const legacy = load.value.fromDeprecatedSecrets
+  const usingSecrets = legacy.includes('notify_from') || legacy.includes('notify_to')
+
+  function change(part: Partial<typeof fields>) {
+    setDraft({ ...fields, ...part })
+  }
+
+  return (
+    <form
+      className="space-y-4"
+      noValidate
+      onSubmit={(event) => {
+        // The document's CSP is `form-action 'none'`, so a real submission is refused by
+        // the browser rather than merely unhandled — the same arrangement as the sign-in
+        // form and the origins dialog.
+        event.preventDefault()
+        save(() =>
+          writeNotifySettings({
+            notifyFrom: fields.from,
+            notifyTo: fields.to,
+            notifyFromName: fields.name,
+          }),
+        )
+      }}
+    >
+      {usingSecrets && (
+        <Alert>
+          <TriangleAlertIcon />
+          <AlertTitle>These are still coming from secrets you set with wrangler</AlertTitle>
+          <AlertDescription>
+            <p>
+              They keep working. The fields below are empty because nothing has been saved here yet
+              — Charcha will not show you a value out of a secret. Type your addresses in and save,
+              and you can then remove <code>CHARCHA_NOTIFY_FROM</code> and{' '}
+              <code>CHARCHA_NOTIFY_TO</code> with <code>wrangler secret delete</code>.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Field
+        id={`${ids}-notify-to`}
+        type="email"
+        label="Send notifications to"
+        placeholder="you@example.com"
+        value={fields.to}
+        disabled={busy}
+        invalid={saveFailed}
+        onChange={(next) => {
+          change({ to: next })
+        }}
+        hint="Your own inbox. It is the only address Charcha ever mails, and clearing it is how you stop the emails — there is no unsubscribe link, because there is nobody to unsubscribe but you."
+      />
+
+      <Field
+        id={`${ids}-notify-from`}
+        type="email"
+        label="Send them from"
+        placeholder="comments@example.com"
+        value={fields.from}
+        disabled={busy}
+        invalid={saveFailed}
+        onChange={(next) => {
+          change({ from: next })
+        }}
+        hint="Has to be on a domain verified with your email provider, under the same account as the key. Mail from an unverified domain is refused — and from your side that refusal looks exactly like the feature being switched off, so check it for typos before you save."
+      />
+
+      <Field
+        id={`${ids}-notify-from-name`}
+        label="Sender name (optional)"
+        placeholder="Charcha"
+        value={fields.name}
+        disabled={busy}
+        invalid={saveFailed}
+        onChange={(next) => {
+          change({ name: next })
+        }}
+        hint="What your mail client shows instead of the bare address. Leave it empty and the address is what you see. It goes in the From line, so it cannot contain angle brackets, quotes or an @ — a name that looks like an address is how a message pretends to be from somebody else."
+      />
+
+      {status}
+      <SaveRow busy={busy} label="Save notification settings" />
+    </form>
+  )
+}
+
+/**
+ * The site's own address (#207) — the setting that used to be `CHARCHA_SITE_URL`.
+ *
+ * **It is here because almost nobody had it, and that was the problem.** It was optional,
+ * deliberately off the deploy form (#139), and the only thing that read it was a spam
+ * layer that is also off by default — so a deployer had no reason to set it and no way to
+ * learn it would ever buy them anything. A field beside the allowlist is where somebody
+ * finds out.
+ *
+ * **No On/Off badge**, for the reason `OriginsSection` has none: an empty value is a
+ * working default rather than a feature that is switched off. Nothing about this
+ * deployment stops working without it; what it unlocks is named in the copy instead.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function SiteAddressSection({
+  load,
+  onExpired,
+  onSaved,
+}: {
+  load: Load<Settings>
+  onExpired: () => void
+  onSaved: (settings: Settings) => void
+}) {
+  const [draft, setDraft] = React.useState<string | null>(null)
+  const id = React.useId()
+  const { busy, save, status, saveFailed } = useSettingsSave(onExpired, (settings) => {
+    setDraft(settings.siteUrl)
+    onSaved(settings)
+  })
+
+  return (
+    <Section title="Your site’s address" status={null}>
+      {load.kind === 'loading' && <Skeleton className="h-3 w-3/5" />}
+      {load.kind === 'failed' && (
+        <ReadFailed what="Could not read your site’s address" failure={load.failure} />
+      )}
+
+      {load.kind === 'ready' && (
+        <>
+          <p>
+            The home page of the site this deployment takes comments for. Nothing can work it out:
+            this Worker’s own address is a <code>workers.dev</code> URL rather than your site, and
+            the address a comment reports is chosen by whoever posted it.
+          </p>
+          {load.value.fromDeprecatedSecrets.includes('site_url') && (
+            <Alert>
+              <TriangleAlertIcon />
+              <AlertTitle>This is still coming from a secret you set with wrangler</AlertTitle>
+              <AlertDescription>
+                <p>
+                  It keeps working. The field below is empty because nothing has been saved here yet
+                  — Charcha will not show you a value out of a secret. Save it here, and you can
+                  then remove <code>CHARCHA_SITE_URL</code> with <code>wrangler secret delete</code>
+                  .
+                </p>
+              </AlertDescription>
+            </Alert>
+          )}
+          <form
+            className="space-y-4"
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault()
+              save(() => writeSiteUrl(draft ?? load.value.siteUrl))
+            }}
+          >
+            <Field
+              id={`${id}-site-url`}
+              type="url"
+              label="Home page address"
+              placeholder="https://example.com"
+              value={draft ?? load.value.siteUrl}
+              disabled={busy}
+              invalid={saveFailed}
+              onChange={setDraft}
+              hint={
+                <>
+                  Include the scheme — <code>https://example.com</code>, or{' '}
+                  <code>https://you.github.io/blog</code> if your site lives at a path. A third-party
+                  spam service needs it to identify your site, and it is the base for the link to a
+                  commented page.
+                </>
+              }
+            />
+            {status}
+            <SaveRow busy={busy} label="Save site address" />
+          </form>
         </>
       )}
     </Section>

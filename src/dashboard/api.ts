@@ -332,6 +332,29 @@ export interface Settings {
    * in src/cors.ts.
    */
   selfOrigin: string
+  /**
+   * The site this deployment takes comments for (#207) — `''` when the owner has set none.
+   *
+   * The **row**, never the deprecated `CHARCHA_SITE_URL` secret's value: a field prefilled
+   * with something the owner never typed into it is a value they would save without
+   * deciding to, and #158's rule is that this surface renders no secret's value at all.
+   * `fromDeprecatedSecrets` is how the tab says where the value is actually coming from.
+   */
+  siteUrl: string
+  /** The address notifications are sent from (#207), or `''`. Same rule as `siteUrl`. */
+  notifyFrom: string
+  /** The inbox notifications go to (#207), or `''`. Same rule as `siteUrl`. */
+  notifyTo: string
+  /** The sender's display name (#208), or `''` for a bare address. Never had a secret. */
+  notifyFromName: string
+  /**
+   * Which of these settings are still being served by the secret #207 deprecated.
+   *
+   * Setting *keys* — `site_url`, `notify_from`, `notify_to` — rather than secret names,
+   * because what the owner acts on is the field. Empty on a deployment that never set
+   * those secrets, which is every new one.
+   */
+  fromDeprecatedSecrets: string[]
 }
 
 /**
@@ -362,6 +385,20 @@ async function settingsRequest(spec: RequestSpec): Promise<ApiResult<Settings>> 
   if (!result.ok) return result
 
   if (!MODERATION_POLICIES.includes(result.value.moderationPolicy)) {
+    return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+  }
+  // **The four settings strings are checked for the same reason the policy is (#207).** A
+  // missing one arrives as `undefined`, which renders as an empty field — *not set*, which
+  // is indistinguishable from the truth and would have an owner retype configuration they
+  // saved months ago, or worse, save an emptiness over a working address. The allowlist
+  // above is the case that does not need this, because an allowlist that failed to arrive
+  // renders as an empty list an owner can see is wrong.
+  for (const field of ['siteUrl', 'notifyFrom', 'notifyTo', 'notifyFromName'] as const) {
+    if (typeof result.value[field] !== 'string') {
+      return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+    }
+  }
+  if (!Array.isArray(result.value.fromDeprecatedSecrets)) {
     return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
   }
   return result
@@ -399,9 +436,44 @@ export function writeModerationPolicy(
 }
 
 /**
+ * `PUT /admin/api/settings` — the site's own address, and nothing else (#207).
+ *
+ * One field per writer, for the reason `writeModerationPolicy` gives: the endpoint leaves
+ * an absent field alone, so a section saving its own control cannot overwrite one edited
+ * in another tab. An empty string clears the row rather than being ignored — which on this
+ * deployment is how an owner turns layer 8's permalink back off.
+ */
+export function writeSiteUrl(siteUrl: string): Promise<ApiResult<Settings>> {
+  return settingsRequest({ method: 'PUT', path: '/settings', body: { siteUrl } })
+}
+
+/** The three notification settings, saved together because one form holds them (#207, #208). */
+export interface NotifySettingsInput {
+  notifyFrom: string
+  notifyTo: string
+  notifyFromName: string
+}
+
+/**
+ * `PUT /admin/api/settings` — the notification addresses and the sender name.
+ *
+ * Three fields in one request because they are one form with one Save button: the two
+ * addresses are useless apart, and a display name saved without the address it decorates
+ * would be a half-save the owner watched succeed. Still not the whole settings document,
+ * for `writeModerationPolicy`'s reason.
+ *
+ * A refused value comes back as a `BAD_REQUEST` naming the value and, for the sender name,
+ * the character — so the UI shows the server's own sentence rather than restating rules
+ * that could drift from the ones the Worker enforces.
+ */
+export function writeNotifySettings(input: NotifySettingsInput): Promise<ApiResult<Settings>> {
+  return settingsRequest({ method: 'PUT', path: '/settings', body: input })
+}
+
+/**
  * The secrets the Setup tab reports on (#158), in the order it reports them.
  *
- * The same five names `REPORTED_SECRETS` in src/admin/setup.ts answers for. They are
+ * The same names `REPORTED_SECRETS` in src/admin/setup.ts answers for. They are
  * written out again rather than imported because that module is in the Worker's
  * TypeScript project — it names `Env` and imports Hono, neither of which exists in this
  * one (src/dashboard/tsconfig.json), the same reason `QueuedComment` is redeclared above.
@@ -414,8 +486,6 @@ export function writeModerationPolicy(
  */
 export const SETUP_SECRETS = [
   'RESEND_API_KEY',
-  'CHARCHA_NOTIFY_FROM',
-  'CHARCHA_NOTIFY_TO',
   'TURNSTILE_SECRET_KEY',
   'IP_HASH_SECRET',
   'AKISMET_API_KEY',

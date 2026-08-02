@@ -122,7 +122,7 @@ export function akismetProvider(config: AkismetConfig): SpamProvider | null {
     return null
   }
 
-  const blog = homeUrl(rawSiteUrl)
+  const blog = siteHomeUrl(rawSiteUrl)
   if (blog === null) {
     // Checked once, here, rather than per submission. `blog` is required, so an
     // unusable one means every check would spend a metered call to be told
@@ -321,9 +321,17 @@ function reportAlert(response: Response): void {
  * `user.github.io/blog` is exactly this project's audience and its home page is not
  * the origin. A trailing slash is dropped so two spellings of one site are one
  * string.
- * Enforced by test/worker/spam/akismet.test.ts.
+ *
+ * **Exported since #207, and the dashboard's settings write is the second caller.** The
+ * value is a `settings` row now, so the owner types it into a field and can be told it is
+ * wrong — where before the only feedback was a log line nobody was tailing. Both sides go
+ * through this one function, so what is stored is what layer 8 will send rather than the
+ * spelling that was pasted. Reuse rather than a second URL parser: two canonicalisations
+ * that disagreed would let the dashboard accept a value that then announced itself
+ * unusable on the next comment, which is the #107 shape.
+ * Enforced by test/worker/spam/akismet.test.ts and test/worker/admin/settings.test.ts.
  */
-function homeUrl(raw: string): string | null {
+export function siteHomeUrl(raw: string): string | null {
   let parsed: URL
   try {
     parsed = new URL(raw)
