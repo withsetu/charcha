@@ -224,6 +224,34 @@ describe('POST /comments — unconfigured means off, not broken', () => {
   })
 })
 
+describe('POST /comments — the settings rows are what the Worker actually reads (#207)', () => {
+  it('stops sending when the owner clears the row, even with the old secret still set', async () => {
+    // The migration's sharp edge, driven through the real route. The deprecated secret is
+    // read only when the row has never been written — an owner who cleared `notify_to` in
+    // the dashboard has asked for no notifications, and restoring the secret they thought
+    // they had replaced would keep mailing them after a save they watched succeed.
+    //
+    // **Placed here, before the burst is spent, and that is not incidental.** This test's
+    // evidence is that *nothing* was sent, and once the isolate's five tokens are gone
+    // nothing is sent whatever the settings say — the assertion would hold for the wrong
+    // reason and the guard could be removed without a red test. Two tokens are still in
+    // the bucket at this point, so a fallback that wrongly fired would make a real
+    // request and be recorded. Kill-shot confirmed.
+    configureNotify()
+    await writeSetting(db, NOTIFY_TO_SETTING, '', Math.floor(Date.now() / 1000))
+    const calls = stubFetch(accepted)
+
+    const response = await post({
+      url: 'https://maya.build/notes/cleared',
+      body: 'A comment on a deployment whose owner turned the notifications off.',
+    })
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('POST /comments — a comment the spam layers rejected never mails', () => {
   it('mails for the comment that got through and not for the one the honeypot caught', async () => {
     // A spam flood becoming an email flood at the owner's expense is the failure this
@@ -335,29 +363,6 @@ describe('POST /comments — the notification costs no D1 queries', () => {
     })
 
     expect(seen.filter((sql) => sql.includes('from settings'))).toHaveLength(1)
-  })
-})
-
-describe('POST /comments — the settings rows are what the Worker actually reads (#207)', () => {
-  it('stops sending when the owner clears the row, even with the old secret still set', async () => {
-    // The migration's sharp edge, driven through the real route. The deprecated secret is
-    // read only when the row has never been written — an owner who cleared `notify_to` in
-    // the dashboard has asked for no notifications, and restoring the secret they thought
-    // they had replaced would keep mailing them after a save they watched succeed.
-    //
-    // It costs no send, so it does not spend one of the isolate's five burst tokens.
-    configureNotify()
-    await writeSetting(db, NOTIFY_TO_SETTING, '', Math.floor(Date.now() / 1000))
-    const calls = stubFetch(accepted)
-
-    const response = await post({
-      url: 'https://maya.build/notes/cleared',
-      body: 'A comment on a deployment whose owner turned the notifications off.',
-    })
-
-    expect(response.status).toBe(202)
-    expect(await countComments()).toBe(1)
-    expect(calls).toHaveLength(0)
   })
 })
 
