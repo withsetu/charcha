@@ -1503,6 +1503,53 @@ export async function readSpamModel(db: D1Database): Promise<StoredSpamModel | n
   }
 }
 
+/**
+ * The same row, for the Setup tab, without the weights (#177).
+ *
+ * **A second statement rather than a second reader of READ_SPAM_MODEL_SQL, and the
+ * omitted column is the whole reason.** D1 hands a BLOB back as a JavaScript `Array` of
+ * byte values — one number per byte — so selecting `weights` here would build a 4,096-
+ * element array at the 1,024 dimensions this model is expected to produce, and up to
+ * 16,384 at the MAX_MODEL_DIMS ceiling, to hand a screen that cannot say anything about
+ * it. `updated_at` is the column this one adds: a classifier that silently stopped
+ * learning has no other symptom, and the submission path has no use for it.
+ *
+ * Still one rowid seek against a table `CHECK (id = 1)` forbids a second row in, so it
+ * costs the authenticated read exactly what the public one costs.
+ * Enforced by test/worker/spam/query-plan.test.ts and test/worker/admin/setup.test.ts.
+ */
+export const READ_SPAM_MODEL_STATUS_SQL = `select model, ham_count, spam_count, updated_at
+     from spam_model
+    where id = 1`
+
+/** What the Setup tab may know about the fitted classifier: counts, and when, never weights. */
+export interface StoredSpamModelStatus {
+  model: string
+  hamCount: number
+  spamCount: number
+  updatedAt: number
+}
+
+interface SpamModelStatusRow {
+  model: string
+  ham_count: number
+  spam_count: number
+  updated_at: number
+}
+
+/** The stored classifier's counts, or null on a deployment that has trained none yet. */
+export async function readSpamModelStatus(db: D1Database): Promise<StoredSpamModelStatus | null> {
+  const row = await db.prepare(READ_SPAM_MODEL_STATUS_SQL).first<SpamModelStatusRow>()
+  if (row === null) return null
+
+  return {
+    model: row.model,
+    hamCount: row.ham_count,
+    spamCount: row.spam_count,
+    updatedAt: row.updated_at,
+  }
+}
+
 /** One statement, so two decisions moderated at once cannot interleave into half a model. */
 export const WRITE_SPAM_MODEL_SQL = `insert into spam_model
          (id, model, dims, weights, bias, ham_count, spam_count, updated_at)

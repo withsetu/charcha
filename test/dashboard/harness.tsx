@@ -8,7 +8,8 @@
 import { cleanup, configure } from '@testing-library/react'
 import { afterEach, expect, vi } from 'vitest'
 
-import type { QueueCounts, QueuedComment } from '../../src/dashboard/api'
+import type { ClassifierStatus, QueueCounts, QueuedComment } from '../../src/dashboard/api'
+import { SETUP_SECRETS } from '../../src/dashboard/api'
 
 // Testing Library's default `findBy`/`waitFor` budget is one second, which is plenty on
 // its own and not plenty when this project's whole suite runs — 66 files across five
@@ -193,4 +194,50 @@ export function settingsBody(overrides: Record<string, unknown> = {}) {
     fromDeprecatedSecrets: [],
     ...overrides,
   }
+}
+
+/**
+ * A `GET /admin/api/setup` body with every field the client validates (#158, #120, #177).
+ *
+ * **The same helper `settingsBody` is, and it exists because the warning written beside
+ * the literals it replaces came true.** Three files stubbed this endpoint by hand, each
+ * carrying a note that a hand-written literal "turns a future secret into six timeouts
+ * rather than one clear failure" — and #177's `classifier` field did exactly that: the
+ * panel mounts inside `Triage`, `readSetup` refuses a report missing a field it expects,
+ * and the tabs those files drive then never render.
+ *
+ * `classifier` defaults to a freshly deployed site: the binding is there, because a
+ * one-click deploy provisions Workers AI, and nothing has trained it yet.
+ */
+export function setupBody(overrides: Record<string, unknown> = {}) {
+  return {
+    secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, false])),
+    shortPassword: false,
+    classifier: classifierBody(),
+    ...overrides,
+  }
+}
+
+/**
+ * The classifier half of that body, typed, so a field the Worker adds is a type error
+ * here rather than a `MALFORMED` nobody expected.
+ *
+ * The default is a freshly deployed site: the binding is there and nothing has trained it
+ * yet. *Learning* is deliberately neither On nor Off, which is what keeps every
+ * `getAllByText('Off')` count in this directory meaning what it did before #177.
+ */
+export function classifierBody(overrides: Partial<ClassifierStatus> = {}): ClassifierStatus {
+  return {
+    state: 'learning',
+    hamCount: 0,
+    spamCount: 0,
+    minPerClass: 30,
+    updatedAt: null,
+    ...overrides,
+  }
+}
+
+/** Every secret reported as set, for the tests about a finished deployment. */
+export function allSecretsSet(): Record<string, boolean> {
+  return Object.fromEntries(SETUP_SECRETS.map((name) => [name, true]))
 }

@@ -10,14 +10,19 @@
 // tests fail; return the secret instead of the boolean and `never carries a value`
 // fails.
 
-import { exports } from 'cloudflare:workers'
+import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import { REPORTED_SECRETS, type ReportedSecret } from '../../../src/admin/setup'
+import { writeSpamModel } from '../../../src/db'
+import { EMBEDDING_MODEL, MIN_LABELS_PER_CLASS } from '../../../src/spam/model'
+import type { ClassifierStatus } from '../../../src/spam/status'
 import {
   TEST_PASSWORD,
   configurePassword,
   configureSecret,
+  removeAiBinding,
+  restoreAiBinding,
   restoreLimiter,
   restorePassword,
   restoreSecrets,
@@ -45,6 +50,7 @@ function read(headers: Record<string, string> = {}) {
 interface SetupBody {
   secrets: Record<ReportedSecret, boolean>
   shortPassword: boolean
+  classifier: ClassifierStatus
 }
 
 async function readBody(): Promise<SetupBody> {
@@ -55,17 +61,49 @@ function setEvery(value: string | undefined): void {
   for (const name of REPORTED_SECRETS) configureSecret(name, value)
 }
 
+/**
+ * Puts a fitted classifier in the database, the way a moderation decision would have.
+ *
+ * Through `writeSpamModel` rather than raw SQL, so these rows are the shape
+ * src/spam/train.ts actually writes — a hand-built row could satisfy the endpoint while
+ * disagreeing with the only thing that ever populates this table.
+ *
+ * The weights are a token four bytes: this endpoint's read does not select the column,
+ * and asserting that it does not is the point of one of the tests below.
+ */
+async function storeModel(counts: {
+  hamCount: number
+  spamCount: number
+  model?: string
+  updatedAt?: number
+}): Promise<void> {
+  await writeSpamModel(
+    env.DB,
+    {
+      model: counts.model ?? EMBEDDING_MODEL,
+      dims: 1,
+      weights: new ArrayBuffer(4),
+      bias: 0,
+    },
+    { hamCount: counts.hamCount, spamCount: counts.spamCount },
+    counts.updatedAt ?? 1_800_000_000,
+  )
+}
+
 beforeEach(async () => {
   configurePassword(TEST_PASSWORD)
   stubLimiter(true)
+  await env.DB.exec('DELETE FROM spam_model')
   const { token } = await issueSession(TEST_PASSWORD, Math.floor(Date.now() / 1000))
   cookie = `${SESSION_COOKIE_NAME}=${token}`
 })
 
-afterEach(() => {
+afterEach(async () => {
   restoreLimiter()
   restorePassword()
   restoreSecrets()
+  restoreAiBinding()
+  await env.DB.exec('DELETE FROM spam_model')
 })
 
 describe('the door', () => {
@@ -190,6 +228,120 @@ describe('the report', () => {
   })
 })
 
+describe('the spam classifier (#177)', () => {
+  // **The three states the dashboard could not tell apart**, driven through the real
+  // endpoint with real rows rather than against `classifierStatus` alone: the unit tests
+  // in test/worker/spam/status.test.ts prove the derivation, and these prove that a
+  // moderation history in D1 reaches the screen at all. Between them sit the SQL, the
+  // column mapping and the handler, and every one of those is a place the report could
+  // come back confidently wrong.
+
+  it('says the layer never runs when the deployment has no AI binding', async () => {
+    // The state that is logged once per isolate and nowhere else. A deployment that never
+    // got the binding classifies nothing *and* trains nothing, so the counts below would
+    // sit still forever with no other symptom anywhere.
+    removeAiBinding()
+    await storeModel({ hamCount: 40, spamCount: 40 })
+
+    const body = await readBody()
+
+    expect(body.classifier.state).toBe('no-binding')
+  })
+
+  it('says it is learning, and how far along, on a site short in one class', async () => {
+    // #177's worked example: 40 spam and 6 ham. The layer abstains, correctly, and will
+    // go on abstaining until 24 more comments are approved — which the owner had no way
+    // to know, and no way to know that approving is what gets them there.
+    await storeModel({ hamCount: 6, spamCount: 40 })
+
+    const body = await readBody()
+
+    expect(body.classifier).toEqual({
+      state: 'learning',
+      hamCount: 6,
+      spamCount: 40,
+      minPerClass: MIN_LABELS_PER_CLASS,
+      updatedAt: 1_800_000_000,
+    })
+  })
+
+  it('says it is trained once both classes are past the gate', async () => {
+    await storeModel({
+      hamCount: MIN_LABELS_PER_CLASS + 11,
+      spamCount: MIN_LABELS_PER_CLASS,
+      updatedAt: 1_799_000_000,
+    })
+
+    const body = await readBody()
+
+    expect(body.classifier.state).toBe('trained')
+    expect(body.classifier.hamCount).toBe(MIN_LABELS_PER_CLASS + 11)
+    expect(body.classifier.updatedAt).toBe(1_799_000_000)
+  })
+
+  it('says weights fitted on another model are not being used, however long the history', async () => {
+    // The silent one. Every count says trained and src/spam/classifier.ts abstains
+    // anyway, because weights fitted in one embedding space say nothing about a vector
+    // from another. Nothing else on this deployment changes.
+    await storeModel({ hamCount: 412, spamCount: 380, model: '@cf/some/retired-model' })
+
+    const body = await readBody()
+
+    expect(body.classifier.state).toBe('model-changed')
+    expect(body.classifier.hamCount).toBe(412)
+  })
+
+  it('reports a deployment that has trained nothing as learning from zero', async () => {
+    const body = await readBody()
+
+    expect(body.classifier).toEqual({
+      state: 'learning',
+      hamCount: 0,
+      spamCount: 0,
+      minPerClass: MIN_LABELS_PER_CLASS,
+      updatedAt: null,
+    })
+  })
+
+  it('never sends the weights, which are the one column on that row with no reader here', async () => {
+    // D1 converts a BLOB to a JavaScript `Array` of byte values, so a report that carried
+    // the model would be thousands of numbers on a screen that can say nothing about
+    // them. The endpoint's read does not select the column at all — see
+    // READ_SPAM_MODEL_STATUS_SQL — and this is the assertion on the wire.
+    await storeModel({ hamCount: 30, spamCount: 30 })
+
+    const text = await (await read()).text()
+
+    expect(text).not.toContain('weights')
+    expect(text).not.toContain('bias')
+  })
+
+  it('is behind the same door as the rest, because it says which defences are running', async () => {
+    // #158's call, applied to the layer that most rewards knowing about it: "the
+    // classifier has 6 approvals" tells a stranger it is abstaining on every comment.
+    await storeModel({ hamCount: 6, spamCount: 40 })
+
+    const refused = await exports.default.fetch(SETUP)
+
+    expect(refused.status).toBe(401)
+    expect(await refused.text()).not.toContain('classifier')
+  })
+
+  it('reads the model and never writes it', async () => {
+    // **The constraint on the whole feature** (#28, #177): the row is written only by a
+    // human moderation decision, through src/spam/train.ts. Reading it a hundred times
+    // must leave it byte-identical, or the counts stop being a history of decisions
+    // anybody made.
+    await storeModel({ hamCount: 6, spamCount: 40, updatedAt: 1_700_000_042 })
+    const before = await env.DB.prepare('select * from spam_model').first()
+
+    await read()
+    await read()
+
+    expect(await env.DB.prepare('select * from spam_model').first()).toEqual(before)
+  })
+})
+
 /**
  * Signs in the way a browser does, and returns the `name=value` pair to send back.
  *
@@ -250,7 +402,7 @@ describe('the dashboard password (#120)', () => {
     const body = await reportFor('abcd')
 
     expect(typeof body.shortPassword).toBe('boolean')
-    expect(Object.keys(body).sort()).toEqual(['secrets', 'shortPassword'])
+    expect(Object.keys(body).sort()).toEqual(['classifier', 'secrets', 'shortPassword'])
   })
 
   it('never carries the password, whatever it is', async () => {

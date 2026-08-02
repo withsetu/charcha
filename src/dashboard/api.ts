@@ -515,6 +515,48 @@ export const SETUP_SECRETS = [
 export type SetupSecret = (typeof SETUP_SECRETS)[number]
 
 /**
+ * Where the self-training spam classifier stands (#177), in the order the Worker decides
+ * them.
+ *
+ * The same four `ClassifierState` answers `src/spam/status.ts` computes, written out again
+ * for the reason `SETUP_SECRETS` is: that module reaches `src/db` and the generated `Env`,
+ * neither of which exists in this TypeScript project.
+ *
+ * The drift a second copy allows is what `readSetup` makes loud — a state the Worker sends
+ * and this list does not hold is a `MALFORMED` failure the tab shows, rather than a
+ * section that renders as a heading with nothing under it.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+export const CLASSIFIER_STATES = ['no-binding', 'model-changed', 'learning', 'trained'] as const
+
+export type ClassifierState = (typeof CLASSIFIER_STATES)[number]
+
+/**
+ * What the tab may say about layer 7: counts, the gate they are counted against, and when
+ * the model last learned.
+ *
+ * **There is deliberately no score, accuracy or confidence on this type.** The layer's
+ * threshold is provisional and uncalibrated (#175), so any such number would be
+ * fabricated — and a percentage on a dashboard is believed. Adding one is a change to the
+ * Worker's report, not a field this client can start rendering.
+ */
+export interface ClassifierStatus {
+  state: ClassifierState
+  hamCount: number
+  spamCount: number
+  /**
+   * How many decisions in each class the layer needs before it says anything.
+   *
+   * Sent by the Worker rather than restated here, unlike `MIN_DASHBOARD_PASSWORD_LENGTH`
+   * — which had to be written twice and pinned by test/node/password-floor.test.ts. A
+   * number that ships with the counts it bounds has no second copy to drift.
+   */
+  minPerClass: number
+  /** Unix seconds, or null on a deployment whose model has never been written. */
+  updatedAt: number | null
+}
+
+/**
  * Which optional features have what they need — booleans, and never a value.
  *
  * `Record<SetupSecret, boolean>` rather than an interface for the reason `QueueCounts`
@@ -532,6 +574,14 @@ export interface SetupReport {
    * is no version of this screen that needs a length, a prefix or the value.
    */
   shortPassword: boolean
+  /**
+   * Where the spam classifier stands (#177).
+   *
+   * Outside `secrets` because it is not a secret and not a switch: layer 7 needs no
+   * configuration at all, and what an owner cannot see is whether it is running, how far
+   * from useful it is, and whether it quietly stopped learning.
+   */
+  classifier: ClassifierStatus
 }
 
 /**
@@ -550,7 +600,11 @@ export async function readSetup(): Promise<ApiResult<SetupReport>> {
   const result = await request<unknown>({ method: 'GET', path: '/setup' })
   if (!result.ok) return result
 
-  const body = result.value as { secrets?: unknown; shortPassword?: unknown } | null
+  const body = result.value as {
+    secrets?: unknown
+    shortPassword?: unknown
+    classifier?: unknown
+  } | null
   const secrets = body?.secrets
   if (secrets === null || typeof secrets !== 'object') {
     return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
@@ -566,11 +620,65 @@ export async function readSetup(): Promise<ApiResult<SetupReport>> {
   if (typeof body?.shortPassword !== 'boolean') {
     return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
   }
+  const classifier = readClassifier(body.classifier)
+  if (classifier === null) {
+    return { ok: false, failure: { code: 'MALFORMED', message: MALFORMED_MESSAGE, status: 200 } }
+  }
   return {
     ok: true,
     value: {
       secrets: secrets as Record<SetupSecret, boolean>,
       shortPassword: body.shortPassword,
+      classifier,
     },
   }
+}
+
+/**
+ * The classifier report, or null when it is not one (#177).
+ *
+ * **Every field is checked, and a state this dashboard does not know is a refusal rather
+ * than a fallback.** The states are written out twice — here and in src/spam/status.ts,
+ * because the two TypeScript projects share nothing — so the drift is possible, and the
+ * failure it would otherwise produce is silent: an unrecognised state renders as a
+ * section heading with no words underneath it, which reads as a feature that has nothing
+ * to report. `undefined` is worse still, because it renders as zeroes, which is a
+ * confident "you have made no decisions" that nobody sent.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
+function readClassifier(value: unknown): ClassifierStatus | null {
+  if (value === null || typeof value !== 'object') return null
+
+  const { state, hamCount, spamCount, minPerClass, updatedAt } = value as Record<string, unknown>
+  if (!isClassifierState(state)) return null
+  if (!isCount(hamCount) || !isCount(spamCount) || !isCount(minPerClass)) return null
+  // **Checked as hard as the counts beside it, and the reason is a crash rather than a
+  // wrong word.** This value reaches `isoInstant`, where `new Date(1e300).toISOString()`
+  // throws a `RangeError` — and there is no error boundary anywhere in this dashboard, so
+  // that would unmount the whole tree, on the screen an owner opened to find out what was
+  // wrong. A unix instant is always a safe integer.
+  if (updatedAt !== null && !isInstant(updatedAt)) return null
+
+  return { state, hamCount, spamCount, minPerClass, updatedAt }
+}
+
+function isClassifierState(value: unknown): value is ClassifierState {
+  return CLASSIFIER_STATES.includes(value as ClassifierState)
+}
+
+/**
+ * A number this screen can put in a sentence: a whole count, never negative.
+ *
+ * Stricter than the column it comes from needs to be, and deliberately so — `spam_model`
+ * is `CHECK (ham_count >= 0)` and integer, so anything else did not come from the model.
+ * The cost of being loose is copy that reads "-4 more comments you approve" or "NaN", on
+ * the one screen an owner opened to find out what is happening.
+ */
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+/** A unix instant this screen can hand to `new Date`, which is always a safe integer. */
+function isInstant(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }

@@ -45,6 +45,8 @@
 // back to being unable to say anything useful.
 
 import type { Context } from 'hono'
+import { readSpamModelStatus } from '../db'
+import { classifierStatus } from '../spam/status'
 import { adminJson } from './api'
 import { authenticated } from './authenticate'
 import { dashboardPasswordIsShort } from './password'
@@ -128,21 +130,62 @@ export function secretReport(env: SetupEnv): SecretReport {
 }
 
 /**
- * `GET /admin/api/setup` — which optional features this deployment has been given what
- * they need.
+ * Whether this deployment has the Workers AI binding layer 7 needs (#177).
  *
- * No D1 query at all: everything here is on `env`. The allowlist, which is the one piece
- * of setup that genuinely lives in the database, is deliberately **not** folded in — it
- * already has `GET /admin/api/settings` (#57), and a second endpoint reporting the same
- * setting is a second answer that can disagree with the first.
+ * **`Partial` where the generated `Env` has `AI` required**, which is the same statement
+ * `SpamEnv` makes in src/spam/env.ts and for the same reason: `wrangler types` marks
+ * every declared binding as present because the platform provides it, and this endpoint's
+ * entire job at this point is to describe a deployment where it is not. A one-click
+ * deploy provisions Workers AI automatically (wrangler.jsonc), so the absence is a Worker
+ * put together by hand or a binding since removed — rare, silent, and until now announced
+ * only as one `spam_layer_inactive` line per isolate.
+ *
+ * It reads the binding and is **intended** never to call it: Workers AI has no local
+ * simulation and every call spends neurons, so "is it there" is the only question this
+ * surface may ask of it — a health check here would bill the owner for opening a settings
+ * screen. Worded as intent rather than fact on purpose. No test can catch a call added
+ * later, because no test in this project may touch `env.AI` at all (vitest.config.ts), so
+ * a spy here would need account credentials to prove anything. What the tests do cover is
+ * the *absence* case, in test/worker/admin/setup.test.ts.
+ */
+function hasAiBinding(env: Partial<Pick<Env, 'AI'>>): boolean {
+  return env.AI !== undefined
+}
+
+/**
+ * `GET /admin/api/setup` — which optional features this deployment has been given what
+ * they need, and where the self-training spam classifier stands.
+ *
+ * **One D1 query, and it is a rowid seek** (#177). Everything else here is on `env`; the
+ * classifier's state cannot be, because it is a history of the owner's own moderation
+ * decisions and those live in `spam_model`. `readSpamModelStatus` deliberately does not
+ * select the weights — see src/db.
+ *
+ * The seek is asserted in test/worker/spam/query-plan.test.ts. The *count* is intent
+ * rather than an enforced invariant — nothing here spies on D1 — and it is worth holding
+ * anyway: this handler answers a tab the owner opens repeatedly, and every read added
+ * here is one more thing that can fail after `authenticated` has already succeeded.
+ *
+ * **It reads that row and nothing here can write it.** The row is written by exactly one
+ * thing, a human moderation decision through src/spam/train.ts, which is the whole of
+ * #28's answer to what counts as a training label. A control on this surface that could
+ * reset or seed it would be a second writer.
  * Enforced by test/worker/admin/setup.test.ts.
+ *
+ * The allowlist, which is the one piece of setup that genuinely lives in the database
+ * alongside it, is deliberately **not** folded in — it already has
+ * `GET /admin/api/settings` (#57), and a second endpoint reporting the same setting is a
+ * second answer that can disagree with the first.
  */
 export async function handleReadSetup(c: AdminContext): Promise<Response> {
   const auth = await authenticated(c.env, c.req.raw, Math.floor(Date.now() / 1000))
   if (!auth.ok) return auth.response
 
+  const model = await readSpamModelStatus(c.env.DB)
+
   return adminJson({
     secrets: secretReport(c.env),
     shortPassword: dashboardPasswordIsShort(c.env.CHARCHA_DASHBOARD_PASSWORD),
+    classifier: classifierStatus(model, hasAiBinding(c.env)),
   })
 }

@@ -2,8 +2,9 @@
 // the two copies the same number (#120).
 //
 // `MIN_DASHBOARD_PASSWORD_LENGTH` is decided in src/admin/password.ts, which is where the
-// Worker decides whether to report a password as short. The Setup tab has to say the same
-// number to the owner — and it cannot import it, because the dashboard is a separate
+// Worker decides whether to report a password as short. The Setup tab's password section
+// has to say the same number to the owner — and it cannot import it, because the dashboard
+// is a separate
 // TypeScript project that does not have `Env` or Hono in it, the same reason
 // `SETUP_SECRETS` is restated in src/dashboard/api.ts.
 //
@@ -44,7 +45,14 @@ async function declaredFloor(...path: string[]): Promise<number> {
 describe('the dashboard password floor', () => {
   it('is the same number in the Worker and on the screen that tells the owner', async () => {
     const worker = await declaredFloor('src', 'admin', 'password.ts')
-    const tab = await declaredFloor('src', 'dashboard', 'components', 'setup.tsx')
+    const tab = await declaredFloor(
+      'src',
+      'dashboard',
+      'components',
+      'setup',
+      'sections',
+      'password.tsx',
+    )
 
     expect(tab).toBe(worker)
   })

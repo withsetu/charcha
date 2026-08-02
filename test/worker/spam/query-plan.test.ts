@@ -13,6 +13,7 @@ import {
   DUPLICATE_BODY_SQL,
   PRUNE_COMMENT_VECTORS_SQL,
   READ_SPAM_MODEL_SQL,
+  READ_SPAM_MODEL_STATUS_SQL,
   RECENT_BY_IP_SQL,
   RECENT_ON_PAGE_SQL,
   SPAM_HISTORY_SQL,
@@ -86,6 +87,20 @@ describe("the classifier's model read (#10)", () => {
 
     expect(plan).toMatch(/SEARCH spam_model USING INTEGER PRIMARY KEY \(rowid=\?\)/)
     expect(plan).not.toMatch(/\bSCAN\b/)
+  })
+
+  it('answers the Setup tab from the same one row, and never selects the weights', async () => {
+    // #177's read. Authenticated and rare, so the plan is not the reason it is here —
+    // the column list is. D1 converts a BLOB to a JavaScript `Array` of byte values — one
+    // number per byte — so a `select *` would build 4,096 of them at this model's
+    // expected 1,024 dimensions, and up to 16,384 at the MAX_MODEL_DIMS ceiling, for a
+    // screen that has nothing to say about any of them. Asserted against the constant
+    // src/db actually sends, so a later edit that widened it fails here.
+    const plan = await planOf(READ_SPAM_MODEL_STATUS_SQL)
+
+    expect(plan).toMatch(/SEARCH spam_model USING INTEGER PRIMARY KEY \(rowid=\?\)/)
+    expect(plan).not.toMatch(/\bSCAN\b/)
+    expect(READ_SPAM_MODEL_STATUS_SQL).not.toMatch(/weights|\*/)
   })
 })
 

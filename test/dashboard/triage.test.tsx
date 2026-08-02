@@ -8,9 +8,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { SETUP_SECRETS } from '../../src/dashboard/api'
 import { Triage } from '../../src/dashboard/components/triage'
 import {
+  allSecretsSet,
   apiError,
   comment,
   decision,
@@ -18,6 +18,7 @@ import {
   queuePage,
   rowNames,
   settingsBody,
+  setupBody,
   stubFetch,
   unhandled,
   type FetchStub,
@@ -577,12 +578,9 @@ describe('switching view', () => {
     stubFetch((call) => {
       if (call.path.startsWith('/admin/api/queue')) return json(200, queuePage([]))
       if (call.path === '/admin/api/setup') {
-        // Derived from SETUP_SECRETS: `readSetup` refuses a report missing a name it
-        // expects, so a hand-written literal turns a future secret into a timeout here.
-        return json(200, {
-          secrets: Object.fromEntries(SETUP_SECRETS.map((name) => [name, true])),
-          shortPassword: false,
-        })
+        // The shared fixture: `readSetup` refuses a report missing any field it expects,
+        // so a hand-written literal turns a future one into a timeout here.
+        return json(200, setupBody({ secrets: allSecretsSet() }))
       }
       if (call.path === '/admin/api/settings') {
         return json(200, settingsBody())
