@@ -103,7 +103,7 @@ export function ModerationSection({
   onSaved: (settings: Settings) => void
 }) {
   const groupName = React.useId()
-  const { busy, save, status } = useSettingsSave(onExpired, onSaved)
+  const { busy, save, status } = useSettingsSave(onExpired, onSaved, 'Moderation policy')
 
   if (load.kind === 'loading') {
     return (

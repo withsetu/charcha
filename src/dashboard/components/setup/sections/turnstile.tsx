@@ -84,21 +84,29 @@ export function TurnstileSection({ set }: { set: boolean }) {
         actually shows: `runLayers` prefixes the layer (src/spam/layer.ts) and
         `runSubmission` stores the result on the comment, asserted by
         test/worker/submit/pipeline.test.ts and test/worker/spam/turnstile.test.ts.
+
+        **It states a fact and gives no instruction, and that is the line between this and
+        a nag.** How to obtain a widget is in the `!set` branch below: telling a deployment
+        that already has the secret to go and create one is exactly what #158 rules out,
+        and this is the first section a finished tab opens on.
       */}
       <p>
-        <b>The other half is on your site, not here.</b> A widget from <b>Cloudflare dashboard</b> →{' '}
-        <b>Turnstile</b> → <b>Add widget</b> gives you two keys, and they are not interchangeable:
-        the <i>sitekey</i> is public and goes on your page as <code>data-turnstile-sitekey</code>,
-        and the secret key goes on this Worker. Charcha cannot see your pages, so set both or
-        neither — a secret key with no sitekey holds every comment for review, marked{' '}
-        <code>turnstile: no-token-unverified-deployment</code>, while a sitekey with no secret key
-        is the harmless direction.
+        <b>The other half is on your site, not here.</b> A widget has two keys and they are not
+        interchangeable: the <i>sitekey</i> is public and goes on your page as{' '}
+        <code>data-turnstile-sitekey</code>, and the secret key goes on this Worker. Charcha cannot
+        see your pages, so set both or neither — a secret key with no sitekey holds every comment
+        for review, marked <code>turnstile: no-token-unverified-deployment</code>, while a sitekey
+        with no secret key is the harmless direction.
       </p>
       {!set && (
         <>
           <ul className="space-y-1">
             <SecretRow name="TURNSTILE_SECRET_KEY" set={false} />
           </ul>
+          <p>
+            Create a widget at <b>Cloudflare dashboard</b> → <b>Turnstile</b> → <b>Add widget</b>.
+            It hands you both: the sitekey for your page, and the secret key below.
+          </p>
           <HowToSet names={['TURNSTILE_SECRET_KEY']} />
         </>
       )}

@@ -117,9 +117,9 @@ export function Setup({
       {/*
         Then the moderation policy, above the optional features because it is not one of
         them: it is the rule every comment on the site is decided by, and the only setting
-        on this tab that can put a comment in front of readers without the owner. Its own
-        copy points down to Turnstile rather than being placed after it, so the reading
-        order still opens on the decision.
+        on this tab that can put a comment in front of readers without the owner. So the
+        reading order opens on the decision rather than on the switches, which is why it is
+        here and not after Turnstile.
 
         It renders on its own read, so a `setup` failure leaves the one editable policy on
         this tab reachable rather than taking it down with the five sections that do

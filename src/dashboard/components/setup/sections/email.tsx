@@ -142,14 +142,18 @@ function NotifyFields({
 }) {
   const [draft, setDraft] = React.useState<{ from: string; to: string; name: string } | null>(null)
   const ids = React.useId()
-  const { busy, save, status, saveFailed } = useSettingsSave(onExpired, (settings) => {
-    setDraft({
-      from: settings.notifyFrom,
-      to: settings.notifyTo,
-      name: settings.notifyFromName,
-    })
-    onSaved(settings)
-  })
+  const { busy, save, status, saveFailed } = useSettingsSave(
+    onExpired,
+    (settings) => {
+      setDraft({
+        from: settings.notifyFrom,
+        to: settings.notifyTo,
+        name: settings.notifyFromName,
+      })
+      onSaved(settings)
+    },
+    'Notification settings',
+  )
 
   if (load.kind === 'loading') return <Skeleton className="h-3 w-3/5" />
   if (load.kind === 'failed') {

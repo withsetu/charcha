@@ -40,10 +40,14 @@ export function SiteAddressSection({
 }) {
   const [draft, setDraft] = React.useState<string | null>(null)
   const id = React.useId()
-  const { busy, save, status, saveFailed } = useSettingsSave(onExpired, (settings) => {
-    setDraft(settings.siteUrl)
-    onSaved(settings)
-  })
+  const { busy, save, status, saveFailed } = useSettingsSave(
+    onExpired,
+    (settings) => {
+      setDraft(settings.siteUrl)
+      onSaved(settings)
+    },
+    'Site address',
+  )
 
   return (
     <Section title="Your site’s address" status={null}>

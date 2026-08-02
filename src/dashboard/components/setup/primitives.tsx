@@ -336,9 +336,19 @@ export function OutboundLink({ href, children }: { href: string; children: React
  * shows afterwards is what the deployment will actually apply — an address comes back
  * trimmed and a site URL comes back canonicalised, which is the feedback that teaches the
  * rule (the same argument site-settings.tsx makes for the allowlist).
+ *
+ * **`what` names the form in the announcement, and it is a parameter rather than a
+ * constant because there are three of these on one scrolling tab.** A screen-reader user
+ * hearing an unattributed "Saved." has no way to tell which of them landed — and the
+ * moderation policy is the worst case, because it is the one control here that saves on a
+ * radio with no button of its own for the announcement to be anchored to.
  * Enforced by test/dashboard/setup.test.tsx.
  */
-export function useSettingsSave(onExpired: () => void, onSaved: (settings: Settings) => void) {
+export function useSettingsSave(
+  onExpired: () => void,
+  onSaved: (settings: Settings) => void,
+  what = 'Settings',
+) {
   const [busy, setBusy] = React.useState(false)
   const [failure, setFailure] = React.useState<ApiFailure | null>(null)
   const [announcement, setAnnouncement] = React.useState('')
@@ -356,7 +366,7 @@ export function useSettingsSave(onExpired: () => void, onSaved: (settings: Setti
           return
         }
         onSaved(result.value)
-        setAnnouncement('Saved.')
+        setAnnouncement(`${what} saved.`)
       })
       .catch(() => {
         setFailure(DASHBOARD_BUG)

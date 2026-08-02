@@ -199,6 +199,16 @@ function Trained({ report }: { report: ClassifierStatus }) {
   )
 }
 
+/**
+ * Cold, and the state a stalled trainer sits in for months.
+ *
+ * **The last-learned date is in this state and not only in `trained`, which is the whole
+ * point of having it.** A deployment stuck at 6 of 30 whose training writes are failing
+ * shows a count that has stopped and nothing else — and this is the long state, so it is
+ * the one where "quiet site" and "broken trainer" look alike for longest. Putting the date
+ * only on a working classifier would be instrumenting the case that needs it least.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
 function LearningState({ report }: { report: ClassifierStatus }) {
   const nothingYet = report.hamCount === 0 && report.spamCount === 0
 
@@ -210,7 +220,14 @@ function LearningState({ report }: { report: ClassifierStatus }) {
       It starts holding comments once you have approved {report.minPerClass} and marked{' '}
       {report.minPerClass} as spam, counted separately — <b>{remainingSentence(report)}</b> to go.
       Until then it abstains rather than guessing. <b>Only Approve and Spam teach it</b>, in the
-      queue; Delete does not. <Why />.
+      queue; Delete does not.{' '}
+      {report.updatedAt !== null && (
+        <>
+          It last learned something <LastLearned at={report.updatedAt} />, and if that stops moving
+          while you are still moderating, training has stopped.{' '}
+        </>
+      )}
+      <Why />.
     </p>
   )
 }
@@ -250,8 +267,9 @@ function NoBinding({ report }: { report: ClassifierStatus }) {
       )}
       Add it at <b>Workers &amp; Pages</b> → your Worker → <b>Bindings</b> → <b>Add</b> →{' '}
       <b>Workers AI</b>, with the variable name <code>AI</code>, then <b>Deploy</b>. It is free to
-      have: {FREE_NEURONS_PER_DAY} neurons a day on the free plan, and the inference runs in your
-      own Cloudflare account. <Why />.
+      have: {FREE_NEURONS_PER_DAY} neurons a day on the free plan, and one comment costs a fraction
+      of one, so a blog’s comments do not come near it. The inference runs in your own Cloudflare
+      account, so nothing is sent to anybody else. <Why />.
     </p>
   )
 }

@@ -46,18 +46,26 @@ export function OriginsSection({ load, onEdit }: { load: Load<Settings>; onEdit:
               ))}
             </ul>
           )}
-          <p>
-            {load.value.allowedOrigins.length === 0 && 'No addresses listed yet. '}
-            {load.value.selfOrigin !== '' && (
-              <>
-                This deployment’s own address, <code>{load.value.selfOrigin}</code>, is always
-                allowed without being listed
-                {load.value.allowedOrigins.length === 0 &&
-                  ' — but your site is a different address, so it has to be added before a page there can comment'}
-                .
-              </>
-            )}
-          </p>
+          {/*
+            The guard wraps the paragraph rather than sitting inside it. With a stored list
+            and no `selfOrigin` — which `src/admin/settings.ts` sends as `''` when the
+            request URL will not normalise — both clauses are false, and an inner guard
+            would leave an empty `<p>` opening a gap in the `space-y-3` stack for no text.
+          */}
+          {(load.value.allowedOrigins.length === 0 || load.value.selfOrigin !== '') && (
+            <p>
+              {load.value.allowedOrigins.length === 0 && 'No addresses listed yet. '}
+              {load.value.selfOrigin !== '' && (
+                <>
+                  This deployment’s own address, <code>{load.value.selfOrigin}</code>, is always
+                  allowed without being listed
+                  {load.value.allowedOrigins.length === 0 &&
+                    ' — but your site is a different address, so it has to be added before a page there can comment'}
+                  .
+                </>
+              )}
+            </p>
+          )}
           <Button variant="outline" size="sm" onClick={onEdit}>
             <GlobeIcon aria-hidden="true" />
             Edit allowed origins

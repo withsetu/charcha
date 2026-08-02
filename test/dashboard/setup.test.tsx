@@ -407,6 +407,26 @@ describe('the spam classifier, which trains itself and says nothing until it can
     expect((await section()).textContent).toContain('3 days ago')
   })
 
+  it('says it while it is still learning too, which is where a stall hides longest', async () => {
+    // **The state the date is worth the most in, and the one the #216 rewrite dropped it
+    // from before this test existed.** A deployment stuck at 6 of 30 whose training writes
+    // are failing shows a count that has stopped and nothing else — and `learning` is the
+    // long state, so "quiet site" and "broken trainer" look alike here for months. A test
+    // asserting the date only on `trained` instruments the case that needs it least.
+    const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
+    showing({ state: 'learning', hamCount: 6, spamCount: 40, updatedAt: threeDaysAgo })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('3 days ago')
+    expect(text).toContain('training has stopped')
+  })
+
+  it('claims no learning history on a deployment that has none', async () => {
+    showing({ state: 'learning', hamCount: 0, spamCount: 0, updatedAt: null })
+
+    expect((await section()).textContent).not.toContain('It last learned something')
+  })
+
   it('says the layer never runs when there is no binding, and how to give it one', async () => {
     // Distinguishable from *cold* by what it asks for: a binding rather than more
     // moderating. Nothing else on the deployment is affected, which the copy says
@@ -1018,6 +1038,13 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(section.textContent).not.toContain('Recommended')
     expect(section.textContent).not.toContain('the absence of something wrong')
     expect(section.querySelector('pre')).toBeNull()
+    // **Including the widget-creation route, which is the one that nearly survived the
+    // #216 rewrite by being folded into the paragraph that has to render in both states.**
+    // The sitekey fact is true of a configured deployment and stays; "go and add a widget"
+    // is an instruction to redo something already done, on the first section a finished tab
+    // opens on.
+    expect(section.textContent).not.toContain('Add widget')
+    expect(section.textContent).not.toContain('Create a widget')
   })
 
   it('names both halves before it gives the command that sets one', async () => {
@@ -1341,10 +1368,12 @@ describe('the moderation policy', () => {
 
     await waitFor(() => {
       // Scoped: the notification and site-address forms each have a status line of their
-      // own now, so an unscoped `getByRole('status')` finds three. The sentence is
-      // `useSettingsSave`'s since #216 — this control stopped carrying a second copy of
-      // the save machinery, and with it a second way to word the same outcome.
-      expect(policyStatus()).toContain('Saved')
+      // own now, so an unscoped `getByRole('status')` finds three. **And the sentence names
+      // this form**, which is why `useSettingsSave` takes the name rather than announcing a
+      // bare "Saved.": three live regions on one scrolling tab all saying the same word
+      // leave a screen-reader user unable to tell which landed, and this is the control
+      // with no Save button of its own to anchor it to.
+      expect(policyStatus()).toBe('Moderation policy saved.')
     })
     expect(option(/hold every comment/i).getAttribute('aria-checked')).toBe('true')
   })
