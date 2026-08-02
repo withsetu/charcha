@@ -71,6 +71,18 @@ export const MAX_SITE_URL_LENGTH = 2048
 export const MAX_EMAIL_ADDRESS_LENGTH = 254
 
 /**
+ * The cap on the *deprecated* `CHARCHA_NOTIFY_FROM` secret, which is wider than an address.
+ *
+ * That secret documented `Charcha <comments@example.com>` as a legal value, so a
+ * deployment still on the fallback (#207) can hand this module a whole `From` value rather
+ * than a bare address — an address, a space, a display name and two angle brackets. The
+ * `notify_from` row that replaced it holds the address alone and is capped at
+ * `MAX_EMAIL_ADDRESS_LENGTH`; this exists only until #209 removes the fallback.
+ * Enforced by test/worker/settings.test.ts.
+ */
+const MAX_LEGACY_NOTIFY_FROM_LENGTH = MAX_EMAIL_ADDRESS_LENGTH + MAX_FROM_NAME_LENGTH + 3
+
+/**
  * Every key the public submission path may need, read together.
  *
  * A list rather than five calls, so adding the sixth costs no query. The moderation policy
@@ -201,9 +213,7 @@ export function resolveSiteSettings(
       NOTIFY_FROM_SETTING,
       'CHARCHA_NOTIFY_FROM',
       env.CHARCHA_NOTIFY_FROM,
-      // The deprecated secret may carry `Name <address>`, so the cap has to hold that
-      // rather than only a bare address.
-      MAX_EMAIL_ADDRESS_LENGTH + 1 + 64 + 2,
+      MAX_LEGACY_NOTIFY_FROM_LENGTH,
     ),
     notifyTo: rowOrSecret(
       values,
