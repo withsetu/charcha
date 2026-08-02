@@ -34,7 +34,7 @@
 import { MODERATION_POLICY_SETTING, readSettings } from './db'
 import { parseModerationPolicy } from './moderation/policy'
 import type { ModerationPolicy } from './moderation/policy'
-import { fromNameProblem } from './notify/from'
+import { MAX_FROM_NAME_LENGTH, fromNameProblem } from './notify/from'
 import { announceOnce } from './spam/log'
 
 /** The `settings` key holding the site this deployment takes comments for (#207). */
@@ -179,7 +179,11 @@ export function resolveSiteSettings(
   // Refused rather than repaired, and null rather than a partial name: a display name that
   // silently lost a character is the failure src/notify/from.ts refuses to ship, and this
   // is the same decision on the read side.
-  const storedName = usable(values.get(NOTIFY_FROM_NAME_SETTING), Number.MAX_SAFE_INTEGER)
+  // Capped before `fromNameProblem` sees it rather than left to that function's own
+  // check, so nothing here trims and scans a string whose only bound is the D1 column.
+  // Nothing on a public path writes this row, so it is habit rather than a live hole —
+  // and it is the habit card rule 5 is.
+  const storedName = usable(values.get(NOTIFY_FROM_NAME_SETTING), MAX_FROM_NAME_LENGTH)
   const notifyFromName =
     storedName !== null && fromNameProblem(storedName) === null ? storedName : null
 
