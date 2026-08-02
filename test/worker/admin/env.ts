@@ -10,6 +10,7 @@ import { REPORTED_SECRETS, type ReportedSecret } from '../../../src/admin/setup'
 const mutable = env as unknown as {
   CHARCHA_DASHBOARD_PASSWORD?: string
   LOGIN_RATE_LIMITER?: RateLimit
+  AI?: Ai
 }
 
 export const TEST_PASSWORD = 'ThFn6Q7Rf2kZ8pWvB3xTqYuA'
@@ -55,6 +56,32 @@ export function restoreLimiter(): void {
 /** Puts the secret back to whatever the Worker actually has. */
 export function restorePassword(): void {
   configurePassword(realPassword)
+}
+
+/**
+ * The Workers AI binding as this isolate was given it, so its absence can be tested.
+ *
+ * **Absence is the case that matters and the one nothing else in the suite can reach.**
+ * `wrangler.jsonc` declares the `ai` binding, so `env.AI` is present in every test —
+ * which is the *provisioned* deployment. A deployment that never got one (the binding
+ * removed, or a Worker set up by hand rather than through the Deploy button) is the state
+ * #177 exists to make visible, and the only way to stand in it here is to take the
+ * binding off `env` and put it back.
+ *
+ * Nothing here calls it. Workers AI has no local simulation, so a test that reached the
+ * binding would need account credentials and spend real neurons — see vitest.config.ts.
+ */
+const realAi = mutable.AI
+
+/** Removes the binding entirely, which is the never-provisioned deployment. */
+export function removeAiBinding(): void {
+  delete mutable.AI
+}
+
+/** Puts it back to whatever this isolate actually has, which may be nothing. */
+export function restoreAiBinding(): void {
+  if (realAi === undefined) delete mutable.AI
+  else mutable.AI = realAi
 }
 
 /**

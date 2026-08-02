@@ -200,9 +200,16 @@ export function toUnitVector(vector: Float32Array): Float32Array | null {
  * The cold-start gate, and the reason a fresh deployment's submission path never
  * reaches Workers AI at all — see ./classifier.ts, which checks this *before* it
  * spends an embedding.
+ *
+ * **It takes the counts and not a whole `SpamModel`**, so the one caller that has no
+ * weights to hand can still ask the same question rather than comparing the numbers
+ * again itself: ./status.ts describes the layer for the Setup tab (#177) from a row that
+ * deliberately never reads the BLOB. A second copy of `>= MIN_LABELS_PER_CLASS` in both
+ * classes is exactly the kind of duplicate that goes on reporting *trained* after this
+ * gate has moved.
  * Enforced by test/worker/spam/model.test.ts and test/worker/spam/classifier.test.ts.
  */
-export function isTrained(model: SpamModel): boolean {
+export function isTrained(model: Pick<SpamModel, 'hamCount' | 'spamCount'>): boolean {
   return model.hamCount >= MIN_LABELS_PER_CLASS && model.spamCount >= MIN_LABELS_PER_CLASS
 }
 
