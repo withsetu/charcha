@@ -61,6 +61,20 @@ function mount(overrides: { onEditOrigins?: () => void; onExpired?: () => void }
   )
 }
 
+/**
+ * What a settings field currently shows.
+ *
+ * A narrowing rather than a cast, because the two TypeScript projects that read this file
+ * disagree about what `getByLabelText` returns and only one of them accepts an assertion —
+ * and `instanceof` is the answer both take. It returns `''` for anything that is not an
+ * input, which is a value no assertion below expects, so a query that stopped finding the
+ * field fails rather than passing on a blank.
+ */
+function fieldValue(label: string): string {
+  const element = screen.getByLabelText(label)
+  return element instanceof HTMLInputElement ? element.value : '(not an input)'
+}
+
 /** The whole panel's text, for the assertions that are about what is *not* in it. */
 function panelText(): string {
   return document.body.textContent ?? ''
@@ -184,9 +198,9 @@ describe('email notifications, which are a key and two addresses or nothing (#20
     mount()
 
     await screen.findByText('Email notifications')
-    expect(screen.getByLabelText('Send notifications to').value).toBe('maya@maya.build')
-    expect(screen.getByLabelText('Send them from').value).toBe('comments@maya.build')
-    expect(screen.getByLabelText('Sender name (optional)').value).toBe('maya.build comments')
+    expect(fieldValue('Send notifications to')).toBe('maya@maya.build')
+    expect(fieldValue('Send them from')).toBe('comments@maya.build')
+    expect(fieldValue('Sender name (optional)')).toBe('maya.build comments')
   })
 
   it('sends the three settings when the form is saved, and shows the server’s answer back', async () => {
@@ -231,7 +245,7 @@ describe('email notifications, which are a key and two addresses or nothing (#20
       })
     })
     await waitFor(() => {
-      expect(screen.getByLabelText('Sender name (optional)').value).toBe('Charcha')
+      expect(fieldValue('Sender name (optional)')).toBe('Charcha')
     })
     expect(stub.paths()).toContain('/admin/api/settings')
   })
@@ -279,7 +293,7 @@ describe('email notifications, which are a key and two addresses or nothing (#20
 
     await screen.findByText('Email notifications')
     expect(panelText()).toContain('still coming from secrets you set with wrangler')
-    expect(screen.getByLabelText('Send notifications to').value).toBe('')
+    expect(fieldValue('Send notifications to')).toBe('')
     // And it is reported as on, because it genuinely is.
     expect(panelText()).not.toContain('Partly set up')
   })
@@ -294,7 +308,7 @@ describe('your site’s address, which used to be a secret (#207)', () => {
     mount()
 
     await screen.findByText('Your site’s address')
-    expect(screen.getByLabelText('Home page address').value).toBe('https://maya.build')
+    expect(fieldValue('Home page address')).toBe('https://maya.build')
     expect(panelText()).not.toContain('wrangler secret put CHARCHA_SITE_URL')
   })
 
@@ -320,7 +334,7 @@ describe('your site’s address, which used to be a secret (#207)', () => {
     // The canonical form the server stored, not the spelling that was typed — the same
     // feedback the allowlist gives.
     await waitFor(() => {
-      expect(screen.getByLabelText('Home page address').value).toBe('https://maya.build')
+      expect(fieldValue('Home page address')).toBe('https://maya.build')
     })
   })
 
