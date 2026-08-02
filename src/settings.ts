@@ -231,7 +231,11 @@ export function resolveSiteSettings(
  *
  * Called once per `POST /comments`, before the spam check is assembled, so that layer 8's
  * site URL and the notifier's addresses come from the same read as the moderation policy.
- * Enforced by test/worker/settings.test.ts and test/worker/submit/query-count.test.ts.
+ * Enforced by test/worker/settings.test.ts for what it resolves, and by
+ * test/worker/submit/trust.test.ts and test/worker/notify/route-wiring.test.ts for the
+ * count — both of which assert that exactly one of a submission's statements reads
+ * `settings`, rather than only pinning the total. A total alone would be satisfied by two
+ * settings reads and one fewer somewhere else.
  */
 export async function readSiteSettings(
   db: D1Database,

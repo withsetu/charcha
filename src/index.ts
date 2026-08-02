@@ -69,7 +69,10 @@ app.post('/comments', async (c) => {
   //
   // So a submission spends at most two settings statements, and it is the same two
   // however many settings this project grows.
-  // Enforced by test/worker/submit/query-count.test.ts.
+  // Enforced by test/worker/notify/route-wiring.test.ts, which posts a real comment at
+  // this route and pins both the statement count and the fact that exactly one of them
+  // reads `settings`, and by test/worker/submit/trust.test.ts for the same two properties
+  // per moderation policy.
   const settings = await readSiteSettings(c.env.DB, c.env)
 
   const response = await handleSubmit(c, {
