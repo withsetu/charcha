@@ -26,6 +26,7 @@ import {
 import { PREVIEW_PATH, handlePreview } from './preview/route'
 import { handleRead } from './read/route'
 import { ROOT_PAGE, ROOT_PAGE_HEADERS } from './root/page'
+import { readSiteSettings } from './settings'
 import { createSpamCheck } from './spam'
 import { handleSubmit } from './submit/route'
 
@@ -57,8 +58,35 @@ app.post('/comments', async (c) => {
   const decision = await resolveOrigin(c.env.DB, c.req.raw)
   if (isUnlistedBrowserOrigin(decision)) return unlistedOriginResponse()
 
+  // **Every `settings` row this request needs, in one statement (#207).** Layer 8's site
+  // URL, the notifier's two addresses and its display name, and the moderation policy are
+  // all rows now, and reading them one at a time would be five seeks where there is one —
+  // on the path CLAUDE.md's constant-query-count rule is about. The allowlist above is
+  // deliberately *not* in that read: it is resolved before the request is accepted at all
+  // and is shared with `GET /comments`, so folding it in would make the read path pay for
+  // the notification settings, and a same-origin submission pay for an allowlist it never
+  // compares against.
+  //
+  // So a submission spends at most two settings statements, and it is the same two
+  // however many settings this project grows.
+  // Enforced by test/worker/notify/route-wiring.test.ts, which posts a real comment at
+  // this route and pins both the statement count and the fact that exactly one of them
+  // reads `settings`, and by test/worker/submit/trust.test.ts for the same two properties
+  // per moderation policy.
+  const settings = await readSiteSettings(c.env.DB, c.env)
+
   const response = await handleSubmit(c, {
-    spamCheck: createSpamCheck(c.env),
+    spamCheck: createSpamCheck({
+      // Built as a literal rather than spread from `c.env`, following the house rule in
+      // src/spam/provider.ts: a binding added to `Env` must not reach the spam layers
+      // because somebody widened a spread.
+      TURNSTILE_SECRET_KEY: c.env.TURNSTILE_SECRET_KEY,
+      IP_HASH_SECRET: c.env.IP_HASH_SECRET,
+      AKISMET_API_KEY: c.env.AKISMET_API_KEY,
+      AI: c.env.AI,
+      siteUrl: settings.siteUrl,
+    }),
+    settings,
     significantParams: SIGNIFICANT_PARAMS,
   })
   return withCors(response, decision.allowedOrigin)

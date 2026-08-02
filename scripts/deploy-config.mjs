@@ -140,6 +140,29 @@ function documentsPostDeploy(docs, name) {
  */
 export const DEPLOY_FORM_SECRETS = ['CHARCHA_DASHBOARD_PASSWORD', 'IP_HASH_SECRET']
 
+/**
+ * Secrets `src/` still reads but that a deployer must **not** be told to set (#207).
+ *
+ * `CHARCHA_SITE_URL`, `CHARCHA_NOTIFY_FROM` and `CHARCHA_NOTIFY_TO` are `settings` rows
+ * now, editable in the dashboard. The `Env` declarations survive because an existing
+ * deployment's values are still honoured when the matching row has never been written —
+ * that fallback is the migration, and #209 removes it.
+ *
+ * **This is a hole in rule (1), so it is a list with its own three checks rather than an
+ * exemption.** Without them, "deprecated" would be a word in a comment and the gate would
+ * simply stop covering three names:
+ *
+ *   - it must not be on the deploy form, for the reason it left `env` at all;
+ *   - README must **not** carry `wrangler secret put <NAME>`, because that instruction now
+ *     sends a deployer to configure a value the code reads only when the dashboard field
+ *     is empty — which works until they edit the field, and then silently stops;
+ *   - README must still **name** it, because a deployment already running on one needs to
+ *     find out where its value moved to. That is the half a plain exemption would drop.
+ *
+ * Emptying this list is what #209 is; adding to it is a decision someone makes here.
+ */
+export const DEPRECATED_SECRETS = ['CHARCHA_SITE_URL', 'CHARCHA_NOTIFY_FROM', 'CHARCHA_NOTIFY_TO']
+
 /** Extensions a secret could be declared in. `.tsx` because the dashboard is React. */
 const SOURCE_EXTENSIONS = ['.ts', '.tsx']
 
@@ -431,14 +454,16 @@ function stopsOnFailure(between) {
 }
 
 /**
- * @param {{ cwd?: string, formSecrets?: string[] }} options `formSecrets` overrides
- *   `DEPLOY_FORM_SECRETS`, which is charcha's own list — the synthetic repositories in
- *   test/node/deploy-config.test.ts declare different secrets and pass their own.
+ * @param {{ cwd?: string, formSecrets?: string[], deprecatedSecrets?: string[] }} options
+ *   `formSecrets` and `deprecatedSecrets` override charcha's own lists — the synthetic
+ *   repositories in test/node/deploy-config.test.ts declare different secrets and pass
+ *   their own.
  * @returns {Promise<{ ok: boolean, collected: string[], violations: Array<{ status: string, message: string }> }>}
  */
 export async function checkDeployConfig({
   cwd = process.cwd(),
   formSecrets = DEPLOY_FORM_SECRETS,
+  deprecatedSecrets = DEPRECATED_SECRETS,
 } = {}) {
   /** @type {Array<{ status: string, message: string }>} */
   const violations = []
@@ -526,6 +551,9 @@ export async function checkDeployConfig({
 
     for (const name of listed) {
       if (formSecrets.includes(name)) continue
+      // A deprecated name on the form has its own, more specific violation below; two
+      // messages about one line is one message nobody reads.
+      if (deprecatedSecrets.includes(name)) continue
       violations.push({
         status: 'unexpected-form-field',
         message:
@@ -537,8 +565,53 @@ export async function checkDeployConfig({
       })
     }
 
+    // The three checks that keep `DEPRECATED_SECRETS` from being an unconditional
+    // exemption. See that constant.
+    for (const name of deprecatedSecrets) {
+      if (!secrets.some((secret) => secret.name === name)) {
+        violations.push({
+          status: 'deprecated-secret-not-read',
+          message:
+            `${name} is on DEPRECATED_SECRETS and no \`interface Env\` under ${SOURCE_DIR}/ ` +
+            `declares it any more, so the fallback that list exists to describe is gone. Take ` +
+            `the name off the list — with it there, this check is exempting something that ` +
+            `does not exist.`,
+        })
+        continue
+      }
+      if (listed.includes(name)) {
+        violations.push({
+          status: 'deprecated-form-field',
+          message:
+            `${name} is deprecated and an example file lists it, so the deploy form asks every ` +
+            `new deployer to fill in a value the code reads only until they use the dashboard ` +
+            `field that replaced it. Take it out of the example file.`,
+        })
+      }
+      if (documentsPostDeploy(postDeployDocs, name)) {
+        violations.push({
+          status: 'deprecated-secret-still-instructed',
+          message:
+            `${POST_DEPLOY_DOCS_FILE} still contains \`${postDeployInstruction(name)}\`, and ` +
+            `${name} is deprecated: the setting that replaced it wins whenever it has been ` +
+            `saved, so following that line configures something that works until the owner ` +
+            `edits the dashboard and then silently stops. Describe the setting instead.`,
+        })
+      }
+      if (!postDeployDocs.includes(name)) {
+        violations.push({
+          status: 'undocumented-deprecated-secret',
+          message:
+            `${name} is deprecated and ${POST_DEPLOY_DOCS_FILE} does not mention it at all. A ` +
+            `deployment already running on it has no way to learn where its value moved to, ` +
+            `which is the failure the deprecation is supposed to avoid rather than cause.`,
+        })
+      }
+    }
+
     for (const secret of secrets) {
       if (listed.includes(secret.name)) continue
+      if (deprecatedSecrets.includes(secret.name)) continue
       if (documentsPostDeploy(postDeployDocs, secret.name)) continue
       violations.push({
         status: 'unlisted-secret',
@@ -748,16 +821,22 @@ if (isCli) {
   // the same files to print it would be the exact drift it exists to prevent.
   const names = (await declaredSecrets(process.cwd())).map((secret) => secret.name)
   const asked = names.filter((name) => collected.includes(name))
-  const afterwards = names.filter((name) => !collected.includes(name))
+  const deprecated = names.filter((name) => DEPRECATED_SECRETS.includes(name))
+  const afterwards = names.filter(
+    (name) => !collected.includes(name) && !DEPRECATED_SECRETS.includes(name),
+  )
 
-  // Printed as two lists rather than one count, because which side a secret is on is
-  // the decision #139 was about and the thing worth seeing change in a diff of CI logs.
+  // Printed as three lists rather than one count, because which side a secret is on is
+  // the decision #139 was about — and since #207 there is a third side — and it is the
+  // thing worth seeing change in a diff of CI logs.
   console.log(
     `[ok] every secret src/ reads reaches the deployer.\n` +
       `     asked for by the deploy form, and described in package.json: ` +
       `${asked.join(', ') || '(none)'}\n` +
       `     set after the deploy, with a \`wrangler secret put\` line in ` +
       `${POST_DEPLOY_DOCS_FILE}: ${afterwards.join(', ') || '(none)'}\n` +
+      `     deprecated: read only as a fallback, named but never instructed in ` +
+      `${POST_DEPLOY_DOCS_FILE}: ${deprecated.join(', ') || '(none)'}\n` +
       `     the \`deploy\` script applies migrations to the D1 binding and stops if they fail`,
   )
 }

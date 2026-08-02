@@ -110,26 +110,36 @@ export function akismetProvider(config: AkismetConfig): SpamProvider | null {
   if (!hasKey && !hasSite) return null
 
   if (!hasSite) {
-    announce('akismet:no-site-url', false, 'AKISMET_API_KEY is set but CHARCHA_SITE_URL is not', {
-      fix: 'set CHARCHA_SITE_URL to your site’s home page URL, or unset AKISMET_API_KEY to leave layer 8 off',
-    })
+    announce(
+      'akismet:no-site-url',
+      false,
+      'AKISMET_API_KEY is set but the site_url setting is not',
+      {
+        fix: 'set your site’s address under Setup in your Charcha dashboard, or unset AKISMET_API_KEY to leave layer 8 off',
+      },
+    )
     return null
   }
   if (!hasKey) {
-    announce('akismet:no-api-key', false, 'CHARCHA_SITE_URL is set but AKISMET_API_KEY is not', {
-      fix: 'set AKISMET_API_KEY, or leave layer 8 off — every other spam layer runs without it',
-    })
+    announce(
+      'akismet:no-api-key',
+      false,
+      'the site_url setting is set but AKISMET_API_KEY is not',
+      {
+        fix: 'set AKISMET_API_KEY, or leave layer 8 off — every other spam layer runs without it',
+      },
+    )
     return null
   }
 
-  const blog = homeUrl(rawSiteUrl)
+  const blog = siteHomeUrl(rawSiteUrl)
   if (blog === null) {
     // Checked once, here, rather than per submission. `blog` is required, so an
     // unusable one means every check would spend a metered call to be told
     // `invalid` — the site owner paying, per comment, for an answer that cannot
     // arrive.
-    announce('akismet:bad-site-url', false, 'CHARCHA_SITE_URL is not an http(s) URL', {
-      fix: 'set CHARCHA_SITE_URL to an absolute URL, scheme included — https://example.com',
+    announce('akismet:bad-site-url', false, 'the site_url setting is not an http(s) URL', {
+      fix: 'set your site’s address to an absolute URL, scheme included — https://example.com',
     })
     return null
   }
@@ -313,7 +323,7 @@ function reportAlert(response: Response): void {
 }
 
 /**
- * The `blog` value, or `null` if the owner's `CHARCHA_SITE_URL` cannot be one.
+ * The `blog` value, or `null` if the owner's `site_url` setting cannot be one.
  *
  * Query and fragment are dropped — Akismet wants "the front page or home URL", and
  * a `?utm_source` pasted in from a browser bar would make the site unrecognisable
@@ -321,9 +331,17 @@ function reportAlert(response: Response): void {
  * `user.github.io/blog` is exactly this project's audience and its home page is not
  * the origin. A trailing slash is dropped so two spellings of one site are one
  * string.
- * Enforced by test/worker/spam/akismet.test.ts.
+ *
+ * **Exported since #207, and the dashboard's settings write is the second caller.** The
+ * value is a `settings` row now, so the owner types it into a field and can be told it is
+ * wrong — where before the only feedback was a log line nobody was tailing. Both sides go
+ * through this one function, so what is stored is what layer 8 will send rather than the
+ * spelling that was pasted. Reuse rather than a second URL parser: two canonicalisations
+ * that disagreed would let the dashboard accept a value that then announced itself
+ * unusable on the next comment, which is the #107 shape.
+ * Enforced by test/worker/spam/akismet.test.ts and test/worker/admin/settings.test.ts.
  */
-function homeUrl(raw: string): string | null {
+export function siteHomeUrl(raw: string): string | null {
   let parsed: URL
   try {
     parsed = new URL(raw)

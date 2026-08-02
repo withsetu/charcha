@@ -70,8 +70,12 @@ const QUOTE_PREFIX = '> '
  *     *within* a line, which is enough to make a `From:` line render as something
  *     other than what is stored. This is the case a column-0 rule does not cover,
  *     which is why the character filter exists alongside it rather than instead of it.
+ *
+ * Exported because src/notify/from.ts refuses the same set in the owner's display name
+ * (#208) — one class rather than a second copy that can drift. What that file adds is CR,
+ * LF and tab, which a plain-text body legitimately contains and a header does not.
  */
-const CONTROL_CHARACTERS =
+export const CONTROL_CHARACTERS =
   // eslint-disable-next-line no-control-regex -- the control characters are the point of this expression
   /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g
 
@@ -162,8 +166,14 @@ export function buildOwnerNotification(event: CommentCreatedEvent, suppressed = 
   lines.push(
     'Open the moderation queue in your Charcha dashboard to approve or reject it.',
     '',
-    'You are getting this because CHARCHA_NOTIFY_TO is set on your Charcha Worker.',
-    'Unset it to stop these emails.',
+    // Names the surface the owner can act on rather than the secret it used to be
+    // (#207). "Unset CHARCHA_NOTIFY_TO" was an instruction that needed a terminal, a
+    // checkout and wrangler; the setting is a field on a page they are already signed in
+    // to. The deprecated secret is still read when the row was never written, and an
+    // owner in that state is told so once per isolate in their Worker's log rather than
+    // in every email — see rowOrSecret in src/settings.ts.
+    'You are getting this because a notification address is set on your Charcha deployment.',
+    'Clear it under Setup in your Charcha dashboard to stop these emails.',
   )
 
   return {

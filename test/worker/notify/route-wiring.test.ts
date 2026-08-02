@@ -21,7 +21,9 @@
 
 import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeSetting } from '../../../src/db'
 import { RESEND_SEND_URL } from '../../../src/notify/resend'
+import { NOTIFY_TO_SETTING } from '../../../src/settings'
 import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
 import { reportingDefer } from '../../../src/submit/route'
 import type { WaitUntilContext } from '../../../src/submit/route'
@@ -119,6 +121,10 @@ async function countComments() {
 beforeEach(async () => {
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
+  // Since #207 the notification addresses are rows, so a row left behind by one test is a
+  // configuration the next one did not choose — the same reason the two tables above are
+  // cleared rather than trusted to be empty.
+  await db.exec('DELETE FROM settings')
 })
 
 afterEach(() => {
@@ -218,6 +224,34 @@ describe('POST /comments — unconfigured means off, not broken', () => {
   })
 })
 
+describe('POST /comments — the settings rows are what the Worker actually reads (#207)', () => {
+  it('stops sending when the owner clears the row, even with the old secret still set', async () => {
+    // The migration's sharp edge, driven through the real route. The deprecated secret is
+    // read only when the row has never been written — an owner who cleared `notify_to` in
+    // the dashboard has asked for no notifications, and restoring the secret they thought
+    // they had replaced would keep mailing them after a save they watched succeed.
+    //
+    // **Placed here, before the burst is spent, and that is not incidental.** This test's
+    // evidence is that *nothing* was sent, and once the isolate's five tokens are gone
+    // nothing is sent whatever the settings say — the assertion would hold for the wrong
+    // reason and the guard could be removed without a red test. Two tokens are still in
+    // the bucket at this point, so a fallback that wrongly fired would make a real
+    // request and be recorded. Kill-shot confirmed.
+    configureNotify()
+    await writeSetting(db, NOTIFY_TO_SETTING, '', Math.floor(Date.now() / 1000))
+    const calls = stubFetch(accepted)
+
+    const response = await post({
+      url: 'https://maya.build/notes/cleared',
+      body: 'A comment on a deployment whose owner turned the notifications off.',
+    })
+
+    expect(response.status).toBe(202)
+    expect(await countComments()).toBe(1)
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('POST /comments — a comment the spam layers rejected never mails', () => {
   it('mails for the comment that got through and not for the one the honeypot caught', async () => {
     // A spam flood becoming an email flood at the owner's expense is the failure this
@@ -249,8 +283,14 @@ describe('POST /comments — a comment the spam layers rejected never mails', ()
 describe('POST /comments — the notification costs no D1 queries', () => {
   /**
    * What one root comment on a new thread costs, with no `Origin` header, in order:
-   * the per-page rate-limit count, the duplicate-body check, the classifier's model
-   * read, the thread insert, the comment insert.
+   * the batched settings read, the per-page rate-limit count, the duplicate-body check,
+   * the classifier's model read, the thread insert, the comment insert.
+   *
+   * **The settings read is one statement and it stays one (#207).** It carries the
+   * moderation policy, layer 8's site URL, and the notifier's two addresses and display
+   * name — five rows that would otherwise be five seeks, and a sixth setting that would
+   * be a sixth. It replaced a conditional `readSetting` for the policy, so the number
+   * below did not move by five; it moved by one, and the conditional went away with it.
    *
    * Both bodies below are past `DUPLICATE_MIN_LENGTH` (60, src/spam/content.ts) on
    * purpose: under it the duplicate check does not run and this is one lower, which
@@ -274,9 +314,9 @@ describe('POST /comments — the notification costs no D1 queries', () => {
    * 50-query budget is per invocation, and constant is the rule); a submit path that
    * legitimately gains a statement updates this line.
    */
-  const STATEMENTS_PER_SUBMISSION = 5
+  const STATEMENTS_PER_SUBMISSION = 6
 
-  it('prepares the same five statements with notifications on as with them off', async () => {
+  it('prepares the same six statements with notifications on as with them off', async () => {
     const prepare = db.prepare.bind(db)
     const seen: string[] = []
     vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
@@ -302,6 +342,27 @@ describe('POST /comments — the notification costs no D1 queries', () => {
 
     expect(withoutNotify).toBe(STATEMENTS_PER_SUBMISSION)
     expect(withNotify).toBe(STATEMENTS_PER_SUBMISSION)
+  })
+
+  it('reads every setting in one statement rather than one per row', async () => {
+    // The property the number above rests on. A total alone would be satisfied by two
+    // settings reads and one fewer somewhere else, and #207's whole point is that the
+    // count stops depending on how many settings this project has.
+    const prepare = db.prepare.bind(db)
+    const seen: string[] = []
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      seen.push(sql)
+      return prepare(sql)
+    })
+
+    unconfigureNotify()
+    stubFetch(accepted)
+    await post({
+      url: 'https://maya.build/notes/one-read',
+      body: 'One comment on a page nobody has commented on before, counting settings reads.',
+    })
+
+    expect(seen.filter((sql) => sql.includes('from settings'))).toHaveLength(1)
   })
 })
 

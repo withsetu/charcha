@@ -50,7 +50,7 @@
 // it is generic isolate-scoped observability and src/admin already reuses it from two
 // files. Its dedupe set is shared across callers, so the keys here are namespaced.
 import { announceOnce } from '../spam/log'
-import type { NotifyEnv } from './env'
+import type { NotifyEnv, NotifySettings } from './env'
 import type { CommentCreatedEvent } from './event'
 import { buildOwnerNotification } from './message'
 import { sendEmail } from './resend'
@@ -99,7 +99,7 @@ export interface NotifierOverrides {
  * Trimmed because a trailing newline from `wrangler secret put` is a real way to
  * configure a broken `Authorization` header, and a blank string is not a secret.
  */
-function configured(value: string | undefined): string | null {
+function configured(value: string | undefined | null): string | null {
   const trimmed = (value ?? '').trim()
   return trimmed === '' ? null : trimmed
 }
@@ -107,24 +107,37 @@ function configured(value: string | undefined): string | null {
 /**
  * Builds the notifier the submission pipeline hands stored comments to.
  *
- * All three values are required together, and a blank one counts as absent. A key
+ * **Two arguments rather than one, because the three values stopped being the same kind
+ * of thing (#207).** `RESEND_API_KEY` is a deployment secret set once with wrangler; the
+ * addresses are `settings` rows the owner can change from the dashboard between one
+ * comment and the next, already resolved — including the fallback to the deprecated
+ * secrets — by src/settings.ts. Nothing in this module reads `env` for an address, which
+ * is what keeps the deprecation in one place.
+ *
+ * All three values are still required together, and a blank one counts as absent. A key
  * with no recipient is a half-configured deployment, and there is no address to fall
  * back on: Charcha has no account and no owner email anywhere in its schema, so
  * guessing one is not available. Unconfigured means off, announced once per isolate
- * so an owner who set a secret in the wrong place can find out — the same shape
- * src/spam/turnstile.ts uses for the same problem.
+ * so an owner who configured half of it can find out — the same shape
+ * src/spam/turnstile.ts uses for the same problem. The names in that announcement are the
+ * settings the owner would go and edit, not the secrets two of them used to be.
  * Enforced by test/worker/notify/notifier.test.ts.
  */
-export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}): Notifier {
+export function createNotifier(
+  env: NotifyEnv,
+  settings: NotifySettings,
+  overrides: NotifierOverrides = {},
+): Notifier {
   const apiKey = configured(env.RESEND_API_KEY)
-  const from = configured(env.CHARCHA_NOTIFY_FROM)
-  const to = configured(env.CHARCHA_NOTIFY_TO)
+  const from = configured(settings.from)
+  const to = configured(settings.to)
+  const fromName = configured(settings.fromName)
 
   if (apiKey === null || from === null || to === null) {
     const absent: string[] = []
     if (apiKey === null) absent.push('RESEND_API_KEY')
-    if (from === null) absent.push('CHARCHA_NOTIFY_FROM')
-    if (to === null) absent.push('CHARCHA_NOTIFY_TO')
+    if (from === null) absent.push('the notify_from setting')
+    if (to === null) absent.push('the notify_to setting')
 
     return {
       commentCreated(): Promise<void> {
@@ -163,7 +176,12 @@ export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}
         const { subject, text } = buildOwnerNotification(event, granted.suppressed)
         const outcome = await sendEmail(
           {
-            from,
+            // Two fields rather than one composed string (#208). `sendEmail` joins them
+            // through `formatFrom`, which is the only place in this project that builds a
+            // `From` value — see src/notify/from.ts for why that field is the one worth
+            // being careful with.
+            fromAddress: from,
+            fromName,
             to,
             subject,
             text,
@@ -194,7 +212,7 @@ export function createNotifier(env: NotifyEnv, overrides: NotifierOverrides = {}
             announceOnce('notify-credential-rejected', {
               event: 'notify_config',
               enabled: true,
-              problem: `Resend rejected the request (${outcome.reason}): check RESEND_API_KEY, and that CHARCHA_NOTIFY_FROM is on a domain verified in that Resend account`,
+              problem: `Resend rejected the request (${outcome.reason}): check RESEND_API_KEY, and that the notify_from setting is on a domain verified in that Resend account`,
             })
           }
         }

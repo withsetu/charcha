@@ -30,7 +30,7 @@ Every comment that reaches layer 8 is posted to Akismet's `comment-check` endpoi
 | `comment_content` | The full text of the comment |
 | `user_agent` | Their browser's user-agent string |
 | `referrer` | The page their browser said they came from |
-| `permalink` | The page they commented on, built from your `CHARCHA_SITE_URL` |
+| `permalink` | The page they commented on, built from your site's address setting |
 | `comment_type` | `comment` or `reply` |
 | `comment_date_gmt` | When it was submitted |
 | `blog` | Your site's home page URL |
@@ -63,16 +63,18 @@ already been sent.
 
 ## Turning it on
 
-Two values, both together or the feature stays off:
+Two values, both together or the feature stays off. One is a credential:
 
 ```sh
 pnpm wrangler secret put AKISMET_API_KEY
-pnpm wrangler secret put CHARCHA_SITE_URL
 ```
 
 `AKISMET_API_KEY` comes from your account at [akismet.com](https://akismet.com/account/).
 
-`CHARCHA_SITE_URL` is your site's home page — `https://example.com`, or
+**Your site's address is the other half, and it is not a secret** — fill in *Your site's
+address* under **Setup** in your Charcha dashboard. (`CHARCHA_SITE_URL` is still read on a
+deployment that set it before that field existed, and only until the field is saved.) It
+is your home page — `https://example.com`, or
 `https://you.github.io/blog` if your site lives at a path. It is not optional and it is
 not guessable: Akismet requires it, matches it against the sites authorised on your key,
 and Charcha has nowhere else to get it from. Your Worker's own address is a

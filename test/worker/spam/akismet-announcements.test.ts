@@ -97,7 +97,10 @@ describe('layer 8 — what it announces', () => {
 
     const [line] = announcements()
     expect(line).toMatchObject({ enabled: false, provider: 'akismet' })
-    expect(JSON.stringify(line)).toContain('CHARCHA_SITE_URL')
+    // The setting rather than the secret, since #207 moved it — a deployer sent to
+    // `wrangler secret put CHARCHA_SITE_URL` would set a value the fallback only reads
+    // when the row is missing, and would then not understand why editing it did nothing.
+    expect(JSON.stringify(line)).toContain('site_url')
   })
 
   it('names the missing half when only the site URL is set', () => {
@@ -111,7 +114,7 @@ describe('layer 8 — what it announces', () => {
     expect(akismetProvider({ apiKey, siteUrl: 'maya.build' })).toBeNull()
 
     const line = announcements().at(-1)
-    expect(JSON.stringify(line)).toContain('CHARCHA_SITE_URL')
+    expect(JSON.stringify(line)).toContain('site_url')
   })
 
   it('reports the debug help Akismet sent with an "invalid" answer', async () => {

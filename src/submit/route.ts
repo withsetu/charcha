@@ -9,6 +9,7 @@
 import type { Context } from 'hono'
 import { createNotifier } from '../notify'
 import { readCappedText } from '../request-body'
+import type { SiteSettings } from '../settings'
 import { withFragmentHeaders } from '../response-headers'
 // Generic isolate-scoped observability, despite the path — see src/spam/log.ts. Its
 // dedupe set is shared across callers, so the key used here is namespaced.
@@ -59,6 +60,17 @@ export function renderResult(result: SubmitResult): Response {
 export interface SubmitRouteConfig {
   spamCheck: SpamCheck
   significantParams?: readonly string[]
+  /**
+   * Every `settings` row this request needs, read once by the route in one statement
+   * (#207).
+   *
+   * It is passed in rather than read here because the spam check is assembled from the
+   * same read — layer 8's site URL is one of these rows — and doing it twice would be two
+   * statements for one answer. Absent means an unconfigured deployment: `hold-all`, no
+   * notifications, and layer 8 off, which is the default everywhere and the fail-closed
+   * direction for each of the three.
+   */
+  settings?: SiteSettings
   /** Injectable for tests; defaults to the wall clock in unix seconds. */
   now?: () => number
 }
@@ -181,14 +193,22 @@ async function submitAnswer(
     // and the value counted there are the same key. Unset on a deployment that has
     // not run `wrangler secret put IP_HASH_SECRET`, and then nothing is stored.
     ipSecret: c.env.IP_HASH_SECRET,
+    // The moderation policy, from the same read the notifier's addresses came from
+    // (#207) — see SubmitRouteConfig.settings.
+    moderationPolicy: config.settings?.moderationPolicy,
     // Email notifications (#125). Both halves are assembled here rather than passed
-    // in as config, unlike `spamCheck`: they are read off the Context — the three
-    // secrets on `c.env`, and a `waitUntil` that exists nowhere else — and neither is
-    // a seam a caller replaces. `createNotifier` reads its own configuration and
-    // returns a notifier that does nothing when the trio is unset, which is the
+    // in as config, unlike `spamCheck`: the key is on the Context and the `waitUntil`
+    // exists nowhere else, and neither is a seam a caller replaces. Since #207 the two
+    // addresses and the display name are settings rather than secrets, so they arrive
+    // already resolved rather than being read off `c.env` here. `createNotifier` still
+    // returns a notifier that does nothing when any of the three is unset, which is the
     // default on every deployment, so this line is not a switch to check first.
     // Enforced by test/worker/notify/route-wiring.test.ts.
-    notifier: createNotifier(c.env),
+    notifier: createNotifier(c.env, {
+      from: config.settings?.notifyFrom ?? null,
+      to: config.settings?.notifyTo ?? null,
+      fromName: config.settings?.notifyFromName ?? null,
+    }),
     defer: deferFor(c),
   })
 

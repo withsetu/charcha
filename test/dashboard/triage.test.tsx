@@ -17,6 +17,7 @@ import {
   json,
   queuePage,
   rowNames,
+  settingsBody,
   stubFetch,
   unhandled,
   type FetchStub,
@@ -584,7 +585,7 @@ describe('switching view', () => {
         })
       }
       if (call.path === '/admin/api/settings') {
-        return json(200, { allowedOrigins: [], selfOrigin: 'https://comments.example.com' })
+        return json(200, settingsBody())
       }
       return unhandled(call)
     })

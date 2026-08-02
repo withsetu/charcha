@@ -6,12 +6,23 @@
 import { describe, expect, it } from 'vitest'
 import { createNotifier } from '../../../src/notify'
 import type { CommentCreatedEvent } from '../../../src/notify'
+import type { NotifySettings } from '../../../src/notify/env'
 import { NOTIFY_BURST, NOTIFY_REFILL_INTERVAL_MS, sendBudget } from '../../../src/notify/throttle'
 
-const CONFIGURED = {
-  RESEND_API_KEY: 'test-not-a-real-key',
-  CHARCHA_NOTIFY_FROM: 'Charcha <comments@maya.build>',
-  CHARCHA_NOTIFY_TO: 'maya@maya.build',
+/**
+ * The one value of the three that is still a secret (#207).
+ *
+ * The other two moved into `settings`, so they arrive as the second argument rather than
+ * on `env` — which is the seam this file exercises most, because "unconfigured means
+ * silently off" now has to hold across two different sources.
+ */
+const KEY = { RESEND_API_KEY: 'test-not-a-real-key' }
+
+/** The owner's notification settings, as src/settings.ts resolves them. */
+const SETTINGS: NotifySettings = {
+  from: 'comments@maya.build',
+  to: 'maya@maya.build',
+  fromName: null,
 }
 
 function eventFor(overrides: Partial<CommentCreatedEvent> = {}): CommentCreatedEvent {
@@ -55,7 +66,11 @@ describe('when the owner has not configured notifications', () => {
     // Absence of an API key is a valid state, not a fault (#14). A deployment that
     // never sets one still takes comments, and never learns about Resend at all.
     const { bodies, fetchImpl } = recorder()
-    const notifier = createNotifier({}, { fetch: fetchImpl })
+    const notifier = createNotifier(
+      {},
+      { from: null, to: null, fromName: null },
+      { fetch: fetchImpl },
+    )
 
     await expect(notifier.commentCreated(eventFor())).resolves.toBeUndefined()
     expect(bodies).toHaveLength(0)
@@ -67,28 +82,20 @@ describe('when the owner has not configured notifications', () => {
     // account and no owner email anywhere in the schema.
     const { bodies, fetchImpl } = recorder()
 
-    await createNotifier(
-      {
-        RESEND_API_KEY: CONFIGURED.RESEND_API_KEY,
-        CHARCHA_NOTIFY_FROM: CONFIGURED.CHARCHA_NOTIFY_FROM,
-      },
-      { fetch: fetchImpl },
-    ).commentCreated(eventFor())
+    await createNotifier(KEY, { ...SETTINGS, to: null }, { fetch: fetchImpl }).commentCreated(
+      eventFor(),
+    )
 
-    await createNotifier(
-      {
-        RESEND_API_KEY: CONFIGURED.RESEND_API_KEY,
-        CHARCHA_NOTIFY_TO: CONFIGURED.CHARCHA_NOTIFY_TO,
-      },
-      { fetch: fetchImpl },
-    ).commentCreated(eventFor())
+    await createNotifier(KEY, { ...SETTINGS, from: null }, { fetch: fetchImpl }).commentCreated(
+      eventFor(),
+    )
 
     expect(bodies).toHaveLength(0)
   })
 
   it('treats a blank secret as unconfigured, not as a secret', async () => {
     const { bodies, fetchImpl } = recorder()
-    const notifier = createNotifier({ ...CONFIGURED, RESEND_API_KEY: '   ' }, { fetch: fetchImpl })
+    const notifier = createNotifier({ RESEND_API_KEY: '   ' }, SETTINGS, { fetch: fetchImpl })
 
     await notifier.commentCreated(eventFor())
 
@@ -99,14 +106,65 @@ describe('when the owner has not configured notifications', () => {
 describe('when the owner has configured notifications', () => {
   it('sends one email for one comment', async () => {
     const { bodies, fetchImpl } = recorder()
-    const notifier = createNotifier(CONFIGURED, { fetch: fetchImpl, budget: sendBudget() })
+    const notifier = createNotifier(KEY, SETTINGS, { fetch: fetchImpl, budget: sendBudget() })
 
     await notifier.commentCreated(eventFor())
 
     expect(bodies).toHaveLength(1)
-    expect(bodies[0]?.to).toBe(CONFIGURED.CHARCHA_NOTIFY_TO)
-    expect(bodies[0]?.from).toBe(CONFIGURED.CHARCHA_NOTIFY_FROM)
+    expect(bodies[0]?.to).toBe(SETTINGS.to)
+    expect(bodies[0]?.from).toBe(SETTINGS.from)
     expect(bodies[0]?.subject).toBe('New comment awaiting moderation')
+  })
+
+  it('puts the display name on the From line when the owner set one (#208)', async () => {
+    const { bodies, fetchImpl } = recorder()
+    const notifier = createNotifier(
+      KEY,
+      { ...SETTINGS, fromName: 'maya.build comments' },
+      { fetch: fetchImpl, budget: sendBudget() },
+    )
+
+    await notifier.commentCreated(eventFor())
+
+    expect(bodies[0]?.from).toBe('maya.build comments <comments@maya.build>')
+  })
+
+  it('sends the bare address when a stored display name could forge a From line', async () => {
+    // The end-to-end version of the property src/notify/from.ts holds: whatever is in the
+    // `notify_from_name` row, the address in the payload is the address the owner
+    // configured. The dashboard refuses these on the way in (#208); this is the second
+    // layer, for a row written before that check existed or straight into D1.
+    const { bodies, fetchImpl } = recorder()
+    const budget = sendBudget()
+
+    for (const fromName of [
+      'Charcha\r\nBcc: victim@example.com',
+      'Charcha <security@bank.example>',
+    ]) {
+      await createNotifier(
+        KEY,
+        { ...SETTINGS, fromName },
+        { fetch: fetchImpl, budget },
+      ).commentCreated(eventFor())
+    }
+
+    expect(bodies).toHaveLength(2)
+    for (const body of bodies) expect(body.from).toBe('comments@maya.build')
+  })
+
+  it('still sends when the from address is a whole `Name <address>` from the old secret', async () => {
+    // The #207 fallback shape. `CHARCHA_NOTIFY_FROM` documented this value, so an
+    // existing deployment's resolved `from` carries a name already — and it must go out
+    // exactly as it always did rather than being wrapped in a second one.
+    const { bodies, fetchImpl } = recorder()
+
+    await createNotifier(
+      KEY,
+      { from: 'Charcha <comments@maya.build>', to: SETTINGS.to, fromName: 'Something Else' },
+      { fetch: fetchImpl, budget: sendBudget() },
+    ).commentCreated(eventFor())
+
+    expect(bodies[0]?.from).toBe('Charcha <comments@maya.build>')
   })
 
   it('never rejects, whatever the send did', async () => {
@@ -114,7 +172,7 @@ describe('when the owner has configured notifications', () => {
     // waitUntil is an unreported failure, which CLAUDE.md names by name — so the
     // notifier reports its own failures and resolves, and the caller has nothing to
     // catch. Enforced here rather than trusted.
-    const notifier = createNotifier(CONFIGURED, {
+    const notifier = createNotifier(KEY, SETTINGS, {
       fetch: () => Promise.reject(new Error('network is down')),
       budget: sendBudget(),
     })
@@ -125,7 +183,7 @@ describe('when the owner has configured notifications', () => {
   it('never rejects even when something unforeseen throws inside it', async () => {
     // A stand-in for any bug this module could grow later. The clock throwing is
     // the cheapest way to make the *synchronous* part of commentCreated fail.
-    const notifier = createNotifier(CONFIGURED, {
+    const notifier = createNotifier(KEY, SETTINGS, {
       fetch: recorder().fetchImpl,
       budget: sendBudget(),
       now: () => {
@@ -141,7 +199,7 @@ describe('flood control — a spam burst must not become a mail flood', () => {
   it('stops sending once the burst allowance is spent', async () => {
     const { bodies, fetchImpl } = recorder()
     const time = clock()
-    const notifier = createNotifier(CONFIGURED, {
+    const notifier = createNotifier(KEY, SETTINGS, {
       fetch: fetchImpl,
       budget: sendBudget(),
       now: time.now,
@@ -159,7 +217,7 @@ describe('flood control — a spam burst must not become a mail flood', () => {
     // true count even though they did not get the true number of emails.
     const { bodies, fetchImpl } = recorder()
     const time = clock()
-    const notifier = createNotifier(CONFIGURED, {
+    const notifier = createNotifier(KEY, SETTINGS, {
       fetch: fetchImpl,
       budget: sendBudget(),
       now: time.now,
@@ -199,7 +257,7 @@ describe('flood control — a spam burst must not become a mail flood', () => {
 
     const time = clock()
     const budget = sendBudget({ capacity: 1, refillIntervalMs: 1_000 })
-    const notifier = createNotifier(CONFIGURED, { fetch: fetchImpl, budget, now: time.now })
+    const notifier = createNotifier(KEY, SETTINGS, { fetch: fetchImpl, budget, now: time.now })
 
     // The first send fails. Nothing was suppressed before it, so it owes 1.
     await notifier.commentCreated(eventFor({ commentId: 1 }))
@@ -221,7 +279,7 @@ describe('flood control — a spam burst must not become a mail flood', () => {
   it('refills over time, so a quiet site is never throttled', async () => {
     const { bodies, fetchImpl } = recorder()
     const time = clock()
-    const notifier = createNotifier(CONFIGURED, {
+    const notifier = createNotifier(KEY, SETTINGS, {
       fetch: fetchImpl,
       budget: sendBudget(),
       now: time.now,
@@ -246,7 +304,7 @@ describe('the budget shared by every request in an isolate', () => {
     const { bodies, fetchImpl } = recorder()
 
     for (let i = 0; i < NOTIFY_BURST + 10; i += 1) {
-      await createNotifier(CONFIGURED, { fetch: fetchImpl }).commentCreated(
+      await createNotifier(KEY, SETTINGS, { fetch: fetchImpl }).commentCreated(
         eventFor({ commentId: i }),
       )
     }
@@ -314,7 +372,7 @@ describe('what the log line says, and what it must never say', () => {
       lines.push(args.map(String).join(' '))
     }
     try {
-      await createNotifier(CONFIGURED, {
+      await createNotifier(KEY, SETTINGS, {
         fetch: () => Promise.resolve(new Response('nope', { status: 500 })),
         budget: sendBudget(),
       }).commentCreated(
@@ -331,6 +389,6 @@ describe('what the log line says, and what it must never say', () => {
     expect(logged).not.toContain('Rahul')
     expect(logged).not.toContain('underestimate')
     expect(logged).not.toContain('maya@maya.build')
-    expect(logged).not.toContain(CONFIGURED.RESEND_API_KEY)
+    expect(logged).not.toContain(KEY.RESEND_API_KEY)
   })
 })

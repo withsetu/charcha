@@ -15,7 +15,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { Triage } from '../../src/dashboard/components/triage'
 import type { FetchStub, RecordedCall, Responder } from './harness'
-import { apiError, comment, decision, json, queuePage, stubFetch, unhandled } from './harness'
+import {
+  apiError,
+  comment,
+  decision,
+  json,
+  queuePage,
+  settingsBody,
+  stubFetch,
+  unhandled,
+} from './harness'
 
 const SELF = 'https://comments.example.com'
 const SETTINGS = '/admin/api/settings'
@@ -28,7 +37,7 @@ const SETTINGS = '/admin/api/settings'
  * a MALFORMED, rather than testing the dialog.
  */
 function settings(allowedOrigins: string[]) {
-  return { allowedOrigins, selfOrigin: SELF, moderationPolicy: 'hold-all' }
+  return settingsBody({ allowedOrigins, selfOrigin: SELF })
 }
 
 /**

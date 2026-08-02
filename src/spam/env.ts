@@ -39,15 +39,18 @@ declare global {
      */
     readonly AKISMET_API_KEY?: string
     /**
-     * The site this deployment takes comments for — `https://example.com`, the home
-     * page rather than a post.
+     * **Deprecated (#207), read only as a fallback.** The `site_url` setting replaced it,
+     * because the public address of the owner's own website is not a secret — it is the
+     * same kind of data as the `allowed_origins` row, and collecting it as a credential
+     * cost the owner a terminal and a redeploy for a value that is printed on their site.
+     * This is read when that row has never been written, so an existing deployment's
+     * layer 8 does not switch itself off the day it updates. Removing it is #209.
      *
-     * Read only by layer 8 today, and named for the deployment rather than for
-     * Akismet because it is a fact about the site: it is Akismet's required `blog`
-     * parameter, the identity their account matches a check against, and the base
-     * the permalink sent with a check is built from. It cannot be derived — this
-     * Worker's own origin is a `workers.dev` address rather than the site, and the
-     * URL the embed reports carries an origin anyone can choose (src/page-key.ts).
+     * It is Akismet's required `blog` parameter, the identity their account matches a
+     * check against, and the base the permalink sent with a check is built from. It
+     * cannot be derived — this Worker's own origin is a `workers.dev` address rather than
+     * the site, and the URL the embed reports carries an origin anyone can choose
+     * (src/page-key.ts).
      */
     readonly CHARCHA_SITE_URL?: string
   }
@@ -67,8 +70,20 @@ declare global {
  * `classifierLayer` abstains on.
  * Enforced by test/worker/spam/classifier.test.ts.
  */
-export type SpamEnv = Pick<
-  Env,
-  'TURNSTILE_SECRET_KEY' | 'IP_HASH_SECRET' | 'AKISMET_API_KEY' | 'CHARCHA_SITE_URL'
-> &
+export type SpamEnv = Pick<Env, 'TURNSTILE_SECRET_KEY' | 'IP_HASH_SECRET' | 'AKISMET_API_KEY'> &
   Partial<Pick<Env, 'AI'>>
+
+/**
+ * Everything `createSpamCheck` needs: the secrets above, plus the settings rows the
+ * caller has already resolved.
+ *
+ * **`siteUrl` is not on `env` any more (#207)**, and it is a field here rather than a
+ * third parameter so that every existing call site — the tests all pass an env-shaped
+ * literal — keeps typechecking. It is the caller's job to resolve it, because resolving
+ * it costs a D1 read and the submission route already makes exactly one for every setting
+ * this path needs (src/settings.ts).
+ */
+export interface SpamConfig extends SpamEnv {
+  /** The site this deployment takes comments for, from the `site_url` setting. */
+  readonly siteUrl?: string | null
+}

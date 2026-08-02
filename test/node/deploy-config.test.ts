@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  DEPRECATED_SECRETS,
   checkDeployConfig,
   declaredSecrets,
   parseDotenv,
@@ -85,8 +86,25 @@ async function writeOptionalSecret() {
  */
 const FIXTURE_FORM_SECRETS = ['CHARCHA_DASHBOARD_PASSWORD']
 
-const check = (options: { cwd?: string; formSecrets?: string[] } = {}) =>
-  checkDeployConfig({ cwd, formSecrets: FIXTURE_FORM_SECRETS, ...options })
+/**
+ * And nothing is deprecated in a synthetic repository unless the case says so.
+ *
+ * Same reason `FIXTURE_FORM_SECRETS` exists: charcha's real `DEPRECATED_SECRETS` names
+ * three secrets no fixture declares, and the checker refuses a deprecated name that
+ * nothing reads. The repository's own list is exercised by `passes this repository` and
+ * by the three cases at the end of this describe.
+ */
+const NOTHING_DEPRECATED: string[] = []
+
+const check = (
+  options: { cwd?: string; formSecrets?: string[]; deprecatedSecrets?: string[] } = {},
+) =>
+  checkDeployConfig({
+    cwd,
+    formSecrets: FIXTURE_FORM_SECRETS,
+    deprecatedSecrets: NOTHING_DEPRECATED,
+    ...options,
+  })
 
 const statuses = (result: { violations: Array<{ status: string }> }) =>
   result.violations.map((violation) => violation.status)
@@ -628,6 +646,17 @@ declare global {
     expect(names).toHaveLength(2)
   })
 
+  it('names every secret this repository still reads only as a deprecated fallback', () => {
+    // The list is the decision, and this is what makes changing it deliberate. #207 moved
+    // three values into `settings` rows and left the secrets readable so an existing
+    // deployment does not lose its notifications on the day it updates; #209 empties this.
+    expect([...DEPRECATED_SECRETS].sort()).toEqual([
+      'CHARCHA_NOTIFY_FROM',
+      'CHARCHA_NOTIFY_TO',
+      'CHARCHA_SITE_URL',
+    ])
+  })
+
   it('finds every secret this repository declares', async () => {
     // The exact set, not a subset, so adding a secret is a decision someone makes
     // here rather than a line that appears in a deploy form unnoticed. Updating this
@@ -700,5 +729,71 @@ describe('stripJsonComments', () => {
 
   it('drops an unterminated block comment rather than throwing', () => {
     expect(stripJsonComments('{ "a": 1 } /* to the end')).toContain('"a": 1')
+  })
+})
+
+/**
+ * The three checks that keep `DEPRECATED_SECRETS` from being a hole in rule (1).
+ *
+ * A plain exemption would silently stop covering three names. What replaces it has to fail
+ * in each of the three ways a deprecation can be got wrong: put back on the form, still
+ * instructed, or not mentioned at all.
+ */
+describe('deprecated secrets (#207)', () => {
+  const DEPRECATED = ['OPTIONAL_PROVIDER_KEY']
+
+  async function deprecatedRepo(readme: string) {
+    await writeHealthyRepo()
+    await writeOptionalSecret()
+    await write('README.md', readme)
+  }
+
+  it('passes a secret that is named in the README and never instructed', async () => {
+    await deprecatedRepo('OPTIONAL_PROVIDER_KEY moved into a setting. Nothing to run.\n')
+
+    const result = await check({ deprecatedSecrets: DEPRECATED })
+
+    expect(statuses(result)).toEqual([])
+  })
+
+  it('fails when the README still tells a deployer to set it', async () => {
+    // The instruction now sends somebody to configure a value the code reads only until
+    // the setting that replaced it is saved — which works, and then silently stops.
+    await deprecatedRepo('Run `wrangler secret put OPTIONAL_PROVIDER_KEY` to set it.\n')
+
+    const result = await check({ deprecatedSecrets: DEPRECATED })
+
+    expect(statuses(result)).toContain('deprecated-secret-still-instructed')
+  })
+
+  it('fails when the README does not mention it at all', async () => {
+    // The half a plain exemption drops: a deployment already running on the secret has no
+    // way to learn where its value went.
+    await deprecatedRepo('Nothing here about anything.\n')
+
+    const result = await check({ deprecatedSecrets: DEPRECATED })
+
+    expect(statuses(result)).toContain('undocumented-deprecated-secret')
+  })
+
+  it('fails when it is back on the deploy form', async () => {
+    await deprecatedRepo('OPTIONAL_PROVIDER_KEY moved into a setting.\n')
+    await write('.dev.vars.example', 'CHARCHA_DASHBOARD_PASSWORD=\nOPTIONAL_PROVIDER_KEY=\n')
+
+    const result = await check({ deprecatedSecrets: DEPRECATED })
+
+    expect(statuses(result)).toContain('deprecated-form-field')
+    // And not the generic one as well — two messages about one line is one message
+    // nobody reads.
+    expect(statuses(result)).not.toContain('unexpected-form-field')
+  })
+
+  it('fails when the code has stopped reading it, so the exemption covers nothing', async () => {
+    await writeHealthyRepo()
+    await write('README.md', 'OPTIONAL_PROVIDER_KEY moved into a setting.\n')
+
+    const result = await check({ deprecatedSecrets: DEPRECATED })
+
+    expect(statuses(result)).toContain('deprecated-secret-not-read')
   })
 })

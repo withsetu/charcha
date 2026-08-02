@@ -18,6 +18,8 @@
 //
 // Enforced by test/worker/notify/resend.test.ts.
 
+import { formatFrom } from './from'
+
 /** "POST https://api.resend.com/emails" */
 export const RESEND_SEND_URL = 'https://api.resend.com/emails'
 
@@ -37,8 +39,22 @@ export const SEND_TIMEOUT_MS = 10_000
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 256
 
 export interface EmailMessage {
-  /** "Sender email address. To include a friendly name, pass as `Name <email@example.com>`". */
-  from: string
+  /**
+   * "Sender email address." The address alone, never a composed `Name <address>`.
+   *
+   * The display name rides beside it rather than inside it (#208), and `formatFrom` is
+   * the one place the two are joined — see src/notify/from.ts for why that matters more
+   * for this field than for anything else this project sends.
+   */
+  fromAddress: string
+  /**
+   * The sender's display name, or null for the bare address (#208).
+   *
+   * Owner configuration, from the `notify_from_name` setting. It is refused on the way in
+   * by the dashboard and dropped again here by `formatFrom` if it would not pass, because
+   * a row can predate the check.
+   */
+  fromName?: string | null
   to: string
   subject: string
   /**
@@ -109,7 +125,12 @@ export async function sendEmail(message: EmailMessage, config: ResendConfig): Pr
   // spread from `message` so an added field cannot arrive here by accident.
   // Enforced by test/worker/notify/resend.test.ts.
   const payload = {
-    from: message.from,
+    // The one call to `formatFrom` in the project (#208). Resend's `from` is a single
+    // string with no structured alternative — "To include a friendly name, pass the
+    // sender as `Name <email@example.com>`", checked 2026-08-02 — so the two parts are
+    // carried separately everywhere else and joined exactly here.
+    // Enforced by test/worker/notify/resend.test.ts and test/worker/notify/from.test.ts.
+    from: formatFrom(message.fromAddress, message.fromName ?? null),
     to: message.to,
     subject: message.subject,
     text: message.text,

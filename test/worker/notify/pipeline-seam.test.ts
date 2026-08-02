@@ -158,11 +158,8 @@ describe('a notification can never cost the reader their comment', () => {
     // slow or hanging Resend would hold the reader's POST open behind it.
     const run = deferrer()
     const notifier = createNotifier(
-      {
-        RESEND_API_KEY: 'test-not-a-real-key',
-        CHARCHA_NOTIFY_FROM: 'Charcha <comments@maya.build>',
-        CHARCHA_NOTIFY_TO: 'maya@maya.build',
-      },
+      { RESEND_API_KEY: 'test-not-a-real-key' },
+      { from: 'comments@maya.build', to: 'maya@maya.build', fromName: 'Charcha' },
       { fetch: () => new Promise(() => {}), budget: sendBudget() },
     )
 

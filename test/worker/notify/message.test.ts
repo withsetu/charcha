@@ -198,9 +198,15 @@ describe('quoteBlock, on its own', () => {
 })
 
 describe('what the owner is told about stopping the emails', () => {
-  it('names the configuration that turns them off, because there is no account to log into', () => {
+  it('names the surface that turns them off, because there is no account to log into', () => {
+    // It names the dashboard rather than `CHARCHA_NOTIFY_TO` since #207: the recipient is
+    // a settings row now, so the instruction is a field on a page the owner is already
+    // signed in to rather than a `wrangler secret delete` that needs a checkout, wrangler
+    // and an API token — none of which somebody who clicked Deploy has.
     const { text } = buildOwnerNotification(eventFor())
 
-    expect(text).toContain('CHARCHA_NOTIFY_TO')
+    expect(text).toContain('Setup')
+    expect(text).toContain('dashboard')
+    expect(text).not.toContain('CHARCHA_NOTIFY_TO')
   })
 })

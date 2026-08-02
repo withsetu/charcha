@@ -17,7 +17,10 @@ import {
   signOut,
   writeAllowedOrigins,
   writeModerationPolicy,
+  writeNotifySettings,
+  writeSiteUrl,
 } from '../../src/dashboard/api'
+import { settingsBody } from './harness'
 
 interface Call {
   url: string
@@ -215,11 +218,10 @@ describe('failures', () => {
 // *hold-all is selected*, which is what a fresh deployment truthfully looks like — so
 // silence there is indistinguishable from an answer.
 describe('the settings endpoint', () => {
-  const SETTINGS = {
+  const SETTINGS = settingsBody({
     allowedOrigins: ['https://maya.build'],
     selfOrigin: 'https://c.example',
-    moderationPolicy: 'hold-all',
-  }
+  })
 
   it('reads the settings, policy and all', async () => {
     stubFetch(() => answer(200, SETTINGS))
@@ -229,7 +231,7 @@ describe('the settings endpoint', () => {
   })
 
   it('refuses a body with no moderation policy, rather than reading silence as hold-all', async () => {
-    stubFetch(() => answer(200, { allowedOrigins: [], selfOrigin: 'https://c.example' }))
+    stubFetch(() => answer(200, { ...SETTINGS, moderationPolicy: undefined }))
 
     const result = await readSettings()
     expect(result.ok).toBe(false)
@@ -258,6 +260,48 @@ describe('the settings endpoint', () => {
     expect(calls[0]?.init.body).toBe(JSON.stringify({ moderationPolicy: 'trust-returning' }))
   })
 
+  it('refuses a body missing the settings the fields render, not only the policy', async () => {
+    // The #207 fields get the same treatment the policy does, and for the same reason: a
+    // missing one arrives as `undefined`, which renders as an empty field — *not set*,
+    // which is indistinguishable from the truth and would have an owner retype an address
+    // they saved months ago, or save an emptiness over a working one.
+    for (const field of ['siteUrl', 'notifyFrom', 'notifyTo', 'notifyFromName'] as const) {
+      stubFetch(() => answer(200, { ...SETTINGS, [field]: undefined }))
+
+      const result = await readSettings()
+      expect(result.ok, field).toBe(false)
+    }
+  })
+
+  it('sends only the site address when saving it, so nothing else is overwritten', async () => {
+    stubFetch(() => answer(200, SETTINGS))
+
+    await writeSiteUrl('https://maya.build')
+
+    expect(calls[0]?.init.method).toBe('PUT')
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ siteUrl: 'https://maya.build' }))
+  })
+
+  it('sends the three notification settings together and nothing else', async () => {
+    // One form, one Save button, one request: the two addresses are useless apart, and a
+    // display name saved without the address it decorates is a half save.
+    stubFetch(() => answer(200, SETTINGS))
+
+    await writeNotifySettings({
+      notifyFrom: 'comments@maya.build',
+      notifyTo: 'maya@maya.build',
+      notifyFromName: 'Charcha',
+    })
+
+    expect(calls[0]?.init.body).toBe(
+      JSON.stringify({
+        notifyFrom: 'comments@maya.build',
+        notifyTo: 'maya@maya.build',
+        notifyFromName: 'Charcha',
+      }),
+    )
+  })
+
   it('sends only the origins when saving the origins, for the same reason', async () => {
     stubFetch(() => answer(200, SETTINGS))
 
@@ -267,7 +311,7 @@ describe('the settings endpoint', () => {
   })
 
   it('checks a write’s answer too, so a save cannot render as a policy nobody stored', async () => {
-    stubFetch(() => answer(200, { allowedOrigins: [], selfOrigin: 'https://c.example' }))
+    stubFetch(() => answer(200, { ...SETTINGS, moderationPolicy: undefined }))
 
     const result = await writeModerationPolicy('trust-returning')
     expect(result.ok).toBe(false)

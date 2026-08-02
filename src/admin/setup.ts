@@ -69,8 +69,13 @@ type AdminContext = Context<{ Bindings: Env }>
  */
 export const REPORTED_SECRETS = [
   'RESEND_API_KEY',
-  'CHARCHA_NOTIFY_FROM',
-  'CHARCHA_NOTIFY_TO',
+  // `CHARCHA_NOTIFY_FROM` and `CHARCHA_NOTIFY_TO` are deliberately gone (#207). They are
+  // `settings` rows now, and a row is not a secret: it is editable, so the Setup tab shows
+  // it in a field with a Save button rather than as a status word beside a
+  // `wrangler secret put` line, and it comes from `GET /admin/api/settings` where the rest
+  // of the owner's configuration already lives. Reporting it here as well would be a
+  // second answer to one question, which is the reason the allowlist was never in this
+  // list either — see `handleReadSetup`.
   'TURNSTILE_SECRET_KEY',
   'IP_HASH_SECRET',
   // Reported for the same reason `IP_HASH_SECRET` is (#107, #189): the Moderation
