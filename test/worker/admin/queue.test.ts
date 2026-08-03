@@ -90,7 +90,7 @@ beforeEach(async () => {
 
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
-  await db.exec("DELETE FROM settings")
+  await db.exec('DELETE FROM settings')
   const thread = await getOrCreateThread(db, {
     pageKey: '/notes/leaving',
     pageUrl: 'https://maya.build/notes/leaving',
@@ -194,13 +194,30 @@ describe('the link to the page a comment was left on (#203)', () => {
     expect(body.comments[0]?.permalink).toBe('https://maya.build/notes/leaving')
   })
 
-  it('joins a site that lives at a path without eating the path', async () => {
-    await siteIs('https://maya.github.io/blog/')
-    await seed(1)
+  it('keeps a site that lives at a subpath on that subpath', async () => {
+    // **The key already carries the subpath, because the key is the path the reader was
+    // on.** An earlier version of this test seeded `/notes/leaving` against
+    // `https://maya.github.io/blog/` and pinned the answer `https://maya.github.io/notes/leaving`
+    // under the name "without eating the path" — which is the path being eaten, and would
+    // have read as proof that a project-site deployment works.
+    await siteIs('https://maya.github.io/blog')
+    const thread = await getOrCreateThread(db, {
+      pageKey: '/blog/notes/leaving',
+      pageUrl: 'https://maya.github.io/blog/notes/leaving',
+      title: 'Leaving',
+      now: t0 + 300,
+    })
+    await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Rahul',
+      body: 'on a project site',
+      bodyHash: 'hsub',
+      now: t0 + 300,
+    })
 
     const body = await (await get('/admin/api/queue')).json<QueueBody>()
 
-    expect(body.comments[0]?.permalink).toBe('https://maya.github.io/notes/leaving')
+    expect(body.comments[0]?.permalink).toBe('https://maya.github.io/blog/notes/leaving')
   })
 
   it('sends none when the owner has set no site address', async () => {
@@ -260,6 +277,64 @@ describe('the link to the page a comment was left on (#203)', () => {
     // origin the attacker chose, because a second field naming it would be the same
     // hole through a different key.
     expect(text).not.toContain('evil.example')
+  })
+
+  it('refuses a stored key that would resolve onto another host', async () => {
+    // **`startsWith('/')` is not the same test as "on the owner's site".**
+    // `//evil.example/pwned` starts with a slash and is a protocol-relative URL, so
+    // joining it to `https://maya.build` produces `https://evil.example/pwned`.
+    //
+    // **The public path cannot produce this key today, and that is not a reason to skip
+    // the check.** `canonicalPath` collapses runs of slashes, so a comment posted from
+    // `https://anything.example//evil.example/pwned` lands on `/evil.example/pwned` and is
+    // harmless — asserted directly below, because if that ever stops being true this test
+    // is the one that has to keep holding. But the collapse exists to make `/a//b` and
+    // `/a/b` one conversation, and nothing at that line knows it is also what keeps a
+    // dashboard link on the owner's domain. The row is reachable by `wrangler d1 execute`
+    // and can predate a validator, which is the same argument src/settings.ts makes for
+    // re-checking a stored value on the way out. So the key is seeded as a row rather than
+    // submitted, which is the state being defended against.
+    await siteIs('https://maya.build')
+    const thread = await getOrCreateThread(db, {
+      pageKey: '//evil.example/pwned',
+      pageUrl: null,
+      title: 'Not a path',
+      now: t0 + 500,
+    })
+    await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Rahul',
+      body: 'a comment on a key that is not a path',
+      bodyHash: 'hevil',
+      now: t0 + 500,
+    })
+
+    const response = await get('/admin/api/queue')
+    const text = await response.text()
+    const body = JSON.parse(text) as QueueBody
+
+    expect(body.comments[0]?.pageKey).toBe('//evil.example/pwned')
+    expect(body.comments[0]?.permalink).toBeNull()
+    expect(text).not.toContain('https://evil.example')
+  })
+
+  it('collapses the slashes a submission would have arrived with, so the key is a path', async () => {
+    // The other half of the paragraph above, pinned where somebody changing
+    // `canonicalPath` will see it fail.
+    await siteIs('https://maya.build')
+    await runSubmission(
+      {
+        authorName: 'Rahul Kanwar',
+        body: 'a comment from a doubled slash',
+        url: 'https://anything.example//evil.example/pwned',
+      },
+      { db, spamCheck: allowAllSpamCheck, request: new Request(`${origin}/comments`), now: t0 },
+    )
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.comments[0]?.pageKey).toBe('/evil.example/pwned')
+    expect(body.comments[0]?.permalink).toBe('https://maya.build/evil.example/pwned')
   })
 
   it('costs the same three statements however many comments the page holds', async () => {

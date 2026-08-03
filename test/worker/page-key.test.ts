@@ -4,6 +4,7 @@ import {
   MAX_THREAD_ID_LENGTH,
   MAX_URL_LENGTH,
   derivePageKey,
+  permalinkFor,
   type PageKeyInput,
 } from '../../src/page-key'
 
@@ -433,5 +434,70 @@ describe('hostile input', () => {
       expect(key.length).toBeGreaterThanOrEqual(1)
       expect(key.length).toBeLessThanOrEqual(MAX_PAGE_KEY_LENGTH)
     }
+  })
+})
+
+describe('permalinkFor — a key and the owner’s site, back into a URL (#11, #203)', () => {
+  const site = 'https://maya.build'
+
+  it('joins the derived key to the owner’s origin', () => {
+    expect(permalinkFor('/notes/leaving', site)).toBe('https://maya.build/notes/leaving')
+  })
+
+  it('answers null for a data-thread key, which names no page', () => {
+    expect(permalinkFor('id:leaving', site)).toBeNull()
+  })
+
+  it('answers null for a key that is neither a path nor an id', () => {
+    // **The case the leading-slash check is actually the only guard for.** `id:leaving`
+    // parses as a URL with an `id:` scheme, so the origin comparison refuses it even
+    // without that check — which is how a kill-shot found the check unkillable and
+    // therefore untested. A bare `notes/leaving`, which no `derivePageKey` produces but a
+    // hand-written row can hold, resolves *relative to the base* and lands on the owner's
+    // own origin, so the origin comparison passes it and only this check does not. A key
+    // that is not one of the two namespaces (src/page-key.ts) has no honest answer.
+    expect(permalinkFor('notes/leaving', site)).toBeNull()
+    expect(permalinkFor('', site)).toBeNull()
+  })
+
+  it('answers null for a key that resolves onto another host', () => {
+    // **The table `startsWith('/')` alone gets wrong.** A leading pair of slashes is a
+    // protocol-relative URL, and a special scheme folds a backslash into a separator, so
+    // both of these land on `evil.example` rather than on the owner's site. Neither can
+    // come out of `derivePageKey` today — `canonicalPath` collapses runs of slashes and
+    // the URL parser has already folded the backslash — but a `page_key` row is reachable
+    // by `wrangler d1 execute` and can predate a validator, and nothing in the collapse
+    // says it is also what keeps this on the owner's domain.
+    expect(permalinkFor('//evil.example/pwned', site)).toBeNull()
+    expect(permalinkFor('/\\evil.example/pwned', site)).toBeNull()
+  })
+
+  it('keeps a percent-encoded slash on the owner’s own site, rather than refusing it', () => {
+    // The other half of the check: `%2F` is a character in a path segment, not a
+    // separator, so this is a real page on the owner's site and must still get a link.
+    expect(permalinkFor('/%2F%2Fevil.example', site)).toBe('https://maya.build/%2F%2Fevil.example')
+  })
+
+  it('refuses a base whose scheme is not http or https', () => {
+    // **An opaque scheme defeats the origin comparison rather than failing it**: both
+    // `origin`s are the string "null", so they compare equal, and the result would be a
+    // `javascript:` URL in an href on the moderation dashboard. `siteUrl` reaches here
+    // from a `settings` row that is trimmed and capped and nothing more.
+    expect(permalinkFor('/notes/leaving', 'javascript://%0aalert(1)')).toBeNull()
+    expect(permalinkFor('/notes/leaving', 'data:text/html,x')).toBeNull()
+    expect(permalinkFor('/notes/leaving', 'ftp://maya.build')).toBeNull()
+  })
+
+  it('answers null rather than throwing on a base that is not a URL at all', () => {
+    expect(permalinkFor('/notes/leaving', '')).toBeNull()
+    expect(permalinkFor('/notes/leaving', 'not a url')).toBeNull()
+  })
+
+  it('keeps a site that lives at a subpath on that subpath', () => {
+    // The key of a page on such a site already carries the subpath, because the key is
+    // the path the reader was on. This is the case the deploy docs describe.
+    expect(permalinkFor('/blog/notes/leaving', 'https://maya.github.io/blog')).toBe(
+      'https://maya.github.io/blog/notes/leaving',
+    )
   })
 })

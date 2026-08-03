@@ -111,19 +111,47 @@ export function messageForPageKeyRejection(reason: PageKeyRejection): string {
  * from the buttons that publish comments (#203). Joining the key to the owner's origin
  * makes the host always theirs and the path always one this Worker computed.
  *
- * A `data-thread` key is `id:<something>` — a conversation rather than a path — so there
- * is no URL to build and callers show what they showed before.
+ * **Three checks, and none of them is redundant** — each was disabled on its own and
+ * failed a different test, which is how the third one was found to be doing nothing a
+ * test could see:
+ *
+ *   - **The key is a path.** `id:<something>` is a `data-thread` key, a conversation
+ *     rather than a page, and there is no URL to build. A bare `notes/leaving` matters
+ *     more: it is in neither namespace, no `derivePageKey` emits it, and it resolves
+ *     *relative to the base* onto the owner's own origin — so the origin comparison below
+ *     passes it and only this check does not.
+ *   - **The base is http or https.** An opaque scheme defeats the origin comparison
+ *     rather than failing it: `new URL('/x', 'javascript://%0aalert(1)')` is a
+ *     `javascript:` URL whose `origin` is the string `"null"`, and so is its base's, so
+ *     they compare equal. That value would reach an `href` on the moderation dashboard.
+ *     `siteUrl` is trimmed and length-capped on the way out of `settings` and nothing
+ *     more (src/settings.ts), so this is the check that has to hold.
+ *   - **The result is on the base's origin.** `//evil.example/pwned` starts with a slash
+ *     and is a protocol-relative URL, and a backslash arrives at the same place because a
+ *     special scheme treats it as a separator. `derivePageKey` cannot currently emit such
+ *     a key, because `canonicalPath` collapses runs of slashes — but that collapse exists
+ *     to make `/a//b` and `/a/b` one conversation, and nothing there says it is also what
+ *     keeps this function on the owner's domain.
+ *
+ * The shape of all three is the same, and it is the one src/settings.ts states for a
+ * stored row: a `page_key` or a `site_url` can predate a validator or be written straight
+ * into D1 with `wrangler d1 execute`, so the answer is checked here rather than reasoned
+ * about from what the write path would have allowed.
  *
  * It lives here rather than beside either caller because the relationship between a URL
  * and a `page_key` is this module's subject, and a second copy is a second chance to
- * forget which of the two origins is the safe one.
+ * forget which of the two origins is the safe one — and, since #203, one fix for both.
  * Enforced by test/worker/page-key.test.ts, test/worker/spam/provider.test.ts and
  * test/worker/admin/queue.test.ts.
  */
 export function permalinkFor(pageKey: string, siteUrl: string): string | null {
   if (!pageKey.startsWith('/')) return null
   try {
-    return new URL(pageKey, siteUrl).href
+    const base = new URL(siteUrl)
+    if (base.protocol !== 'https:' && base.protocol !== 'http:') return null
+    const permalink = new URL(pageKey, base)
+    if (permalink.origin !== base.origin) return null
+    return permalink.href
   } catch {
     return null
   }
