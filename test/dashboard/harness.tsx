@@ -117,6 +117,9 @@ export function comment(overrides: Partial<QueuedComment> = {}): QueuedComment {
     moderatedAt: null,
     pageKey: '/posts/hello',
     pageTitle: 'Hello world',
+    // The commonest deployment: `site_url` is unset, so the Worker can build no link and
+    // the card degrades to the page's name (#203). Tests that want the link say so.
+    permalink: null,
     spamReason: null,
     ...overrides,
   }

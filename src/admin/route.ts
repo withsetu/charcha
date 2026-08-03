@@ -19,6 +19,8 @@ import {
   setCommentStatus,
 } from '../db'
 import type { CommentStatus, QueueCursor, StatusCounts } from '../db'
+import { permalinkFor } from '../page-key'
+import { readSiteSettings } from '../settings'
 import type { Embedder } from '../spam/embed'
 import { trainOnDecisionSafely } from '../spam/train'
 import {
@@ -206,12 +208,13 @@ export async function handleSession(
  * "next page" return page one, so the UI would loop over the first page forever
  * while the oldest comments stayed unreachable.
  *
- * **Two D1 queries, whichever page is asked for** — the page and the per-status counts
- * (#135). Two rather than one because the tab strip claims a number for every view and
- * a request per view would make the query count grow with the UI; two rather than a
- * separate endpoint because the counts change on exactly the events the queue does, and
- * a second round trip is a second thing to fail while the first has already rendered.
- * Constant either way, which is what the 50-query invocation budget asks for.
+ * **Three D1 queries, whichever page is asked for** — the page, the per-status counts
+ * (#135) and the owner's own settings, for the link to the page each comment was left on
+ * (#203). Not one per view because the tab strip claims a number for every view and a
+ * request per view would make the query count grow with the UI, and not a separate
+ * endpoint because the counts change on exactly the events the queue does. Constant
+ * whatever the page holds, which is what the 50-query invocation budget asks for — a
+ * permalink resolved per comment would pass at three comments and throw at fifty.
  * Enforced by test/worker/admin/queue.test.ts.
  */
 export async function handleQueue(
@@ -248,7 +251,21 @@ export async function handleQueue(
     cursor,
   })
   const counts = await countCommentsByStatus(c.env.DB)
-  return adminJson({ ...page, counts: viewCounts(counts) })
+
+  // **The owner's own site address, read once, and the only base a card's link may have
+  // (#203).** `threads.page_url` is whatever origin the comment reported, so a link built
+  // from it would put an attacker's address into the moderation queue a click away from
+  // the buttons that publish comments — the same reasoning that keeps it off the
+  // notifier's event (#125) and out of the provider submission (#11). `permalinkFor`
+  // joins the derived key to this, and answers null for a `data-thread` key and for an
+  // owner who has set no address, which the card degrades on.
+  // Enforced by test/worker/admin/queue.test.ts.
+  const { siteUrl } = await readSiteSettings(c.env.DB, c.env)
+  const comments = page.comments.map((comment) => ({
+    ...comment,
+    permalink: siteUrl === null ? null : permalinkFor(comment.pageKey, siteUrl),
+  }))
+  return adminJson({ ...page, comments, counts: viewCounts(counts) })
 }
 
 /**

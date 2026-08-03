@@ -22,6 +22,9 @@
 // Enforced by test/worker/spam/provider.test.ts.
 
 import { clientIp } from './ip'
+// The link is built from the owner's site URL and the derived key, never from the URL a
+// comment reported — see `permalinkFor`. The queue card (#203) reuses it.
+import { permalinkFor } from '../page-key'
 import type { LayerOutcome, SpamLayer } from './layer'
 import type { SpamCheckContext } from '../submit/spam'
 
@@ -217,27 +220,3 @@ function header(request: Request, name: string): string | null {
   return value === undefined || value === '' ? null : value
 }
 
-/**
- * The page a comment was posted on, or `null` if we cannot say honestly.
- *
- * **From the owner's site URL and the derived key, never from `context.pageUrl`.**
- * `derivePageKey` drops the origin from identity precisely because the embed
- * reports it and anyone can post whatever they like (src/page-key.ts, and the same
- * reasoning in src/notify/event.ts). Forwarding that origin would let any caller
- * write any URL into the owner's account at a third party — attributing spam to
- * sites that never had a Charcha on them, and telling the provider that this
- * deployment serves a domain it does not.
- *
- * A `data-thread` key is `id:<something>`, which names a conversation rather than a
- * path. There is no URL to build, so none is sent — `permalink` is optional
- * everywhere it is used.
- * Enforced by test/worker/spam/provider.test.ts.
- */
-function permalinkFor(pageKey: string, siteUrl: string): string | null {
-  if (!pageKey.startsWith('/')) return null
-  try {
-    return new URL(pageKey, siteUrl).href
-  } catch {
-    return null
-  }
-}

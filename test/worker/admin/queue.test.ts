@@ -4,7 +4,10 @@
 
 import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getOrCreateThread, insertComment } from '../../../src/db'
+import { getOrCreateThread, insertComment, writeSettings } from '../../../src/db'
+import { SITE_URL_SETTING } from '../../../src/settings'
+import { runSubmission } from '../../../src/submit/pipeline'
+import { allowAllSpamCheck } from '../../../src/submit/spam'
 import { app } from '../../../src/index'
 import { SESSION_COOKIE_NAME, issueSession } from '../../../src/admin/session'
 import {
@@ -56,6 +59,7 @@ interface QueueBody {
     status: string
     pageKey: string
     pageTitle: string | null
+    permalink: string | null
     spamReason: string | null
   }[]
   nextCursor: string | null
@@ -86,6 +90,7 @@ beforeEach(async () => {
 
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
+  await db.exec("DELETE FROM settings")
   const thread = await getOrCreateThread(db, {
     pageKey: '/notes/leaving',
     pageUrl: 'https://maya.build/notes/leaving',
@@ -172,6 +177,112 @@ describe('GET /admin/api/queue — the triage view', () => {
 
   it('is never cached', async () => {
     expect((await get('/admin/api/queue')).headers.get('cache-control')).toBe('no-store')
+  })
+})
+
+describe('the link to the page a comment was left on (#203)', () => {
+  async function siteIs(url: string) {
+    await writeSettings(db, [[SITE_URL_SETTING, url]], t0)
+  }
+
+  it('builds it from the owner’s site address and the derived key', async () => {
+    await siteIs('https://maya.build')
+    await seed(1)
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.comments[0]?.permalink).toBe('https://maya.build/notes/leaving')
+  })
+
+  it('joins a site that lives at a path without eating the path', async () => {
+    await siteIs('https://maya.github.io/blog/')
+    await seed(1)
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.comments[0]?.permalink).toBe('https://maya.github.io/notes/leaving')
+  })
+
+  it('sends none when the owner has set no site address', async () => {
+    await seed(1)
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.comments[0]?.permalink).toBeNull()
+  })
+
+  it('sends none for a data-thread key, which names no page', async () => {
+    await siteIs('https://maya.build')
+    const thread = await getOrCreateThread(db, {
+      pageKey: 'id:leaving',
+      pageUrl: null,
+      title: 'Leaving',
+      now: t0,
+    })
+    await insertComment(db, {
+      threadId: thread.id,
+      authorName: 'Rahul',
+      body: 'declared thread',
+      bodyHash: 'hid',
+      now: t0 + 100,
+    })
+
+    const body = await (await get('/admin/api/queue')).json<QueueBody>()
+
+    expect(body.comments[0]?.pageKey).toBe('id:leaving')
+    expect(body.comments[0]?.permalink).toBeNull()
+  })
+
+  it('points at the owner’s own origin when the comment reported somebody else’s', async () => {
+    // **The kill-shot for #203.** `derivePageKey` drops the origin, so a comment posted
+    // from `https://evil.example/notes/leaving` lands on the owner's thread and writes
+    // that origin into `threads.page_url`. A card built from the stored URL would put an
+    // attacker's address one click from the buttons that publish comments. Driven through
+    // the real submission path rather than seeded, so the attacker's URL travels the route
+    // it would actually travel.
+    await siteIs('https://maya.build')
+    await runSubmission(
+      {
+        authorName: 'Rahul Kanwar',
+        body: 'The part people underestimate is the export.',
+        url: 'https://evil.example/notes/leaving',
+      },
+      { db, spamCheck: allowAllSpamCheck, request: new Request(`${origin}/comments`), now: t0 },
+    )
+
+    const response = await get('/admin/api/queue')
+    const text = await response.text()
+    const body = JSON.parse(text) as QueueBody
+
+    expect(body.comments[0]?.pageKey).toBe('/notes/leaving')
+    expect(body.comments[0]?.permalink).toBe('https://maya.build/notes/leaving')
+    // Not merely "the permalink is right": nothing in the whole payload carries the
+    // origin the attacker chose, because a second field naming it would be the same
+    // hole through a different key.
+    expect(text).not.toContain('evil.example')
+  })
+
+  it('costs the same three statements however many comments the page holds', async () => {
+    // The link added a third read — the owner's `site_url`, once per request rather than
+    // once per card. CLAUDE.md's rule is a *constant* query count, not a low one, because
+    // the invocation budget throws rather than slows: a permalink resolved per comment
+    // would pass at three comments and throw on a busy morning.
+    await siteIs('https://maya.build')
+    await seed(1)
+    const prepare = vi.spyOn(db, 'prepare')
+    try {
+      await get('/admin/api/queue')
+      const forOne = prepare.mock.calls.length
+      prepare.mockClear()
+      await seed(19)
+      prepare.mockClear()
+      await get('/admin/api/queue')
+
+      expect(forOne).toBe(3)
+      expect(prepare.mock.calls.length).toBe(3)
+    } finally {
+      prepare.mockRestore()
+    }
   })
 })
 

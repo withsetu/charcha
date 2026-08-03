@@ -9,7 +9,7 @@
 // Enforced by test/dashboard/triage.test.tsx.
 
 import * as React from 'react'
-import { CheckIcon, ShieldAlertIcon, Trash2Icon, ZapIcon } from 'lucide-react'
+import { CheckIcon, ExternalLinkIcon, ShieldAlertIcon, Trash2Icon, ZapIcon } from 'lucide-react'
 
 import type { DecisionStatus, QueuedComment } from '../api'
 import { formatAge, formatExact, isoInstant, pageLabel } from '../format'
@@ -134,11 +134,42 @@ export function CommentCard({
           )}
         </div>
 
-        {/* The page, not a link to it: `pageKey` is a derived key rather than a URL
-            (src/page-key.ts), so there is nothing honest to navigate to. */}
+        {/*
+          The page, and a link to it when the Worker could build one honestly (#203).
+
+          **The href is `comment.permalink` and nothing else may be joined to make one.**
+          `pageKey` is a path with the origin deliberately dropped and `page_url` is
+          whatever origin the comment reported, so a link assembled here would put an
+          attacker's address in the owner's own queue, a click from the buttons below it.
+          The Worker joins the derived key to the owner's `site_url` setting instead, and
+          sends null when it cannot — a `data-thread` key, or no address saved — which is
+          this branch showing exactly what the card showed before.
+
+          A new tab, because the moderator is part-way down a queue that keyboard focus is
+          holding their place in, and `noopener noreferrer` because the page it opens is
+          the site's own but the queue behind it is the moderation dashboard.
+          Enforced by test/dashboard/triage.test.tsx.
+        */}
         <p className="mt-0.5 truncate text-sm text-muted-foreground">
           <span className="sr-only">On page: </span>
-          {page}
+          {comment.permalink === null ? (
+            page
+          ) : (
+            <a
+              className="underline underline-offset-4 hover:text-foreground"
+              href={comment.permalink}
+              target="_blank"
+              rel="noopener noreferrer"
+              // The row is the focus target and `J`/`K` move between rows, so this is a
+              // tab stop only inside the row the moderator is on — the same roving
+              // tabindex the decision buttons below use, for the same reason.
+              tabIndex={current ? 0 : -1}
+            >
+              {page}
+              <ExternalLinkIcon aria-hidden="true" className="ml-1 inline size-3 align-baseline" />
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          )}
         </p>
 
         {autoApproved(comment) && (

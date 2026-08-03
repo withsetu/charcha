@@ -101,6 +101,35 @@ export function messageForPageKeyRejection(reason: PageKeyRejection): string {
 }
 
 /**
+ * The page a comment was left on, or `null` when there is no honest answer.
+ *
+ * **From the owner's own `site_url` setting and the *derived* key, never from the URL a
+ * comment reported.** `derivePageKey` drops the origin from identity because the embed
+ * reports it and anyone can post whatever they like, so `threads.page_url` carries an
+ * attacker-chosen origin. Building a link from that would put a stranger's URL into the
+ * owner's account at a spam provider (#11) and into their own moderation queue, one click
+ * from the buttons that publish comments (#203). Joining the key to the owner's origin
+ * makes the host always theirs and the path always one this Worker computed.
+ *
+ * A `data-thread` key is `id:<something>` — a conversation rather than a path — so there
+ * is no URL to build and callers show what they showed before.
+ *
+ * It lives here rather than beside either caller because the relationship between a URL
+ * and a `page_key` is this module's subject, and a second copy is a second chance to
+ * forget which of the two origins is the safe one.
+ * Enforced by test/worker/page-key.test.ts, test/worker/spam/provider.test.ts and
+ * test/worker/admin/queue.test.ts.
+ */
+export function permalinkFor(pageKey: string, siteUrl: string): string | null {
+  if (!pageKey.startsWith('/')) return null
+  try {
+    return new URL(pageKey, siteUrl).href
+  } catch {
+    return null
+  }
+}
+
+/**
  * Rejected outright rather than percent-encoded. The URL parser strips ASCII tab
  * and newline before it parses (WHATWG URL §4.4), so `https://exa\nmple.com/p`
  * would otherwise become a perfectly ordinary key — the value in the log and the
