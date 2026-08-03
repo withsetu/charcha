@@ -45,10 +45,8 @@ const EMAIL_SECRETS = ['RESEND_API_KEY'] as const satisfies readonly SetupSecret
  * rows: a deployment still running on the deprecated secrets is genuinely *on*, and a tab
  * that called it off would send its owner to reconfigure something that works.
  *
- * **What went in #216** is the paragraph explaining that a key is a credential and cannot
- * be set from here — which `HowToSet` demonstrates rather than announces, in four sections
- * at once — and the description of the send-rate batching, which is behaviour an owner
- * reads about once and does not configure.
+ * One status line and three field hints (#216). How the emails are batched and what they
+ * contain are on charcha.dev.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function EmailSection({
@@ -84,10 +82,10 @@ export function EmailSection({
         {on === null
           ? 'Reading what this deployment has stored.'
           : on
-            ? 'A short email to your inbox as comments arrive, rate-limited so a busy morning cannot spend a day’s sending allowance. It is a prompt to come and look; the queue is the record.'
+            ? 'A short email to your inbox as comments arrive.'
             : missing.length === EMAIL_SECRETS.length && !hasFrom && !hasTo
-              ? 'Nothing is emailed when a comment arrives. New comments still reach the queue, which is the only place they show up.'
-              : 'Partly set up, so nothing is sent. The key and both addresses are needed together — a key with no recipient has nowhere to send.'}{' '}
+              ? 'Nothing is emailed when a comment arrives; the queue is the only place they show up.'
+              : 'Partly set up, so nothing is sent — the key and both addresses are needed together.'}{' '}
         <OutboundLink href={DOCS.notifications}>How the emails work</OutboundLink>.
       </p>
 
@@ -227,7 +225,7 @@ function NotifyFields({
         onChange={(next) => {
           change({ to: next })
         }}
-        hint="Your own inbox, and the only address Charcha ever mails. Clearing it is how you stop the emails."
+        hint="Your own inbox, and the only address Charcha ever mails. Clearing it stops the emails."
       />
 
       <Field
@@ -241,7 +239,7 @@ function NotifyFields({
         onChange={(next) => {
           change({ from: next })
         }}
-        hint="Has to be on a domain verified with your email provider. Mail from an unverified domain is refused, and that looks exactly like the feature being switched off — so check it for typos."
+        hint="Has to be on a domain verified with your email provider — mail from an unverified one is refused silently, which looks exactly like the feature being switched off."
       />
 
       <Field
@@ -254,7 +252,7 @@ function NotifyFields({
         onChange={(next) => {
           change({ name: next })
         }}
-        hint="What your mail client shows instead of the bare address. Leave it empty and the address is what you see."
+        hint="What your mail client shows instead of the bare address. Empty means the address."
       />
 
       {status}

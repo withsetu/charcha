@@ -26,6 +26,7 @@ function comment(id: number, overrides: Partial<QueuedComment> = {}): QueuedComm
     moderatedAt: null,
     pageKey: '/posts/hello',
     pageTitle: 'Hello',
+    permalink: null,
     spamReason: null,
     ...overrides,
   }

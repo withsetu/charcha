@@ -149,6 +149,24 @@ describe('a row', () => {
     expect(link.getAttribute('rel')).toBe('noopener noreferrer')
   })
 
+  it('keeps the link out of the tab order on every row but the current one', async () => {
+    // Roving tabindex, the same rule the three decision buttons follow: Tab from the
+    // focused row walks that row's controls, never 200 rows' worth of links.
+    stubFetch(() =>
+      json(
+        200,
+        queuePage([
+          comment({ id: 1, permalink: 'https://maya.build/posts/hello' }),
+          comment({ id: 2, permalink: 'https://maya.build/posts/other' }),
+        ]),
+      ),
+    )
+    mount()
+    await screen.findAllByRole('group')
+    const links = [...document.querySelectorAll('[role="group"] a')]
+    expect(links.map((link) => link.getAttribute('tabindex'))).toEqual(['0', '-1'])
+  })
+
   it('degrades to the page name when there is no link to give', async () => {
     // Most deployments: `site_url` is unset, so the Worker sends null and the card shows
     // exactly what it showed before #203 rather than a broken link.

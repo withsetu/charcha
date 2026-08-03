@@ -1,42 +1,25 @@
 // The Setup tab: what this deployment has been given, and how to finish it. Issue #158.
 //
-// **Why a tab and not a banner.** The owner's decision on #158, and the reason is room:
-// each of these needs a sentence about what being off actually costs, and a checklist or
-// a header status line has room for a tick. It is also where owner configuration will
-// keep arriving, so it is a place rather than a notice.
+// **It is a status report, not a control panel, and #216 is the correction that follows
+// from saying so.** Every secret here is set with wrangler or in the Cloudflare dashboard,
+// because a Worker cannot write its own — so there is no toggle on this screen, and the
+// long explanation of what each feature does belongs on the page where somebody decides to
+// set it. charcha.dev carries all of it. What is left here is one line per section: this
+// deployment's answer, the one thing to do about it, and a link.
 //
-// **It says what the root page must not, and the asymmetry is deliberate.** #145 removed
-// exactly this kind of readout from `GET /`, because that address is public and is where
-// a stranger following the deploy-success link lands. This surface is behind the
-// dashboard password. Do not make the two consistent: `/` would start leaking, or this
-// tab would go back to being unable to say anything worth reading. src/admin/setup.ts
-// states the same rule at the endpoint.
+// **It says what the root page must not.** #145 removed exactly this kind of readout from
+// `GET /`, which is public. This surface is behind the dashboard password. Do not make the
+// two consistent — src/admin/setup.ts states the same rule at the endpoint.
 //
-// **Nothing here renders a secret, and nothing here can.** The endpoint answers
-// booleans (src/admin/setup.ts), so there is no value on this side to mask, truncate or
-// leak. A masked field would be worse than useless anyway — unproofreadable is what took
-// them off the deploy form on #139.
-//
-// **It is not a settings editor for secrets, because a Worker cannot write its own.** A
-// save button here would be a dead control. What it offers instead is the exact command
-// and the exact dashboard path, because a deployer reads this in a browser and acts in a
-// terminal — and several of them have neither a checkout nor wrangler, which is
-// documented history on #57.
+// **Nothing here renders a secret, and nothing here can**: the endpoint answers booleans.
 //
 // **And it is not a nag.** A deployment with everything on finds no recommendation, no
-// badge urging anything and no command to run — sections that only report. Not *short*
-// ones: Turnstile keeps the two paragraphs about its sitekey in the `On` state, because
-// #104 is invisible from here and has to stay readable on a deployment that looks
-// finished.
+// badge urging anything and no command to run.
 //
-// **This file is now the panel and the composition order, and nothing else** (#197). One
-// section per optional feature lives in ./setup/sections, and the pieces they share in
-// ./setup/primitives.tsx. What is left here is the two reads, the state a save leaves
-// behind, and the order — which is the load-bearing part: #174 puts Turnstile first and
-// #158 says the whole thing stays quiet when everything is configured, and
-// test/dashboard/setup.test.tsx asserts the exact heading sequence that results.
-//
-// Enforced by test/dashboard/setup.test.tsx.
+// This file is the panel and the composition order and nothing else (#197). The order is
+// the load-bearing part — #174 puts Turnstile first, #158 says the tab stays quiet when
+// everything is configured — and test/dashboard/setup.test.tsx asserts the heading
+// sequence that results, along with the per-section paragraph ceiling #216 set.
 
 import * as React from 'react'
 
@@ -93,38 +76,19 @@ export function Setup({
   }, [originsSavedAt])
 
   return (
+    // No preamble. It used to open by explaining what the On and Off badges meant and
+    // which parts of the screen were editable, which is a paragraph the badges and the
+    // controls under them say by being there (#216).
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        {/*
-          The badge words are deliberately not marked up here. An `<b>Off</b>` in this
-          sentence is an element whose whole text is "Off", which is what the badges are —
-          so it joins them in every `getAllByText('Off')` and quietly inflates the count
-          the tests use to assert how many features are switched off.
-        */}
-        What this deployment has been given, and what it has not. Everything below carrying an On or
-        Off badge is optional. The parts that are <em>credentials</em> cannot be set from this
-        screen, because a Worker cannot write its own secrets; every setting is edited here.
-      </p>
-
-      {/*
-        The password keeps the top when it has something to say — a credential every
-        destructive action goes through outranks a policy. It is lifted out of the
-        `ready` block below so that the moderation policy can follow it without waiting
-        on a read it does not use.
-      */}
+      {/* The password keeps the top when it has something to say: a credential every
+          destructive action goes through outranks a policy. Lifted out of the `ready`
+          block so the moderation policy does not wait on a read it does not use. */}
       {secrets.kind === 'ready' && secrets.value.shortPassword && <DashboardPasswordSection />}
 
-      {/*
-        Then the moderation policy, above the optional features because it is not one of
-        them: it is the rule every comment on the site is decided by, and the only setting
-        on this tab that can put a comment in front of readers without the owner. So the
-        reading order opens on the decision rather than on the switches, which is why it is
-        here and not after Turnstile.
-
-        It renders on its own read, so a `setup` failure leaves the one editable policy on
-        this tab reachable rather than taking it down with the five sections that do
-        depend on it.
-      */}
+      {/* Then the moderation policy, above the optional features because it is not one of
+          them: it is the rule every comment is decided by, and the only setting here that
+          can put one in front of readers without the owner. It renders on its own read, so
+          a `setup` failure leaves it reachable. */}
       <ModerationSection
         load={settings}
         secrets={secrets}
@@ -149,18 +113,11 @@ export function Setup({
 
       {secrets.kind === 'ready' && (
         <>
-          {/*
-            Turnstile leads the optional sections, because it is the one this tab
-            recommends (#174) and reading order is the only prominence a tab of equal
-            sections has to give.
-
-            What being first costs a configured deployment is honestly not nothing: this
-            section keeps two paragraphs in its `On` state, because #104's asymmetry has
-            to be readable on a deployment that looks finished, so a finished tab now
-            opens on its longest quiet section. That is the trade, and it is worth
-            stating rather than describing this as free. What it does not do is nag —
-            the recommendation, the badge and the command are all gone by then.
-          */}
+          {/* Turnstile leads the optional sections, because it is the one this tab
+              recommends (#174) and reading order is the only prominence a tab of equal
+              sections has. It keeps its sitekey warning in the `On` state — #104 is
+              invisible from here — but the recommendation and the command are gone by
+              then, so a finished tab does not nag. */}
           <TurnstileSection set={secrets.value.secrets.TURNSTILE_SECRET_KEY} />
           <EmailSection
             secrets={secrets.value.secrets}
@@ -169,43 +126,22 @@ export function Setup({
             onSaved={setSaved}
           />
           <IpHashSection set={secrets.value.secrets.IP_HASH_SECRET} />
-          {/*
-            The two spam layers that have something to report, in the order the pipeline
-            runs them: the classifier is layer 7 and the third-party service is layer 8
-            (CLAUDE.md). That is also the privacy ordering — the classifier runs inside
-            this deployment and transmits nothing, and the section under it is the only
-            feature in Charcha that sends anything about a reader anywhere. The other way
-            round would put the disclosure before the thing it is a trade against.
-
-            It is the one section here with no secret behind it: layer 7 needs no
-            configuration at all, which is exactly why nothing on this screen could say
-            whether it was running (#177).
-          */}
+          {/* The two spam layers that have something to report, in pipeline order: the
+              classifier is layer 7 and runs inside this deployment, the provider is layer
+              8 and is the only feature that sends anything about a reader anywhere. */}
           <ClassifierSection report={secrets.value.classifier} />
-          {/*
-            Last, deliberately. Reading order is this tab's only prominence, and the ones
-            above are things a deployer is being encouraged to switch on; this is the one
-            whose default — off — is the recommendation.
-          */}
+          {/* Last, deliberately: every section above is something a deployer is being
+              encouraged to switch on, and this is the one whose default is off and whose
+              default is the recommendation. */}
           <SpamServiceSection set={secrets.value.secrets.AKISMET_API_KEY} />
         </>
       )}
 
-      {/*
-        The two "which addresses are yours" settings, together and last. They are the same
-        kind of statement — the owner naming their own site — which is the argument #207
-        made for `site_url` being a row at all; putting them apart would leave a reader
-        wondering which of the two the comment box actually checks. The allowlist keeps
-        the final position it has held since #158.
-      */}
+      {/* The two "which addresses are yours" settings, together and last: they are the
+          same kind of statement, and apart they would leave a reader wondering which of
+          the two the comment box actually checks. */}
       <SiteAddressSection load={settings} onExpired={onExpired} onSaved={setSaved} />
       <OriginsSection load={settings} onEdit={onEditOrigins} />
-      {/*
-        No "the longer version is in the README" line at the foot any more (#216). Every
-        section links to the page that carries its own long version, which is a link a
-        reader follows from where the question occurred to them rather than one they scroll
-        past on the way out.
-      */}
     </div>
   )
 }

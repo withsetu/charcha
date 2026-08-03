@@ -21,12 +21,12 @@ import {
  * **It is here because almost nobody had it, and that was the problem.** It was optional,
  * deliberately off the deploy form (#139), and the only thing that read it was a spam
  * layer that is also off by default — so a deployer had no reason to set it and no way to
- * learn it would ever buy them anything. A field beside the allowlist is where somebody
- * finds out.
+ * learn it would ever buy them anything. Since #203 it also buys the link on every card in
+ * the moderation queue, which is the first reason to set it that costs nothing and needs
+ * no other feature, so the copy names that one.
  *
  * **No On/Off badge**, for the reason `OriginsSection` has none: an empty value is a
- * working default rather than a feature that is switched off. Nothing about this
- * deployment stops working without it; what it unlocks is named in the copy instead.
+ * working default rather than a feature that is switched off.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function SiteAddressSection({
@@ -59,9 +59,8 @@ export function SiteAddressSection({
       {load.kind === 'ready' && (
         <>
           <p>
-            The home page of the site this deployment takes comments for. Nothing can work it out:
-            this Worker’s own address is a <code>workers.dev</code> URL rather than your site, and
-            the address a comment reports is chosen by whoever posted it.{' '}
+            The home page of the site this deployment takes comments for. Nothing can work it out,
+            and it is what puts a link to the page on every comment in your queue.{' '}
             <OutboundLink href={DOCS.siteAddress}>What reads it</OutboundLink>.
           </p>
           {load.value.fromDeprecatedSecrets.includes('site_url') && (
@@ -91,8 +90,7 @@ export function SiteAddressSection({
               onChange={setDraft}
               hint={
                 <>
-                  Include the scheme — <code>https://example.com</code>, or{' '}
-                  <code>https://you.github.io/blog</code> if your site lives at a path.
+                  Include the scheme — <code>https://example.com</code>.
                 </>
               }
             />

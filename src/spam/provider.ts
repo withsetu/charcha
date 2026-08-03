@@ -219,4 +219,3 @@ function header(request: Request, name: string): string | null {
   const value = request.headers.get(name)?.trim()
   return value === undefined || value === '' ? null : value
 }
-

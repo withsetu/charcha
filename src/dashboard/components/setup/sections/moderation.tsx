@@ -10,26 +10,17 @@ import { Skeleton } from '../../../ui/skeleton'
 import { DOCS, type Load, OutboundLink, ReadFailed, Section, useSettingsSave } from '../primitives'
 
 /**
- * The three policies, and what a reader needs before choosing one.
+ * The three policies, one line each.
  *
- * The prose is the control here, not decoration on it. `hold-all` is what every
- * deployment already does, so its description is a confirmation; the other two change
- * what readers see without the owner, so each has to say what it acts on *before* the
- * radio it belongs to is chosen — the same ordering rule the third-party disclosure
- * follows.
+ * The description is the control here, not decoration on it, and they are a ladder rather
+ * than a menu — `trust-vouched` keeps doing what `trust-returning` does
+ * (src/submit/pipeline.ts).
  *
- * They are a ladder rather than a menu, and the copy has to carry that: `trust-vouched`
- * keeps doing what `trust-returning` does, which is why its description says "as well"
- * rather than describing a replacement (src/submit/pipeline.ts).
- *
- * **What "approved before" actually identifies is in this description rather than in a
- * paragraph below the group, and #216 is only half the reason.** Three paragraphs of
- * caveats under the radios were three paragraphs a reader who had already clicked would
- * never reach; the facts belong on the option they are true of. "Someone you approved
- * before" sounds like it means an email address, and an email address on a Charcha
- * comment is optional and unverified — an owner who believes that is what this checks
- * would reasonably conclude the feature is forgeable, and either not use it or, worse,
- * use it and be wrong about what it does.
+ * **What "approved before" identifies stays on the option it is true of.** It sounds like
+ * it means an email address, and an email address on a Charcha comment is optional and
+ * unverified — an owner who believes that is what this checks would reasonably conclude
+ * the feature is forgeable. How long trust lasts, and what a shared connection does to it,
+ * are on the page the section links to.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 const POLICY_CHOICES: readonly {
@@ -40,23 +31,16 @@ const POLICY_CHOICES: readonly {
   {
     value: 'hold-all',
     label: 'Hold every comment',
-    description: (
-      <>
-        Nothing appears on your site until you approve it. This is the default and what this
-        deployment has been doing.
-      </>
-    ),
+    description: <>Nothing appears on your site until you approve it. The default.</>,
   },
   {
     value: 'trust-returning',
     label: 'Trust a commenter you have approved before',
     description: (
       <>
-        A first comment is held, as always; after you approve it, that person’s later comments go
-        straight onto the page. <b>“Approved before” is not an email address.</b> Nobody verifies an
-        email on a comment, so a commenter counts as returning only when the address <i>and</i> the
-        network they are commenting from both match one you approved. Trust fades as stored address
-        hashes are deleted, and marking a trusted person’s comment as spam takes it away.
+        Their first comment is held; after you approve it, their later ones go straight onto the
+        page. <b>“Approved before” is not an email address</b> — the address <i>and</i> the network
+        they comment from both have to match. Marking their comment as spam takes it away.
       </>
     ),
   },
@@ -65,9 +49,8 @@ const POLICY_CHOICES: readonly {
     label: 'Also publish comments your spam service says are clean',
     description: (
       <>
-        Everything above, <i>and</i>: when a spam service you have connected checks a comment and
-        comes back clean, it goes straight onto the page. Only a service saying so counts — a
-        comment nothing happened to look wrong about is still held.
+        That, <i>and</i> a comment your connected spam service checks and calls clean. Only a
+        service saying so counts.
       </>
     ),
   },
@@ -75,20 +58,18 @@ const POLICY_CHOICES: readonly {
 
 /**
  * The moderation policy (#173) — the one setting on this tab that decides what readers
- * see, and the only door out of the queue that the seven spam layers do not have.
+ * see, and the only door out of the queue the spam layers do not have.
  *
  * **The `IP_HASH_SECRET` warning is the #107 case for this feature.** Without that secret
  * no address hash is stored, so half the identity does not exist and `trust-returning`
- * trusts nobody — a setting that reads as on and does nothing at all. It renders only
- * when the secret report says the secret is missing; when that report could not be read
- * the tab is showing its own failure alert further down the page, so nothing here is
- * quietly absent.
+ * trusts nobody — a setting that reads as on and does nothing at all. It renders only when
+ * the secret report says the secret is missing; when that report could not be read the tab
+ * shows its own failure alert further down, so nothing here is quietly absent.
  *
- * **Ten paragraphs became four, and one of them is the radio descriptions (#216).** The
- * save is `useSettingsSave` now rather than a second copy of it: this section had grown
- * its own busy flag, its own failure alert and its own live region, which is three chances
- * for the one control on this tab that publishes comments to report a failure differently
- * from every other control on it.
+ * The save is `useSettingsSave` rather than a second copy of it: this section had grown
+ * its own busy flag, failure alert and live region, which is three chances for the one
+ * control on this tab that publishes comments to report a failure differently from every
+ * other control on it.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function ModerationSection({
@@ -154,14 +135,13 @@ export function ModerationSection({
         ) : null
       }
     >
+      {/* The link text promises the caveats as well as the choice: the page it lands on
+          carries what each policy publishes *and* the two facts the middle option states
+          without room to explain. Naming only the choice would be the near-miss a reader
+          blames themselves for. */}
       <p>
-        What happens to a comment none of the spam layers objected to. Everything they <i>do</i>{' '}
-        object to is held for you whatever is chosen here.{' '}
-        {/* The link text has to promise the caveats as well as the choice: the page it
-            lands on carries what each policy publishes *and* the two facts the middle
-            option's description states without room to explain — how long trust lasts,
-            and that a shared connection can pass it around. Naming only the choice would
-            be the near-miss a reader blames themselves for. */}
+        What happens to a comment no spam layer objected to. Everything they <i>do</i> object to is
+        held for you whatever is chosen here.{' '}
         <OutboundLink href={DOCS.policy}>
           What each one publishes, and how long trust lasts
         </OutboundLink>
@@ -202,11 +182,7 @@ export function ModerationSection({
           <TriangleAlertIcon />
           <AlertTitle>No spam service is connected, so nothing is being vouched for</AlertTitle>
           <AlertDescription>
-            <p>
-              This deployment has no <code>AKISMET_API_KEY</code> set, and a comment is only
-              published early when a service you connected says it is clean. Until you connect one
-              this setting behaves exactly like the option above it.
-            </p>
+            <p>Until you connect one, this behaves exactly like the option above it.</p>
           </AlertDescription>
         </Alert>
       )}
@@ -217,10 +193,9 @@ export function ModerationSection({
           <AlertTitle>Nobody can be recognised on this deployment yet</AlertTitle>
           <AlertDescription>
             <p>
-              <code>IP_HASH_SECRET</code> is not set, so no address hash is stored and the network
-              half of the identity does not exist. Trusting returning commenters is allowed and will
-              do nothing — every comment stays held — until that secret is set. The{' '}
-              <b>Per-commenter rate limiting</b> section below has the command.
+              <code>IP_HASH_SECRET</code> is not set, so no address hash is stored and this will do
+              nothing — every comment stays held. The <b>Per-commenter rate limiting</b> section
+              below has the command.
             </p>
           </AlertDescription>
         </Alert>
