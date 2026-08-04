@@ -33,6 +33,13 @@ coverage/
 # plan files must never be committed here.
 .superpowers/
 
+# Scratch written by the improve skill: audit findings turned into implementation
+# plans. Same rule as .superpowers/ above, and the same reason — but this one is
+# the directory that actually gets large, so the rule being remembered rather
+# than enforced was a `git add -A` away from committing thousands of lines of
+# spec files in one go (#222).
+plans/
+
 # Local product record for design sessions (impeccable). Contains positioning,
 # which CLAUDE.md forbids in this public repo.
 PRODUCT.md
