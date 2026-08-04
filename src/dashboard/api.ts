@@ -99,6 +99,18 @@ export interface QueuedComment {
   moderatedAt: number | null
   pageKey: string
   pageTitle: string | null
+  /**
+   * The page this comment was left on, or null when there is none to give (#203).
+   *
+   * **Built by the Worker from the owner's own `site_url` setting and the derived key,
+   * and this side may not build one.** `pageKey` is a path with no origin and the URL a
+   * comment reported is attacker-chosen, so the only trustworthy base is the one the
+   * owner configured — see `permalinkFor` in src/page-key.ts and handleQueue in
+   * src/admin/route.ts. Null for a `data-thread` key, which names no page, and for a
+   * deployment with no site address saved, which is most of them.
+   * Enforced by test/worker/admin/queue.test.ts and test/dashboard/triage.test.tsx.
+   */
+  permalink: string | null
   /** Why a spam layer held this comment, or null when none did (#70). */
   spamReason: string | null
 }

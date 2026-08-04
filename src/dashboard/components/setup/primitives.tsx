@@ -1,16 +1,8 @@
 // The pieces every section of the Setup tab is built from (#197).
 //
-// **They are here because they are shared, and that is the whole entry criterion.** The
-// sections next door share almost nothing else — each is a heading, a status word and
-// several paragraphs of copy about one optional feature — so a helper that only one
-// section uses belongs in that section's file, where its reason is next to its only
-// reader. `omitUntyped` is the worked example: it lives in ./sections/email.tsx.
-//
-// Split out of a single 1,583-line setup.tsx, with no behaviour change. What made that
-// move verifiable is the exact heading sequence asserted in test/dashboard/setup.test.tsx
-// — the composition order is load-bearing (#174 puts Turnstile first, #158 says the tab
-// must stay quiet when everything is configured), so a move that reordered anything fails
-// there rather than in review.
+// **They are here because they are shared, and that is the whole entry criterion.** A
+// helper only one section uses belongs in that section's file, where its reason sits next
+// to its only reader — `omitUntyped` in ./sections/email.tsx is the worked example.
 
 import * as React from 'react'
 import { ExternalLinkIcon, LoaderCircleIcon, TriangleAlertIcon } from 'lucide-react'
@@ -77,8 +69,35 @@ export function useLoad<T>(
   return state
 }
 
-/** Where the long form of every instruction below lives. */
-export const README_URL = 'https://github.com/withsetu/charcha#turning-on-the-optional-features'
+/**
+ * Where the long form of every explanation on this tab lives (#216).
+ *
+ * **This tab used to carry the explanations itself: 62 paragraphs to configure a comment
+ * system.** Each section now gives this deployment's answer, the one thing to do about it,
+ * and a link. Nothing was deleted — every cut paragraph is on the page it points at, at
+ * length, for a reader who chose to be reading rather than one who came to change a
+ * setting. That includes the two disclosures: the rule is that a UI *enabling* a provider
+ * states what is sent before the toggle, and this screen has no toggle on it.
+ *
+ * Deep links rather than one docs root, because a section that sends an owner to the front
+ * page has not saved them the search. The anchors are Starlight's slugs for headings in
+ * charcha.dev's `src/content/docs`; that is a separate repository, so nothing here can
+ * typecheck them, and a section's link is asserted present rather than resolvable by
+ * test/dashboard/setup.test.tsx.
+ */
+export const DOCS = {
+  classifier: 'https://charcha.dev/spam/#7-the-classifier',
+  notifications: 'https://charcha.dev/notifications/',
+  origins: 'https://charcha.dev/getting-started/#tell-it-your-site-is-allowed',
+  password: 'https://charcha.dev/moderation/#signing-in',
+  policy: 'https://charcha.dev/moderation/#who-gets-published-without-you',
+  rateLimit: 'https://charcha.dev/spam/#4-rate-limit',
+  secrets: 'https://charcha.dev/secrets/',
+  siteAddress: 'https://charcha.dev/moderation/#your-sites-address-and-the-link-on-each-card',
+  spamProviders: 'https://charcha.dev/spam-providers/',
+  turnstile: 'https://charcha.dev/spam/#what-it-puts-in-a-readers-browser',
+  turnstileKeys: 'https://charcha.dev/spam/#turnstile-is-two-keys-in-two-places',
+} as const
 
 /**
  * A name this tab can print a `wrangler secret put` line for.
@@ -139,15 +158,13 @@ export function Off() {
 /**
  * The one item on this tab worth going out of your way for (#174).
  *
- * **A second badge rather than a replacement for `Off`, because they answer different
- * questions.** *Off* is the state and *Recommended* is the advice; collapsing them into
- * one word would leave a reader working out from the absence of "On" whether the thing
- * is running. It sits before `Off` so the status badge keeps the right-hand edge it holds
- * in the sections below, which is the column a reader scans.
+ * **A second badge rather than a replacement for `Off`**: *Off* is the state and
+ * *Recommended* is the advice, and collapsing them would leave a reader working out from
+ * the absence of "On" whether the thing is running. It sits before `Off` so the status
+ * badge keeps the right-hand edge the sections below hold.
  *
- * **It renders only in the unconfigured state, and that is the whole of how this stays
- * inside #158's no-nagging rule.** A deployment that has already done this sees `On` and
- * a status line. Advice that survives being taken is a nag.
+ * **It renders only in the unconfigured state**, which is how this stays inside #158's
+ * no-nagging rule: advice that survives being taken is a nag.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function Recommended() {
@@ -155,12 +172,17 @@ export function Recommended() {
 }
 
 /**
- * The exact command, and the exact route for somebody who has no terminal.
+ * The exact command, and the route for somebody who has no terminal.
  *
- * Both, always, and that is the point rather than thoroughness: the person most likely
- * to be reading this clicked a Deploy button, so they have no checkout, no wrangler and
- * no API token — which is how #57 stayed unfixable for its author, who owns this
- * project.
+ * Both, always: the person most likely to be reading this clicked a Deploy button, so they
+ * have no checkout, no wrangler and no API token — which is how #57 stayed unfixable for
+ * its author, who owns this project.
+ *
+ * **The click path used to be spelled out here, and #216 is why it is a link.** This block
+ * renders in up to five sections at once, so the same six-step route was on one screen five
+ * times over. It is named first and linked rather than demoted: one click is not a
+ * terminal.
+ * Enforced by test/dashboard/setup.test.tsx.
  */
 export function HowToSet({
   names,
@@ -172,7 +194,8 @@ export function HowToSet({
   return (
     <div className="space-y-2">
       <p>
-        {verb} {names.length === 1 ? 'it' : 'them'} from a checkout of your deployed repository:
+        {verb} {names.length === 1 ? 'it' : 'them'} from the Cloudflare dashboard —{' '}
+        <OutboundLink href={DOCS.secrets}>Variables and Secrets</OutboundLink> — or from a checkout:
       </p>
       {/*
         `tabIndex` so the block can be scrolled without a mouse when a narrow window
@@ -195,13 +218,41 @@ export function HowToSet({
       >
         <code>{names.map((name) => `pnpm wrangler secret put ${name}`).join('\n')}</code>
       </pre>
-      <p>
-        Without a checkout, the Cloudflare dashboard sets the same names: <b>Workers &amp; Pages</b>{' '}
-        → your Worker → <b>Settings</b> → <b>Variables and Secrets</b> → <b>Add</b>, with the type
-        set to <b>Secret</b>, then <b>Deploy</b>. Either way it takes effect on the next request;
-        there is nothing to redeploy here.
-      </p>
     </div>
+  )
+}
+
+/**
+ * The #207 migration notice, once rather than in both sections that need it.
+ *
+ * The email addresses and the site address stopped being secrets and became settings, so a
+ * deployment still running on the old secrets has an empty field here with a working value
+ * behind it. Two copies would be two chances to word one migration differently.
+ */
+export function ServedBySecret({ names }: { names: readonly string[] }) {
+  const one = names.length === 1
+  return (
+    <Alert>
+      <TriangleAlertIcon />
+      <AlertTitle>
+        {one ? 'This is' : 'These are'} still coming from {one ? 'a secret' : 'secrets'} you set
+        with wrangler
+      </AlertTitle>
+      <AlertDescription>
+        <p>
+          {one ? 'It keeps' : 'They keep'} working. The {one ? 'field' : 'fields'} below{' '}
+          {one ? 'is' : 'are'} empty because Charcha will not show a value out of a secret. Save{' '}
+          {one ? 'it' : 'them'} here and you can remove{' '}
+          {names.map((name, index) => (
+            <React.Fragment key={name}>
+              {index > 0 && (index === names.length - 1 ? ' and ' : ', ')}
+              <code>{name}</code>
+            </React.Fragment>
+          ))}{' '}
+          with <code>wrangler secret delete</code>.
+        </p>
+      </AlertDescription>
+    </Alert>
   )
 }
 
@@ -261,21 +312,27 @@ export function OutboundLink({ href, children }: { href: string; children: React
 }
 
 /**
- * A settings save, as one hook, because four controls on this tab now make one.
+ * A settings save, as one hook, because three controls on this tab now make one.
  *
  * **The `catch` is not defensive padding.** src/dashboard/api.ts is documented never to
- * reject, so reaching it is a bug in the callback — and a Save button that spun, stopped,
- * and saved nothing is the worst outcome a settings control has. CLAUDE.md's rule is that
- * every unawaited async owes the user a specific message; this is the one place four
- * controls pay it.
+ * reject, so reaching it is a bug in the callback — and a Save button that spun, stopped
+ * and saved nothing is the worst outcome a settings control has.
  *
- * `saved` is set from the **server's answer**, never from what was sent, so what the field
- * shows afterwards is what the deployment will actually apply — an address comes back
- * trimmed and a site URL comes back canonicalised, which is the feedback that teaches the
- * rule (the same argument site-settings.tsx makes for the allowlist).
+ * `saved` is set from the **server's answer**, never from what was sent, so the field shows
+ * what the deployment will actually apply: an address comes back trimmed and a site URL
+ * canonicalised.
+ *
+ * **`what` names the form in the announcement, and it is required rather than defaulted**,
+ * because there are three of these on one scrolling tab and an unattributed "Saved." tells
+ * a screen-reader user nothing about which landed. A default would be a fourth caller's
+ * silent way back to it.
  * Enforced by test/dashboard/setup.test.tsx.
  */
-export function useSettingsSave(onExpired: () => void, onSaved: (settings: Settings) => void) {
+export function useSettingsSave(
+  onExpired: () => void,
+  onSaved: (settings: Settings) => void,
+  what: string,
+) {
   const [busy, setBusy] = React.useState(false)
   const [failure, setFailure] = React.useState<ApiFailure | null>(null)
   const [announcement, setAnnouncement] = React.useState('')
@@ -293,7 +350,7 @@ export function useSettingsSave(onExpired: () => void, onSaved: (settings: Setti
           return
         }
         onSaved(result.value)
-        setAnnouncement('Saved.')
+        setAnnouncement(`${what} saved.`)
       })
       .catch(() => {
         setFailure(DASHBOARD_BUG)

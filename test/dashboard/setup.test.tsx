@@ -7,7 +7,7 @@
 // shortcut, and the queue keys being inert while it is in front — is
 // test/dashboard/shortcuts.test.tsx and test/dashboard/triage.test.tsx.
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SETUP_SECRETS, type ClassifierStatus, type SetupSecret } from '../../src/dashboard/api'
@@ -94,6 +94,255 @@ function panelText(): string {
   return document.body.textContent ?? ''
 }
 
+/**
+ * The paragraph budget (#216), asserted per section rather than as a total.
+ *
+ * **A total would be satisfied by moving prose from one section into another**, which is
+ * the failure mode this tab already has: every paragraph on it was individually
+ * justified and nobody was counting. A per-section ceiling is the number that fails when
+ * a later change re-grows one of them.
+ *
+ * Screen-reader-only status regions are excluded, because they are not on the page a
+ * sighted owner reads and cutting one would be an accessibility regression rather than a
+ * simplification. Everything else counts, including field hints and warning bodies.
+ */
+/** One section's own live region, since the tab has three and they must differ. */
+function statusIn(sectionTitle: string): string {
+  const heading = screen
+    .getAllByRole('heading', { level: 2 })
+    .find((candidate) => candidate.textContent === sectionTitle)
+  const status = heading?.closest('section')?.querySelector('[role="status"]')
+  return status?.textContent ?? '(no status region)'
+}
+
+function visibleParagraphs(sectionTitle: string): number {
+  // By heading rather than by text: the moderation policy's `IP_HASH_SECRET` warning
+  // names another section in bold, so `getByText` finds two elements for it.
+  const heading = screen
+    .getAllByRole('heading', { level: 2 })
+    .find((candidate) => candidate.textContent === sectionTitle)
+  const section = heading?.closest('section')
+  if (section == null) throw new Error(`no section is headed ${sectionTitle}`)
+  return [...section.querySelectorAll('p')].filter((p) => !p.classList.contains('sr-only')).length
+}
+
+describe('the tab is state, action and link, not a textbook (#216)', () => {
+  /**
+   * The worst case for length: nothing configured, so every section is at full size.
+   *
+   * Set at what the tab actually renders rather than at a round number with slack in it,
+   * because slack is what the last cut left and what grew back into it.
+   */
+  const BUDGET_UNCONFIGURED: Record<string, number> = {
+    'Dashboard password': 2,
+    'Moderation policy': 5,
+    'Turnstile bot check': 3,
+    'Email notifications': 5,
+    'Per-commenter rate limiting': 2,
+    'Spam classifier': 1,
+    'Third-party spam service': 2,
+    'Your site’s address': 2,
+    'Allowed origins': 1,
+  }
+
+  /** And the case #158 cares about: a finished deployment finds almost nothing here. */
+  const BUDGET_CONFIGURED: Record<string, number> = {
+    'Moderation policy': 4,
+    'Turnstile bot check': 2,
+    'Email notifications': 4,
+    'Per-commenter rate limiting': 1,
+    'Spam classifier': 1,
+    'Third-party spam service': 1,
+    'Your site’s address': 2,
+    'Allowed origins': 1,
+  }
+
+  /**
+   * And the whole tab, which buys exactly one thing the ceilings above do not.
+   *
+   * **It is not a second constraint on the sections that are listed**, and saying it was
+   * would be the coverage-shaped assertion this file exists to avoid: the budgets are set
+   * at what each section actually renders, so their sum *is* this number and the total
+   * cannot fail while they all pass. What it catches is the case the map cannot — a
+   * **tenth section**, which `visibleParagraphs` is never called for because the loop
+   * above only walks the titles it knows. Without this the tab could grow a whole new
+   * section of prose and every assertion here would stay green.
+   *
+   * The figures include field hints and radio-option descriptions, which are control copy
+   * rather than prose: eight of the configured sixteen are those.
+   */
+  const TOTAL_UNCONFIGURED = 23
+  const TOTAL_CONFIGURED = 16
+
+  function totalParagraphs(): number {
+    return screen
+      .getAllByRole('heading', { level: 2 })
+      .map((heading) => visibleParagraphs(heading.textContent ?? ''))
+      .reduce((sum, n) => sum + n, 0)
+  }
+
+  it('keeps every section inside its budget when nothing is configured', async () => {
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    for (const [title, budget] of Object.entries(BUDGET_UNCONFIGURED)) {
+      expect(visibleParagraphs(title), title).toBeLessThanOrEqual(budget)
+    }
+    expect(totalParagraphs()).toBeLessThanOrEqual(TOTAL_UNCONFIGURED)
+  })
+
+  it('opens on no preamble at all', async () => {
+    // It used to explain what the On and Off badges meant and which parts of the screen
+    // were editable, which is what the badges and the controls say by being there. The
+    // first thing on the tab is now a section.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    const panel = screen.getByText('Dashboard password').closest('div.space-y-4')
+    expect(panel?.firstElementChild?.tagName).toBe('SECTION')
+  })
+
+  it('says even less on a deployment that has finished configuring itself', async () => {
+    answering(
+      () =>
+        json(
+          200,
+          report(
+            Object.fromEntries(SETUP_SECRETS.map((name) => [name, true])),
+            false,
+            classifier({ state: 'trained', hamCount: 41, spamCount: 38 }),
+          ),
+        ),
+      () =>
+        json(
+          200,
+          settingsBody({
+            notifyFrom: 'comments@maya.build',
+            notifyTo: 'maya@maya.build',
+            siteUrl: 'https://maya.build',
+            allowedOrigins: ['https://maya.build'],
+          }),
+        ),
+    )
+    mount()
+
+    await screen.findByText('Email notifications')
+    for (const [title, budget] of Object.entries(BUDGET_CONFIGURED)) {
+      expect(visibleParagraphs(title), title).toBeLessThanOrEqual(budget)
+    }
+    expect(totalParagraphs()).toBeLessThanOrEqual(TOTAL_CONFIGURED)
+  })
+
+  it('names the recipient here, and keeps the whole disclosure one click away', async () => {
+    // **CLAUDE.md's rule is about the UI that *enables* a provider, and this tab has no
+    // toggle on it** — Akismet is switched on by setting a secret, which a Worker cannot
+    // do to itself. So the screen an owner decides on is charcha.dev's, and that is where
+    // the field list, the recipient and the paragraph they owe their privacy notice live
+    // at length. What this tab may not do is compress the disclosure to nothing: the
+    // recipient and the two fields nobody expects to be sent stay in the copy, and the
+    // link that carries the rest has to be present and has to promise it. The same shape
+    // for Turnstile, which is the one feature that puts somebody else's script in a
+    // reader's browser (card rule 8).
+    answering(() => json(200, report()))
+    mount()
+
+    await screen.findByText('Third-party spam service')
+    const provider = screen.getByText('Third-party spam service').closest('section')
+    // The recipient, and both fields — with the hedge the docs carry, because the email
+    // field is optional in Charcha and a disclosure that overstates is still wrong.
+    expect(provider?.textContent).toContain('IP address, and their email address if they gave one')
+    expect(provider?.textContent).toContain('Automattic')
+    // Reachable, and named as the disclosure rather than as the feature.
+    const providerLink = within(provider as HTMLElement).getByRole('link', {
+      name: /What it would send/,
+    })
+    expect(providerLink.getAttribute('href')).toBe('https://charcha.dev/spam-providers/')
+
+    const turnstile = screen.getByText('Turnstile bot check').closest('section')
+    const browserLink = within(turnstile as HTMLElement).getByRole('link', {
+      name: /reader’s browser/,
+    })
+    expect(browserLink.getAttribute('href')).toBe(
+      'https://charcha.dev/spam/#what-it-puts-in-a-readers-browser',
+    )
+  })
+
+  it('says the same on a deployment that already connected one', async () => {
+    // The `On` state is where the owner is composing their own privacy notice, so the
+    // link has to name that rather than the feature — and the recipient stays on screen.
+    answering(() => json(200, report({ AKISMET_API_KEY: true })))
+    mount()
+
+    await screen.findByText('Third-party spam service')
+    const provider = screen.getByText('Third-party spam service').closest('section')
+    expect(provider?.textContent).toContain('Automattic')
+    const link = within(provider as HTMLElement).getByRole('link', {
+      name: /the paragraph you owe your readers/,
+    })
+    expect(link.getAttribute('href')).toBe('https://charcha.dev/spam-providers/')
+  })
+
+  it('names the form in every save announcement, not just the one with no button', async () => {
+    // **Three live regions on one scrolling tab, and a screen-reader user has to be able to
+    // tell which one landed.** `useSettingsSave` takes the name as a required parameter so a
+    // fourth caller cannot quietly go back to a bare "Saved." — but a required parameter
+    // only forces *a* string, so the two forms the moderation fix did not prompt are the
+    // ones asserted here. Their announcements are driven for real rather than read off the
+    // source.
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report({ RESEND_API_KEY: true }))
+      if (call.method === 'GET') return json(200, settingsBody())
+      return json(200, settingsBody({ notifyTo: 'maya@maya.build', siteUrl: 'https://maya.build' }))
+    })
+    mount()
+
+    await screen.findByText('Email notifications')
+    fireEvent.change(screen.getByLabelText('Send notifications to'), {
+      target: { value: 'maya@maya.build' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }))
+    await waitFor(() => {
+      expect(statusIn('Email notifications')).toBe('Notification settings saved.')
+    })
+
+    fireEvent.change(screen.getByLabelText('Home page address'), {
+      target: { value: 'https://maya.build' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save site address' }))
+    await waitFor(() => {
+      expect(statusIn('Your site’s address')).toBe('Site address saved.')
+    })
+    // And the two are distinguishable, which is the property the parameter exists for.
+    expect(statusIn('Email notifications')).not.toBe(statusIn('Your site’s address'))
+  })
+
+  it('sends the explanation to the docs rather than deleting it', async () => {
+    // The other half of the cut: every section that lost prose keeps a way to the page
+    // that now carries it. A link per section, not one link at the bottom of the tab.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText('Dashboard password')
+    const linked = [...document.querySelectorAll('a[href^="https://charcha.dev/"]')]
+    const sections = new Set(
+      linked.map((link) => link.closest('section')?.querySelector('h2')?.textContent),
+    )
+    expect([...sections].sort()).toEqual([
+      'Allowed origins',
+      'Dashboard password',
+      'Email notifications',
+      'Moderation policy',
+      'Per-commenter rate limiting',
+      'Spam classifier',
+      'Third-party spam service',
+      'Turnstile bot check',
+      'Your site’s address',
+    ])
+  })
+})
+
 describe('a deployment with nothing switched on', () => {
   it('says so for each feature, and names the secrets that are missing', async () => {
     answering(() => json(200, report()))
@@ -122,13 +371,24 @@ describe('a deployment with nothing switched on', () => {
 
   it('gives the dashboard route too, because most deployers have no terminal', async () => {
     // #57's history: the workaround needed a checkout, wrangler and an API token with D1
-    // on it, and the owner of this project had none of them either.
+    // on it, and the owner of this project had none of them either. #216 turned the
+    // six-step click path into a link, because it was on the page four times over — but
+    // the route is still *named first*, ahead of the command, and it is still one click
+    // rather than a terminal.
     answering(() => json(200, report()))
     mount()
 
     await screen.findByText('Email notifications')
-    expect(screen.getAllByText(/Variables and Secrets/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Workers & Pages/).length).toBeGreaterThan(0)
+    const routes = screen.getAllByRole('link', { name: /Variables and Secrets/ })
+    expect(routes.length).toBeGreaterThan(0)
+    for (const route of routes) {
+      expect(route.getAttribute('href')).toBe('https://charcha.dev/secrets/')
+    }
+    // Ahead of the command it is an alternative to. One comparison over the whole panel
+    // rather than per block, because `HowToSet` is the only thing that renders either
+    // string and it emits them in this order structurally.
+    const text = panelText()
+    expect(text.indexOf('Variables and Secrets')).toBeLessThan(text.indexOf('wrangler secret put'))
   })
 
   it('says what being off actually costs, rather than only that it is off', async () => {
@@ -246,7 +506,7 @@ describe('the spam classifier, which trains itself and says nothing until it can
     expect((await section()).textContent).toContain('has not learned anything yet')
   })
 
-  it('is quiet once it is trained, and says what it does with what it learned', async () => {
+  it('is quiet once it is trained, and reports the decisions it learned from', async () => {
     showing({
       state: 'trained',
       hamCount: 41,
@@ -257,20 +517,30 @@ describe('the spam classifier, which trains itself and says nothing until it can
     const text = (await section()).textContent ?? ''
     expect(text).toContain('41')
     expect(text).toContain('38')
-    // The authority the layer actually has, stated where an owner reads about it: it can
-    // hold a comment and it can never refuse one (src/spam/classifier.ts).
-    expect(text).toContain('never refuse')
+    // And no instructions: a working layer has nothing for its owner to do, which is
+    // #158's rule applied to the one section here that has no secret behind it.
     expect(text).not.toContain('wrangler')
   })
 
-  it('names the reason it writes, so the owner can go and see it working', async () => {
-    // The strongest evidence available that the model is doing something, and it costs
-    // nothing: `CLASSIFIER_REASON` is on every comment this layer held, in the queue the
-    // owner is already looking at. The Turnstile section makes the same move with
-    // `turnstile: no-token-unverified-deployment`.
+  it('is a status line and nothing else once it is working', async () => {
+    // **The `On` state is the one that has to stay a line, because it is the state a
+    // finished deployment sits in forever.** What it says is the two things only this
+    // screen knows: whose decisions trained it, and when training last succeeded. The
+    // reason token it marks a held comment with is a fact about the queue rather than
+    // about this deployment's configuration, and it is on charcha.dev with the rest of
+    // how the layer behaves — unlike Turnstile's, which stays because #104 is a
+    // misconfiguration only this screen can surface.
     showing({ state: 'trained', hamCount: 41, spamCount: 38, updatedAt: 1_800_000_000 })
 
-    expect((await section()).textContent).toContain('classifier: similar-to-spam')
+    const text = (await section()).textContent ?? ''
+    expect(text).not.toContain('classifier: similar-to-spam')
+    expect(visibleParagraphs('Spam classifier')).toBe(1)
+    // Still reachable, which is the half a cut is allowed to keep.
+    expect(
+      within(await section())
+        .getByRole('link', { name: /How it learns/ })
+        .getAttribute('href'),
+    ).toBe('https://charcha.dev/spam/#7-the-classifier')
   })
 
   it('says when it last learned, which is the only symptom a stalled trainer has', async () => {
@@ -284,6 +554,26 @@ describe('the spam classifier, which trains itself and says nothing until it can
     expect((await section()).textContent).toContain('3 days ago')
   })
 
+  it('says it while it is still learning too, which is where a stall hides longest', async () => {
+    // **The state the date is worth the most in, and the one the #216 rewrite dropped it
+    // from before this test existed.** A deployment stuck at 6 of 30 whose training writes
+    // are failing shows a count that has stopped and nothing else — and `learning` is the
+    // long state, so "quiet site" and "broken trainer" look alike here for months. A test
+    // asserting the date only on `trained` instruments the case that needs it least.
+    const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
+    showing({ state: 'learning', hamCount: 6, spamCount: 40, updatedAt: threeDaysAgo })
+
+    const text = (await section()).textContent ?? ''
+    expect(text).toContain('3 days ago')
+    expect(text).toContain('training has stopped')
+  })
+
+  it('claims no learning history on a deployment that has none', async () => {
+    showing({ state: 'learning', hamCount: 0, spamCount: 0, updatedAt: null })
+
+    expect((await section()).textContent).not.toContain('It last learned something')
+  })
+
   it('says the layer never runs when there is no binding, and how to give it one', async () => {
     // Distinguishable from *cold* by what it asks for: a binding rather than more
     // moderating. Nothing else on the deployment is affected, which the copy says
@@ -291,7 +581,7 @@ describe('the spam classifier, which trains itself and says nothing until it can
     showing({ state: 'no-binding', hamCount: 6, spamCount: 40 })
 
     const text = (await section()).textContent ?? ''
-    expect(text).toContain('no Workers AI binding')
+    expect(text).toContain('No Workers AI binding')
     expect(text).toContain('Bindings')
     expect(text).toContain('Off')
   })
@@ -707,9 +997,13 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     mount()
 
     await screen.findByText('Dashboard password')
-    expect(panelText()).toContain('shorter than 15 characters')
-    // The honest caveat, in the place the claim is made rather than in a README.
-    expect(panelText()).toContain('been in a breach')
+    expect(panelText()).toContain('Shorter than the 15 characters')
+    // And who says so, cited in the place the claim is made. The argument that a length
+    // check is only a length check moved to charcha.dev with #216; the number's source
+    // did not, because a floor asserted without one invites "says who".
+    expect(screen.getByRole('link', { name: /NIST requires/ }).getAttribute('href')).toBe(
+      'https://pages.nist.gov/800-63-4/sp800-63b.html',
+    )
   })
 
   it('refuses a measurement where a verdict belongs, rather than rendering it', async () => {
@@ -733,7 +1027,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     mount()
 
     await screen.findByText('Dashboard password')
-    expect(panelText()).toContain('keeps working')
+    expect(panelText()).toContain('Nothing has stopped working and nothing will')
   })
 
   it('gives the command to replace it, and the dashboard path for anyone without one', async () => {
@@ -754,7 +1048,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     expect(section?.textContent).toContain('Variables and Secrets')
     // The lead-in and the block's accessible name have to agree, or a screen reader is
     // told to "set" a secret the visible copy says to "replace".
-    expect(section?.textContent).toContain('Replace it from a checkout')
+    expect(section?.textContent).toContain('Replace it from the Cloudflare dashboard')
     expect(section?.querySelector('pre')?.getAttribute('aria-label')).toBe(
       'Commands to replace CHARCHA_DASHBOARD_PASSWORD',
     )
@@ -768,7 +1062,7 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     mount()
 
     await screen.findByText('Dashboard password')
-    expect(panelText()).toContain('signs out every open session, including this one')
+    expect(panelText()).toContain('sign out every open session, including this one')
   })
 
   it('is silent about a password that clears the floor', async () => {
@@ -834,11 +1128,12 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     const section = await turnstileSection()
     expect(section.textContent).toContain('Recommended')
     expect(section.textContent).toContain('the absence of something wrong')
-    expect(section.textContent).toContain('free and unmetered')
+    expect(section.textContent).toContain('free')
     // Scoped to the layers that judge a comment, and the exception named, because rate
-    // limiting is layer 4 and measures volume rather than an absence (src/spam/index.ts).
-    // "Every other layer" would be the sort of overclaim a reader can falsify.
-    expect(section.textContent).toContain('Rate limiting bounds how many arrive')
+    // limiting is layer 4 and measures volume rather than an absence (src/spam/index.ts),
+    // so the claim is scoped to asking for evidence rather than to "every other layer",
+    // which would be the sort of overclaim a reader can falsify.
+    expect(section.textContent).toContain('the only layer that asks for evidence')
   })
 
   it('puts Recommended beside the status badge, not loose in the row', async () => {
@@ -863,17 +1158,18 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(grouped?.querySelector('h2')).toBeNull()
   })
 
-  it('says which half is the trap and which half is harmless', async () => {
-    // They are not symmetrical and the copy must not imply they are: a secret with no
-    // sitekey holds every comment (#104), while a sitekey with no secret makes the layer
-    // abstain and costs nothing (src/spam/turnstile.ts). Told as one undifferentiated
-    // warning, the reader cannot tell which mistake they are about to make.
-    answering(() => json(200, report()))
+  it('names the trap in the state that hides it, which is the configured one', async () => {
+    // #104 is a secret key with no sitekey: every comment held, silently, on a deployment
+    // whose Setup tab says On. Charcha cannot see the site's pages, so this screen is the
+    // only place a reader would find out — and it has to say so in the state that looks
+    // finished. One sentence since #216; the two-keys explanation is on charcha.dev.
+    answering(() => json(200, report({ TURNSTILE_SECRET_KEY: true })))
     mount()
 
     const text = (await turnstileSection()).textContent ?? ''
-    expect(text).toContain('the two failures are not the same size')
-    expect(text).toContain('A sitekey with no secret key is the harmless direction')
+    expect(text).toContain('Charcha cannot see your pages')
+    expect(text).toContain('data-turnstile-sitekey')
+    expect(text).toContain('every comment is held')
     // And the queue does name the reason — src/spam/layer.ts prefixes the layer and
     // src/submit/pipeline.ts stores it, asserted by test/worker/submit/pipeline.test.ts.
     // Saying "nothing anywhere says why" would document a signal the Worker goes out of
@@ -891,6 +1187,11 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(section.textContent).not.toContain('Recommended')
     expect(section.textContent).not.toContain('the absence of something wrong')
     expect(section.querySelector('pre')).toBeNull()
+    // Including the widget-creation route: the sitekey fact is true of a configured
+    // deployment and stays, but "go and add a widget" is an instruction to redo something
+    // already done, on the first section a finished tab opens on.
+    expect(section.textContent).not.toContain('Add widget')
+    expect(section.textContent).not.toContain('Create a widget')
   })
 
   it('names both halves before it gives the command that sets one', async () => {
@@ -905,36 +1206,24 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(text.indexOf('data-turnstile-sitekey')).toBeLessThan(text.indexOf('wrangler secret put'))
   })
 
-  it('discloses the third party before the command, not after it', async () => {
-    // The product rule for anything that transmits: say what is sent and to whom before
-    // the control that turns it on. Turnstile is the one layer that puts somebody else's
-    // script in a reader's browser, and a recommendation is exactly the pressure that
-    // would push that sentence below the fold.
+  it('offers the browser disclosure above the command, not below it', async () => {
+    // The product rule for anything that transmits: what is sent and to whom comes before
+    // the control that turns it on. The disclosure itself is on charcha.dev now — this
+    // tab has no toggle, so it is not the surface the rule is about — but the *link* to
+    // it is the thing a recommendation would otherwise push below the fold.
     answering(() => json(200, report()))
     mount()
 
-    const text = (await turnstileSection()).textContent ?? ''
-    expect(text).toContain('challenges.cloudflare.com')
-    expect(text.indexOf('challenges.cloudflare.com')).toBeLessThan(
-      text.indexOf('wrangler secret put'),
+    const section = await turnstileSection()
+    const text = section.textContent ?? ''
+    const link = within(section).getByRole('link', { name: /reader’s browser/ })
+    expect(link.getAttribute('href')).toBe(
+      'https://charcha.dev/spam/#what-it-puts-in-a-readers-browser',
     )
+    expect(text.indexOf('reader’s browser')).toBeLessThan(text.indexOf('wrangler secret put'))
   })
 
-  it('spells the sitekey out even when the secret is set — which is #104', async () => {
-    // The deployment that refused every comment silently had the secret and no
-    // `data-turnstile-sitekey` anywhere. Charcha cannot see the site's pages, so this
-    // screen is where a reader would find that out — and it has to say it in the state
-    // that looks finished, not only in the one that looks broken.
-    answering(() => json(200, report({ TURNSTILE_SECRET_KEY: true })))
-    mount()
-
-    await screen.findByText('Turnstile bot check')
-    expect(panelText()).toContain('data-turnstile-sitekey')
-    expect(panelText()).toContain('The other half is on your site, not here.')
-    expect(panelText()).toContain('held for review')
-  })
-
-  it('says it in the unconfigured state too, so neither half is a surprise later', async () => {
+  it('says both keys exist in the unconfigured state too, so neither is a surprise', async () => {
     answering(() => json(200, report()))
     mount()
 
@@ -1214,8 +1503,12 @@ describe('the moderation policy', () => {
 
     await waitFor(() => {
       // Scoped: the notification and site-address forms each have a status line of their
-      // own now, so an unscoped `getByRole('status')` finds three.
-      expect(policyStatus()).toContain('saved')
+      // own now, so an unscoped `getByRole('status')` finds three. **And the sentence names
+      // this form**, which is why `useSettingsSave` takes the name rather than announcing a
+      // bare "Saved.": three live regions on one scrolling tab all saying the same word
+      // leave a screen-reader user unable to tell which landed, and this is the control
+      // with no Save button of its own to anchor it to.
+      expect(policyStatus()).toBe('Moderation policy saved.')
     })
     expect(option(/hold every comment/i).getAttribute('aria-checked')).toBe('true')
   })
@@ -1266,19 +1559,20 @@ describe('the moderation policy', () => {
     })
   })
 
-  it('says the identity is not an email address on its own', async () => {
-    // The crux of #173 in the one place an owner decides. "Someone you approved before"
-    // reads as an email address, and an email address on a Charcha comment is optional
-    // and unverified — so the copy has to say that the network has to match too, or the
-    // owner is wrong about what they are switching on.
+  it('says the identity is not an email address, on the option it is true of', async () => {
+    // The crux of #173, and since #216 it is in the description of the radio it describes
+    // rather than in a paragraph under the group — which is a paragraph a reader who has
+    // already clicked never reaches. "Someone you approved before" reads as an email
+    // address, and an email address on a Charcha comment is optional and unverified, so
+    // the copy has to say that the network has to match too.
     stubFetch(policyResponder('hold-all'))
     mount()
 
     await screen.findByText('Moderation policy')
-    const text = policySection().textContent ?? ''
-    expect(text).toContain('is not an email address')
-    expect(text).toContain('nobody verifies it')
-    expect(text).toContain('the network they are commenting from both match')
+    const description = screen.getByRole('radio', { name: /trust a commenter/i }).closest('div')
+      ?.parentElement?.textContent
+    expect(description).toContain('is not an email address')
+    expect(description).toContain('the network they comment from both have to match')
   })
 
   it('says what trust does not cover, in the place it is switched on', async () => {
@@ -1291,8 +1585,7 @@ describe('the moderation policy', () => {
     // hash retention window makes trust fade. None of the three is discoverable from a
     // radio button, and each is a question an owner has within a day of choosing this.
     expect(text).toContain('object to is held for you whatever is chosen here')
-    expect(text).toContain('Marking a trusted person’s comment as spam takes it away')
-    expect(text).toContain('trust fades')
+    expect(text).toContain('Marking their comment as spam takes it away')
   })
 
   it('warns that nobody can be recognised without IP_HASH_SECRET', async () => {

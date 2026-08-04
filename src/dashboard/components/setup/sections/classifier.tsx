@@ -5,7 +5,7 @@ import type { ClassifierState, ClassifierStatus } from '../../../api'
 import { formatAge, formatExact, isoInstant } from '../../../format'
 import { Alert, AlertDescription, AlertTitle } from '../../../ui/alert'
 import { Badge } from '../../../ui/badge'
-import { Off, On, Section } from '../primitives'
+import { DOCS, Off, On, OutboundLink, Section } from '../primitives'
 
 /**
  * How many neurons a day Workers AI gives away, on Free *and* Paid.
@@ -18,21 +18,6 @@ import { Off, On, Section } from '../primitives'
  * uses, which is what makes the allowance so much larger than a blog's comments.
  */
 const FREE_NEURONS_PER_DAY = '10,000'
-
-/**
- * The reason token this layer writes on a comment it held (`CLASSIFIER_REASON`).
- *
- * Restated rather than imported, for the reason `SETUP_SECRETS` in ../../../api.ts gives:
- * src/spam/classifier.ts reaches `Env` and this is a separate TypeScript project. It is
- * printed with the layer's name in front because that is the shape the queue shows —
- * `runLayers` prefixes the layer before storing it (src/spam/layer.ts) — and a reader
- * told to look for `similar-to-spam` and shown `classifier: similar-to-spam` is a reader
- * who thinks they are looking at something else.
- *
- * Worded as intent rather than fact: nothing here fails if that token is renamed. The
- * Turnstile section carries the same exposure with the same reasoning.
- */
-const HELD_REASON = 'classifier: similar-to-spam'
 
 /** Running, and not judging comments yet. Neither On nor Off is true of that. */
 function Learning() {
@@ -109,45 +94,32 @@ function LastLearned({ at }: { at: number }) {
 }
 
 /**
- * Layer 7, and the states that used to look identical from this screen (#177).
+ * Layer 7, and the four states that used to look identical from this screen (#177).
  *
- * **Three of the four are a layer abstaining, and they need different things from the
- * owner** — a binding, more moderating, and a retrain that the next decision does by
- * itself. The fourth is it working, which looked the same as all three of them. Until
- * this section the only difference between any of them was one `announceOnce` line per
- * isolate, in a log an owner would have to be tailing to see. That is the failure CLAUDE.md names by hand: a layer
- * that quietly stops working is invisible without instrumentation, and a self-training
- * one has a second version of it, because "the model never learned anything" also has no
- * symptom.
+ * Three of them are the layer abstaining and they need different things from the owner —
+ * a binding, more moderating, and a retrain the next decision does by itself. The fourth
+ * is it working. Before this section the only difference between any of them was one log
+ * line an owner would have to be tailing to see.
  *
- * **There is no score, no accuracy and no confidence, in any state.** The layer's
- * threshold is provisional and uncalibrated (#175), so any such number would be invented
- * — and a percentage on a dashboard is believed. What the data honestly supports is
- * counts, the gate they are counted against, whether the binding exists, and when the
- * model last learned. There is also no progress bar: a meter is a statistic wearing a
- * shape, and the sentence this section leads with is the number an owner can act on.
+ * **There is no score, accuracy, confidence or progress bar, in any state.** The
+ * threshold is provisional and uncalibrated (#175), so any such number would be invented,
+ * and a percentage on a dashboard is believed.
  *
  * **It reports and it never writes.** The `spam_model` row is written by exactly one
- * thing — a human moderation decision (src/spam/train.ts) — which is the whole of #28's
- * answer to what counts as a label, so there is deliberately no reset, no retrain and no
- * seed control here. The only control this feature has is the queue.
+ * thing, a human moderation decision (src/spam/train.ts), so there is deliberately no
+ * reset, no retrain and no seed control here. The only control this feature has is the
+ * queue.
  *
- * **It stays inside #158's no-nagging rule by having nothing to ask for in the state that
- * matters.** A trained deployment gets one paragraph and an `On`; the command block, the
- * dashboard path and the allowance only exist in the state where there is no binding to
- * run on.
+ * One paragraph per state (#216). Why it abstains cold, what an embedding costs, why a
+ * false positive on a person's writing differs from one on a rule, and the
+ * `classifier: similar-to-spam` token it marks a held comment with are all on charcha.dev,
+ * where the link goes.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function ClassifierSection({ report }: { report: ClassifierStatus }) {
   const State = BODIES[report.state]
   return (
     <Section title="Spam classifier" status={BADGES[report.state]}>
-      <p>
-        The one spam layer that learns your site rather than applying a rule: every comment you
-        approve and every one you mark as spam is an example it fits itself to, inside your own
-        Cloudflare account. Nothing about a comment leaves this deployment to do it.
-      </p>
-
       <State report={report} />
     </Section>
   )
@@ -179,95 +151,83 @@ const BODIES: Record<ClassifierState, (props: { report: ClassifierStatus }) => R
     'no-binding': NoBinding,
   }
 
+/** How every state ends: the page that now carries what this section used to explain. */
+function Why() {
+  return <OutboundLink href={DOCS.classifier}>How it learns, and what it costs</OutboundLink>
+}
+
+/**
+ * Working, and the state where the date is easiest to mis-attribute.
+ *
+ * **`updatedAt` is when *training* last succeeded, not when the owner last moderated**
+ * (`spam_model.updated_at`, src/db/index.ts), and the copy has to keep those apart. A
+ * sentence reading "you have approved 41 and marked 38 as spam, most recently 3 days ago"
+ * attributes the date to the owner's own activity — and on the exact failure this line
+ * exists to catch, training failing while moderating continues, it becomes false about the
+ * reader's own behaviour.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
 function Trained({ report }: { report: ClassifierStatus }) {
   return (
-    <>
-      <p>
-        It is judging comments, and it learned how from you: you have {decisionsSoFar(report)}. A
-        new comment that looks like the spam you marked is held for you with{' '}
-        <code>{HELD_REASON}</code> beside it in the queue, which is where you can watch it work.
-      </p>
-      <p>
-        <b>Holding is the most it can ever do.</b> It can never refuse a comment and nothing is
-        published early on its say-so: it is the one layer here that is a judgement rather than a
-        rule, and a comment it is wrong about is a real person’s writing. The queue is the decision.
-      </p>
+    <p>
+      Judging comments, and it learned how from you: you have {decisionsSoFar(report)}.{' '}
       {report.updatedAt !== null && (
-        <p>
-          It last learned something <LastLearned at={report.updatedAt} />. If that stops moving
-          while you are still approving and marking comments, training has stopped — nothing else
-          would change, so this line is the only place it shows.
-        </p>
+        <>
+          It last learned something <LastLearned at={report.updatedAt} />; if that stops moving
+          while you are still moderating, training has stopped.{' '}
+        </>
       )}
-    </>
+      <Why />.
+    </p>
   )
 }
 
+/**
+ * Cold, and the state a stalled trainer sits in for months.
+ *
+ * **The last-learned date is in this state and not only in `trained`, which is the whole
+ * point of having it.** A deployment stuck at 6 of 30 whose training writes are failing
+ * shows a count that has stopped and nothing else — and this is the long state, so it is
+ * the one where "quiet site" and "broken trainer" look alike for longest. Putting the date
+ * only on a working classifier would be instrumenting the case that needs it least.
+ * Enforced by test/dashboard/setup.test.tsx.
+ */
 function LearningState({ report }: { report: ClassifierStatus }) {
   const nothingYet = report.hamCount === 0 && report.spamCount === 0
 
   return (
-    <>
-      <p>
-        {nothingYet
-          ? 'It has not learned anything yet. '
-          : `So far you have ${decisionsSoFar(report)}. `}
-        It starts holding comments once you have approved {report.minPerClass} and marked{' '}
-        {report.minPerClass} as spam — <b>{remainingSentence(report)}</b> to go. The two are counted
-        separately, because a model that has only ever seen spam has no idea what a real comment
-        looks like.
-      </p>
-      <p>
-        Until then it abstains rather than guessing, and that is deliberate rather than a
-        limitation: what a model learns from the first handful of comments is mostly which handful
-        happened to arrive first.
-      </p>
-      <p>
-        <b>Only Approve and Spam teach it</b>, in the queue. Delete does not — a comment can be
-        deleted for being off-topic or abusive, and filing those under spam would teach it that
-        unwanted and spam are the same word. Changing your mind about a comment moves it between the
-        two rather than counting twice.
-      </p>
+    <p>
+      {nothingYet
+        ? 'It has not learned anything yet. '
+        : `So far you have ${decisionsSoFar(report)}. `}
+      It abstains until you have approved {report.minPerClass} and marked {report.minPerClass} as
+      spam, counted separately — <b>{remainingSentence(report)}</b> to go. Only Approve and Spam
+      teach it; Delete does not.{' '}
       {report.updatedAt !== null && (
-        <p>
-          It last learned something <LastLearned at={report.updatedAt} />.
-        </p>
+        <>
+          It last learned something <LastLearned at={report.updatedAt} />; if that stops moving
+          while you are still moderating, training has stopped.{' '}
+        </>
       )}
-      {nothingYet && (
-        <p>
-          If you have already approved or marked comments and this still says nothing has been
-          learned, the decisions are reaching the queue and not the model. The Worker logs a{' '}
-          <code>classifier_training</code> line with the reason on every decision that failed to
-          train.
-        </p>
-      )}
-    </>
+      <Why />.
+    </p>
   )
 }
 
 function ModelChanged({ report }: { report: ClassifierStatus }) {
   return (
-    <>
-      <p>It is not judging any comments at the moment, and the counts are not the reason.</p>
-      <Alert>
-        <TriangleAlertIcon />
-        <AlertTitle>What it learned was fitted with a different embedding model</AlertTitle>
-        <AlertDescription>
-          <p>
-            This deployment now turns comments into numbers with a different model than the one its
-            stored weights were fitted with, and numbers fitted in one of those spaces say nothing
-            about a comment in the other. Rather than read them as though they did, it abstains.
-          </p>
-          <p>
-            Your next Approve or Spam starts a fresh model. The{' '}
-            {countOf(report.hamCount, 'approval')} and {countOf(report.spamCount, 'spam decision')}{' '}
-            behind the old one are <b>not carried over</b>, so it will go quiet again until you have{' '}
-            {report.minPerClass} of each. Nothing else about your site changes in the meantime —
-            comments arrive and are held exactly as they are now.
-          </p>
-        </AlertDescription>
-      </Alert>
-    </>
+    <Alert>
+      <TriangleAlertIcon />
+      <AlertTitle>What it learned was fitted with a different embedding model</AlertTitle>
+      <AlertDescription>
+        <p>
+          The embedding model changed, so it abstains rather than reading old weights as though they
+          meant the same thing. Your next Approve or Spam starts a fresh one: the{' '}
+          {countOf(report.hamCount, 'approval')} and {countOf(report.spamCount, 'spam decision')}{' '}
+          behind the old model are <b>not carried over</b>. <Why />.
+        </p>
+      </AlertDescription>
+    </Alert>
   )
 }
 
@@ -275,30 +235,16 @@ function NoBinding({ report }: { report: ClassifierStatus }) {
   const trainedSomething = report.hamCount > 0 || report.spamCount > 0
 
   return (
-    <>
-      <p>
-        This deployment has <b>no Workers AI binding</b>, so this layer never runs: no comment is
-        checked against it, and no decision you make trains it. Nothing else is affected — the other
-        spam layers do not use it, and your queue works exactly as it does now.
-      </p>
+    <p>
+      <b>No Workers AI binding</b>, so this layer never runs and nothing else is affected.{' '}
       {trainedSomething && (
-        <p>
-          You had {decisionsSoFar(report)} before that, and it had learned from all of them. Those
-          decisions are <b>still stored</b>, and it carries on from them if the binding comes back.
-        </p>
+        <>
+          You had {decisionsSoFar(report)} before that, and those are <b>still stored</b>.{' '}
+        </>
       )}
-      <p>
-        Deploying Charcha with the one-click button provisions Workers AI automatically, so this is
-        usually a Worker put together by hand, or a binding that has since been removed. Add it at{' '}
-        <b>Workers &amp; Pages</b> → your Worker → <b>Bindings</b> → <b>Add</b> → <b>Workers AI</b>,
-        with the variable name <code>AI</code>, then <b>Deploy</b>.
-      </p>
-      <p>
-        It is free to have: Workers AI gives {FREE_NEURONS_PER_DAY} neurons a day on the free plan,
-        and turning one comment into numbers costs a fraction of one — a blog’s comments do not come
-        near it. The inference runs in your own Cloudflare account, so this stays a local layer:
-        nothing is sent to anybody else.
-      </p>
-    </>
+      Add it at <b>Workers &amp; Pages</b> → your Worker → <b>Bindings</b> → <b>Add</b> →{' '}
+      <b>Workers AI</b>, named <code>AI</code>, then <b>Deploy</b>. It runs in your own account and
+      is free: {FREE_NEURONS_PER_DAY} neurons a day, and a comment costs a fraction of one. <Why />.
+    </p>
   )
 }

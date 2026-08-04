@@ -113,6 +113,17 @@ describe('what the seam hands a provider', () => {
     expect(provider.seen[0]?.permalink).toBe('https://elsewhere.example/notes/leaving')
   })
 
+  it('sends no permalink for a key that would resolve onto another host', async () => {
+    // The same hole as the queue card's, and one function since #203 so one fix covers
+    // both: a `page_key` may begin with two slashes, which makes it protocol-relative,
+    // and joining it to the owner's site URL would attribute the comment to a domain
+    // that has never had a Charcha on it.
+    const provider = stub('ham')
+    await providerLayer({ provider, siteUrl }).run(contextFor({ pageKey: '//evil.example/pwned' }))
+
+    expect(provider.seen[0]?.permalink).toBeNull()
+  })
+
   it('sends no permalink for a data-thread key, which is not a path', async () => {
     const provider = stub('ham')
     await providerLayer({ provider, siteUrl }).run(contextFor({ pageKey: 'id:release-notes' }))

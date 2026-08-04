@@ -1,20 +1,21 @@
 import * as React from 'react'
-import { TriangleAlertIcon } from 'lucide-react'
 
 import type { SetupSecret, Settings } from '../../../api'
 import { servedBySecret, writeNotifySettings } from '../../../api'
-import { Alert, AlertDescription, AlertTitle } from '../../../ui/alert'
 import { Skeleton } from '../../../ui/skeleton'
 import {
+  DOCS,
   Field,
   HowToSet,
   type Load,
   Off,
   On,
+  OutboundLink,
   ReadFailed,
   SaveRow,
   Section,
   SecretRow,
+  ServedBySecret,
   useSettingsSave,
 } from '../primitives'
 
@@ -36,21 +37,16 @@ const EMAIL_SECRETS = ['RESEND_API_KEY'] as const satisfies readonly SetupSecret
 /**
  * Email notifications: one secret, and three settings the owner edits here (#207, #208).
  *
- * **What changed, and why it is the point of the section rather than a detail.** This used
- * to be three secrets and a `wrangler secret put` block. Two of the three were never
- * secrets — an address on a domain the owner verified, and their own inbox — so telling
- * them to open a terminal for those was asking for a checkout, wrangler and an API token
- * to change a value printed on their own site. They are rows now, and the section edits
- * them. The key is still a credential and is still read-only status plus instructions,
- * which is #158's line and it has not moved.
- *
  * The provider is named only where it is unavoidable — inside `RESEND_API_KEY`, which is
  * the string an owner has to type. The prose says "your email provider", so widening this
  * when a second provider lands is a change to the secret list rather than to the copy.
  *
- * **It is still all-or-nothing, and the badge says so from the resolved state**, not from
- * the rows: a deployment still running on the deprecated secrets is genuinely *on*, and a
- * tab that called it off would send its owner to reconfigure something that works.
+ * **It is all-or-nothing, and the badge says so from the resolved state**, not from the
+ * rows: a deployment still running on the deprecated secrets is genuinely *on*, and a tab
+ * that called it off would send its owner to reconfigure something that works.
+ *
+ * One status line and three field hints (#216). How the emails are batched and what they
+ * contain are on charcha.dev.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function EmailSection({
@@ -76,21 +72,22 @@ export function EmailSection({
 
   return (
     <Section title="Email notifications" status={on === null ? null : on ? <On /> : <Off />}>
-      {on === true ? (
-        <p>
-          A short email to your inbox as comments arrive — up to five back to back, and then a
-          slower rate, so a busy morning cannot spend a day’s sending allowance in ten minutes. The
-          next email that does go out says how many arrived while it was quiet. The queue is the
-          record either way: the email is a prompt to come and look, and it is never the thing that
-          missed one.
-        </p>
-      ) : (
-        <p>
-          {missing.length === EMAIL_SECRETS.length && !hasFrom && !hasTo
-            ? 'Nothing is emailed when a comment arrives. New comments still reach the queue, which is the only place they show up.'
-            : 'Partly set up, so nothing is sent. The key and both addresses are needed together — a key with no recipient has nowhere to send, and Charcha holds no owner address anywhere to guess one from.'}
-        </p>
-      )}
+      {/*
+        No claim at all until the settings read lands, for the reason the badge above gives:
+        "nothing is emailed" and "partly set up" are both statements about rows this tab has
+        not read yet, and on a failed read the first one is indistinguishable from the truth.
+        `NotifyFields` renders the failure itself, immediately below.
+      */}
+      <p>
+        {on === null
+          ? 'Reading what this deployment has stored.'
+          : on
+            ? 'A short email to your inbox as comments arrive.'
+            : missing.length === EMAIL_SECRETS.length && !hasFrom && !hasTo
+              ? 'Nothing is emailed when a comment arrives; the queue is the only place they show up.'
+              : 'Partly set up, so nothing is sent — the key and both addresses are needed together.'}{' '}
+        <OutboundLink href={DOCS.notifications}>How the emails work</OutboundLink>.
+      </p>
 
       {missing.length > 0 && (
         <>
@@ -99,10 +96,6 @@ export function EmailSection({
               <SecretRow key={name} name={name} set={secrets[name]} />
             ))}
           </ul>
-          <p>
-            The key is a credential, so it is the one part of this that cannot be set from here — a
-            Worker cannot write its own secrets.
-          </p>
           <HowToSet names={missing} />
         </>
       )}
@@ -140,7 +133,7 @@ function omitUntyped(
  *
  * **The sender name's rules are the server's, and this does not restate them.** A refusal
  * comes back naming the character it refused (src/admin/settings.ts), and that sentence is
- * what the owner reads. Copying the rules into the placeholder would be two lists that can
+ * what the owner reads. Copying the rules into the hint would be two lists that can
  * disagree, on the one field where being wrong writes a `From:` header.
  * Enforced by test/dashboard/setup.test.tsx.
  */
@@ -155,14 +148,18 @@ function NotifyFields({
 }) {
   const [draft, setDraft] = React.useState<{ from: string; to: string; name: string } | null>(null)
   const ids = React.useId()
-  const { busy, save, status, saveFailed } = useSettingsSave(onExpired, (settings) => {
-    setDraft({
-      from: settings.notifyFrom,
-      to: settings.notifyTo,
-      name: settings.notifyFromName,
-    })
-    onSaved(settings)
-  })
+  const { busy, save, status, saveFailed } = useSettingsSave(
+    onExpired,
+    (settings) => {
+      setDraft({
+        from: settings.notifyFrom,
+        to: settings.notifyTo,
+        name: settings.notifyFromName,
+      })
+      onSaved(settings)
+    },
+    'Notification settings',
+  )
 
   if (load.kind === 'loading') return <Skeleton className="h-3 w-3/5" />
   if (load.kind === 'failed') {
@@ -215,20 +212,7 @@ function NotifyFields({
         )
       }}
     >
-      {usingSecrets && (
-        <Alert>
-          <TriangleAlertIcon />
-          <AlertTitle>These are still coming from secrets you set with wrangler</AlertTitle>
-          <AlertDescription>
-            <p>
-              They keep working. The fields below are empty because nothing has been saved here yet
-              — Charcha will not show you a value out of a secret. Type your addresses in and save,
-              and you can then remove <code>CHARCHA_NOTIFY_FROM</code> and{' '}
-              <code>CHARCHA_NOTIFY_TO</code> with <code>wrangler secret delete</code>.
-            </p>
-          </AlertDescription>
-        </Alert>
-      )}
+      {usingSecrets && <ServedBySecret names={['CHARCHA_NOTIFY_FROM', 'CHARCHA_NOTIFY_TO']} />}
 
       <Field
         id={`${ids}-notify-to`}
@@ -241,7 +225,7 @@ function NotifyFields({
         onChange={(next) => {
           change({ to: next })
         }}
-        hint="Your own inbox. It is the only address Charcha ever mails, and clearing it is how you stop the emails — there is no unsubscribe link, because there is nobody to unsubscribe but you."
+        hint="Your own inbox, and the only address Charcha ever mails. Clearing it stops the emails."
       />
 
       <Field
@@ -255,7 +239,7 @@ function NotifyFields({
         onChange={(next) => {
           change({ from: next })
         }}
-        hint="Has to be on a domain verified with your email provider, under the same account as the key. Mail from an unverified domain is refused — and from your side that refusal looks exactly like the feature being switched off, so check it for typos before you save."
+        hint="Has to be on a domain verified with your email provider — mail from an unverified one is refused silently, which looks exactly like the feature being switched off."
       />
 
       <Field
@@ -268,7 +252,7 @@ function NotifyFields({
         onChange={(next) => {
           change({ name: next })
         }}
-        hint="What your mail client shows instead of the bare address. Leave it empty and the address is what you see. It goes in the From line, so it cannot contain angle brackets, quotes or an @ — a name that looks like an address is how a message pretends to be from somebody else."
+        hint="What your mail client shows instead of the bare address. Empty means the address."
       />
 
       {status}

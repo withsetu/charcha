@@ -1,11 +1,19 @@
 import * as React from 'react'
-import { TriangleAlertIcon } from 'lucide-react'
 
 import type { Settings } from '../../../api'
 import { servedBySecret, writeSiteUrl } from '../../../api'
-import { Alert, AlertDescription, AlertTitle } from '../../../ui/alert'
 import { Skeleton } from '../../../ui/skeleton'
-import { Field, type Load, ReadFailed, SaveRow, Section, useSettingsSave } from '../primitives'
+import {
+  DOCS,
+  Field,
+  type Load,
+  OutboundLink,
+  ReadFailed,
+  SaveRow,
+  Section,
+  ServedBySecret,
+  useSettingsSave,
+} from '../primitives'
 
 /**
  * The site's own address (#207) — the setting that used to be `CHARCHA_SITE_URL`.
@@ -13,12 +21,12 @@ import { Field, type Load, ReadFailed, SaveRow, Section, useSettingsSave } from 
  * **It is here because almost nobody had it, and that was the problem.** It was optional,
  * deliberately off the deploy form (#139), and the only thing that read it was a spam
  * layer that is also off by default — so a deployer had no reason to set it and no way to
- * learn it would ever buy them anything. A field beside the allowlist is where somebody
- * finds out.
+ * learn it would ever buy them anything. Since #203 it also buys the link on every card in
+ * the moderation queue, which is the first reason to set it that costs nothing and needs
+ * no other feature, so the copy names that one.
  *
  * **No On/Off badge**, for the reason `OriginsSection` has none: an empty value is a
- * working default rather than a feature that is switched off. Nothing about this
- * deployment stops working without it; what it unlocks is named in the copy instead.
+ * working default rather than a feature that is switched off.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function SiteAddressSection({
@@ -32,10 +40,14 @@ export function SiteAddressSection({
 }) {
   const [draft, setDraft] = React.useState<string | null>(null)
   const id = React.useId()
-  const { busy, save, status, saveFailed } = useSettingsSave(onExpired, (settings) => {
-    setDraft(settings.siteUrl)
-    onSaved(settings)
-  })
+  const { busy, save, status, saveFailed } = useSettingsSave(
+    onExpired,
+    (settings) => {
+      setDraft(settings.siteUrl)
+      onSaved(settings)
+    },
+    'Site address',
+  )
 
   return (
     <Section title="Your site’s address" status={null}>
@@ -47,23 +59,12 @@ export function SiteAddressSection({
       {load.kind === 'ready' && (
         <>
           <p>
-            The home page of the site this deployment takes comments for. Nothing can work it out:
-            this Worker’s own address is a <code>workers.dev</code> URL rather than your site, and
-            the address a comment reports is chosen by whoever posted it.
+            The home page of the site this deployment takes comments for. Nothing can work it out,
+            and it is what puts a link to the page on every comment in your queue.{' '}
+            <OutboundLink href={DOCS.siteAddress}>What reads it</OutboundLink>.
           </p>
           {load.value.fromDeprecatedSecrets.includes('site_url') && (
-            <Alert>
-              <TriangleAlertIcon />
-              <AlertTitle>This is still coming from a secret you set with wrangler</AlertTitle>
-              <AlertDescription>
-                <p>
-                  It keeps working. The field below is empty because nothing has been saved here yet
-                  — Charcha will not show you a value out of a secret. Save it here, and you can
-                  then remove <code>CHARCHA_SITE_URL</code> with <code>wrangler secret delete</code>
-                  .
-                </p>
-              </AlertDescription>
-            </Alert>
+            <ServedBySecret names={['CHARCHA_SITE_URL']} />
           )}
           <form
             className="space-y-4"
@@ -89,10 +90,7 @@ export function SiteAddressSection({
               onChange={setDraft}
               hint={
                 <>
-                  Include the scheme — <code>https://example.com</code>, or{' '}
-                  <code>https://you.github.io/blog</code> if your site lives at a path. A
-                  third-party spam service needs it to identify your site, and it is the base for
-                  the link to a commented page.
+                  Include the scheme — <code>https://example.com</code>.
                 </>
               }
             />
