@@ -416,7 +416,9 @@ describe('matching an origin against what the owner declared', () => {
 
   it('refuses a lookalike that merely contains a declared host', () => {
     expect(matchDeclaredOrigin('https://wwwmaya.build', ['https://maya.build'])).toBeNull()
-    expect(matchDeclaredOrigin('https://www.maya.build.evil.example', ['https://maya.build'])).toBeNull()
+    expect(
+      matchDeclaredOrigin('https://www.maya.build.evil.example', ['https://maya.build']),
+    ).toBeNull()
   })
 
   it('refuses everything when nothing is declared', () => {
@@ -433,7 +435,7 @@ describe('the origins one deployment has declared', () => {
     await setAllowedOrigins('https://staging.maya.build')
     await setSetting(SITE_URL_SETTING, 'https://maya.build')
 
-    expect((await readDeclaredOrigins(db)).sort()).toEqual([
+    expect([...(await readDeclaredOrigins(db))].sort()).toEqual([
       'https://maya.build',
       'https://staging.maya.build',
     ])
@@ -470,9 +472,9 @@ describe('what the submitted url has to be', () => {
   const self = 'https://chaipecharcha.example.workers.dev'
 
   it('is refused when the owner has declared nothing', () => {
-    expect(
-      submittedUrlRefusal('https://maya.build/notes/leaving', { declared: [], self }),
-    ).toBe('nothing-declared')
+    expect(submittedUrlRefusal('https://maya.build/notes/leaving', { declared: [], self })).toBe(
+      'nothing-declared',
+    )
   })
 
   it('is accepted on this deployment’s own address with nothing declared (#57)', () => {

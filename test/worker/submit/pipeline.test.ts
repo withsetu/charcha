@@ -192,7 +192,13 @@ describe('runSubmission — the spam seam gets what #8 needs', () => {
       },
     }
 
-    await runSubmission(validRoot, { db, spamCheck: nosy, request, now: t0, declaredOrigins: DECLARED })
+    await runSubmission(validRoot, {
+      db,
+      spamCheck: nosy,
+      request,
+      now: t0,
+      declaredOrigins: DECLARED,
+    })
 
     expect(sawRowsAtCheckTime).toBe(0)
   })

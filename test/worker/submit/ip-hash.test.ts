@@ -110,7 +110,7 @@ describe('the submission pipeline stores an IP hash (#65)', () => {
         spamCheck: allowAllSpamCheck,
         request: request('203.0.113.9'),
         now: t0,
-      declaredOrigins: DECLARED,
+        declaredOrigins: DECLARED,
         ipSecret: SECRET,
       })
     }
@@ -158,13 +158,27 @@ describe('the per-IP rate limit actually fires now (#65 end to end)', () => {
     for (let i = 0; i < DEFAULT_MAX_PER_IP; i++) {
       await runSubmission(
         { ...submission({ body: `filling the bucket ${i}` }), subject: '', t: 5000 },
-        { db, spamCheck, request: request('203.0.113.9'), now: t0 + i, declaredOrigins: DECLARED, ipSecret: SECRET },
+        {
+          db,
+          spamCheck,
+          request: request('203.0.113.9'),
+          now: t0 + i,
+          declaredOrigins: DECLARED,
+          ipSecret: SECRET,
+        },
       )
     }
 
     const other = await runSubmission(
       { ...submission({ body: 'a comment from somebody else entirely' }), subject: '', t: 5000 },
-      { db, spamCheck, request: request('198.51.100.7'), now: t0 + 10, declaredOrigins: DECLARED, ipSecret: SECRET },
+      {
+        db,
+        spamCheck,
+        request: request('198.51.100.7'),
+        now: t0 + 10,
+        declaredOrigins: DECLARED,
+        ipSecret: SECRET,
+      },
     )
 
     expect(other.outcome).toBe('pending')
