@@ -29,7 +29,7 @@ const DEPLOYMENT = 'https://charcha.example.workers.dev'
  * origin policy stays free of the settings module and there is one reader (#224).
  */
 function decide(request: Request, database: D1Database = db, env: SettingsFallbackEnv = {}) {
-  return resolveOrigin(database, request, (binding) => readDeclaredOrigins(binding, env))
+  return resolveOrigin(request, () => readDeclaredOrigins(database, env))
 }
 
 async function setSetting(key: string, value: string) {

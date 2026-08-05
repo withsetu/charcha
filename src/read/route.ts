@@ -127,8 +127,8 @@ async function readAnswer(
   // the write, which refuses outright. The asymmetry is the point: this has no side
   // effect and its HTML is public to anything that can make a request, so refusing
   // would break the v1.1 server-rendering paths and stop no attack. See src/cors.ts.
-  const { allowedOrigin } = await resolveOrigin(c.env.DB, c.req.raw, (db) =>
-    readDeclaredOrigins(db, c.env),
+  const { allowedOrigin } = await resolveOrigin(c.req.raw, () =>
+    readDeclaredOrigins(c.env.DB, c.env),
   )
 
   // The size caps and the parsing both belong to derivePageKey, which the

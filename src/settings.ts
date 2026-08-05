@@ -333,7 +333,9 @@ export async function readSiteSettings(
  * `request.url` and is added by the caller that has a request (see src/cors.ts).
  * Enforced by test/worker/cors.test.ts.
  */
-export function declaredOrigins(settings: Pick<SiteSettings, 'allowedOrigins' | 'siteUrl'>) {
+export function declaredOrigins(
+  settings: Pick<SiteSettings, 'allowedOrigins' | 'siteUrl'>,
+): string[] {
   const origins = [...settings.allowedOrigins]
   const fromSiteUrl = settings.siteUrl === null ? null : normaliseOrigin(settings.siteUrl)
   if (fromSiteUrl !== null && !origins.includes(fromSiteUrl)) origins.push(fromSiteUrl)

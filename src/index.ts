@@ -55,7 +55,7 @@ app.post('/comments', async (c) => {
   // Checked on the real request, not only at the preflight. `text/plain` makes this
   // POST a CORS-simple request that no browser preflights, so a policy enforced only
   // at OPTIONS is one an attacker opts out of with a header. See src/cors.ts.
-  const decision = await resolveOrigin(c.env.DB, c.req.raw, (db) => readDeclaredOrigins(db, c.env))
+  const decision = await resolveOrigin(c.req.raw, () => readDeclaredOrigins(c.env.DB, c.env))
   if (isUnlistedBrowserOrigin(decision)) return unlistedOriginResponse()
 
   // **Every `settings` row this request needs, in one statement (#207).** Layer 8's site
@@ -109,7 +109,7 @@ app.get('/comments', (c) => handleRead(c, { significantParams: SIGNIFICANT_PARAM
 // checks the origin on the real request. See src/cors.ts.
 // Enforced by test/worker/read/route.test.ts.
 app.options('/comments', async (c) => {
-  const decision = await resolveOrigin(c.env.DB, c.req.raw, (db) => readDeclaredOrigins(db, c.env))
+  const decision = await resolveOrigin(c.req.raw, () => readDeclaredOrigins(c.env.DB, c.env))
   return preflightResponse(decision.allowedOrigin)
 })
 
@@ -121,7 +121,7 @@ app.options('/comments', async (c) => {
 // Enforced by test/worker/preview/route.test.ts.
 app.post(PREVIEW_PATH, (c) => handlePreview(c))
 app.options(PREVIEW_PATH, async (c) => {
-  const decision = await resolveOrigin(c.env.DB, c.req.raw, (db) => readDeclaredOrigins(db, c.env))
+  const decision = await resolveOrigin(c.req.raw, () => readDeclaredOrigins(c.env.DB, c.env))
   return preflightResponse(decision.allowedOrigin)
 })
 

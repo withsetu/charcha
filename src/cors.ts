@@ -404,8 +404,9 @@ export function selfOrigin(request: Request): string | null {
  * allowlist and the site address — and the site address's key is owned by src/settings.ts,
  * which already imports this file. Importing it back would be a cycle whose module-scope
  * constants read each other before either is initialised. So the caller passes the reader
- * (`readDeclaredOrigins`), the read stays lazy, and a request with no `Origin` still pays
- * for nothing.
+ * (`readDeclaredOrigins`) already bound to this request's bindings, the read stays lazy, and
+ * a request with no `Origin` still pays for nothing. The binding is not a parameter here for
+ * the same reason: this function has no use for a database except to hand it to that reader.
  *
  * **The site address is in that list on purpose.** The dashboard's loud notice names
  * exactly one action — set your site's address — and if setting it did not also let that
@@ -414,9 +415,8 @@ export function selfOrigin(request: Request): string | null {
  * Enforced by test/worker/cors.test.ts.
  */
 export async function resolveOrigin(
-  db: D1Database,
   request: Request,
-  readDeclared: (db: D1Database) => Promise<readonly string[]>,
+  readDeclared: () => Promise<readonly string[]>,
 ): Promise<OriginDecision> {
   const requestOrigin = request.headers.get('origin')
   if (requestOrigin === null) return { requestOrigin: null, allowedOrigin: null }
@@ -432,7 +432,7 @@ export async function resolveOrigin(
 
   return {
     requestOrigin,
-    allowedOrigin: matchDeclaredOrigin(requestOrigin, await readDeclared(db)),
+    allowedOrigin: matchDeclaredOrigin(requestOrigin, await readDeclared()),
   }
 }
 

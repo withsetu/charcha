@@ -109,7 +109,7 @@ export async function handlePreview(c: Context<{ Bindings: Env }>): Promise<Resp
 }
 
 async function previewAnswer(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const decision = await resolveOrigin(c.env.DB, c.req.raw, (db) => readDeclaredOrigins(db, c.env))
+  const decision = await resolveOrigin(c.req.raw, () => readDeclaredOrigins(c.env.DB, c.env))
   if (isUnlistedBrowserOrigin(decision)) return unlistedOriginResponse()
 
   const read = await readCappedText(c.req.raw)
