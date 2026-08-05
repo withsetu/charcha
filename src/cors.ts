@@ -7,11 +7,18 @@
 //
 // **What this is, and what it is not.** CORS is a browser rule, not a server-side
 // authorisation check: anything that is not a browser — curl, a script, the v1.1
-// build-time renderer — sends no `Origin` and ignores every header in this file. So
-// the allowlist is a misuse guard, not a security boundary; the defence against a
-// script is #8's spam layers and the moderation queue, and it always was. What this
-// does stop is another site's *page* posting into this deployment's queue from a
-// reader's browser, which is the case a reader cannot see and did not consent to.
+// build-time renderer — sends no `Origin` and ignores every header in this file. So the
+// allowlist is a misuse guard rather than a security boundary; the defence against a
+// script is #8's spam layers and the moderation queue. What this does stop is another
+// site's *page* posting into this deployment's queue from a reader's browser, which is the
+// case a reader cannot see and did not consent to.
+//
+// **Since #224 the settings this file reads are also matched against something a script
+// cannot opt out of**: the address a submission *reports*. `submittedUrlRefusal` below is
+// that check, and it is the one that holds for a caller with no `Origin` header at all —
+// the gap that made `threads.page_url` attacker-chosen. The two are complementary and
+// neither replaces the other: one asks which page posted, the other which site the comment
+// claims to be on, and a request can pass either while failing the other.
 //
 // **The preflight is not that gate, and assuming it was is the bug this file was
 // written with.** The embed sends `application/json`, which is not CORS-safelisted,
@@ -474,6 +481,13 @@ export function submittedUrlRefusal(
  * curl, the importer and the v1.1 build-time renderer while stopping no attack,
  * since anything that can omit the header was never subject to CORS in the first
  * place.
+ *
+ * **That is still true, and it is no longer the whole story.** What such a caller is held
+ * to instead is `submittedUrlRefusal`: it may omit the header, and it may not claim to be
+ * on an address the owner never declared. An importer and a build-time renderer both carry
+ * URLs from the owner's own site, so both land inside that rule rather than needing an
+ * exemption from it — a Disqus export of a domain the owner has since left is the case to
+ * think about when #15 is built, and the answer there is a declaration, not a bypass.
  * Enforced by test/worker/read/route.test.ts.
  */
 export function isUnlistedBrowserOrigin(decision: OriginDecision): boolean {

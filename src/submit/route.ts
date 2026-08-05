@@ -35,8 +35,14 @@ function unreadable(): Response {
  * reader-facing message, matching the existing route house style.
  *
  * The status code carries the taxonomy so the embed can branch without parsing a
- * body: 201 published, 202 accepted-and-pending, 400 the reader's input, 403 a
- * spam rejection. A failed submission never shares a status with a successful one.
+ * body: 201 published, 202 accepted-and-pending, 400 the reader's input, 403 refused.
+ * A failed submission never shares a status with a successful one.
+ *
+ * **`rejected` has two producers and one status, deliberately.** A spam rejection and an
+ * address this deployment does not take comments for (#224) are both a 403 the reader
+ * cannot act on, and splitting them would be a status code that tells a script which of
+ * the two it hit. What differs is the message — the spam one is deliberately generic, the
+ * address one names the setting for the owner reading it — and, in the log, the reason.
  *
  * **It does not add the #98 headers, and a caller other than handleSubmit would
  * therefore ship without them.** They are added once, around this function, for the
@@ -68,8 +74,9 @@ export interface SubmitRouteConfig {
    * It is passed in rather than read here because the spam check is assembled from the
    * same read — layer 8's site URL is one of these rows — and doing it twice would be two
    * statements for one answer. Absent means an unconfigured deployment: `hold-all`, no
-   * notifications, and layer 8 off, which is the default everywhere and the fail-closed
-   * direction for each of the three.
+   * notifications, layer 8 off, and — since #224 — no declared address, so no comment is
+   * accepted for any address but this deployment's own. Every one of those is the
+   * fail-closed direction.
    */
   settings?: SiteSettings
   /** Injectable for tests; defaults to the wall clock in unix seconds. */

@@ -61,13 +61,18 @@ app.post('/comments', async (c) => {
   // **Every `settings` row this request needs, in one statement (#207).** Layer 8's site
   // URL, the notifier's two addresses and its display name, and the moderation policy are
   // all rows now, and reading them one at a time would be five seeks where there is one —
-  // on the path CLAUDE.md's constant-query-count rule is about. The allowlist above is
-  // deliberately *not* in that read: it is resolved before the request is accepted at all
-  // and is shared with `GET /comments`, so folding it in would make the read path pay for
-  // the notification settings, and a same-origin submission pay for an allowlist it never
-  // compares against.
+  // on the path CLAUDE.md's constant-query-count rule is about.
   //
-  // So a submission spends at most two settings statements, and it is the same two
+  // **The allowlist is in that read since #224, where it used to be deliberately left
+  // out.** The old argument was that it is resolved above, before the request is accepted
+  // at all. That is still true of the *browser* check — and it is exactly the half a
+  // request with no `Origin` header skips, which is the hole #224 closes. The submitted
+  // `url` has to be checked against what the owner declared whether or not a browser sent
+  // anything, so this path needs the row unconditionally, and a key added to a batched
+  // read costs nothing. `GET /comments` is untouched: it reads the two declared-origin
+  // rows on its own (`readDeclaredOrigins`) and never the notification settings.
+  //
+  // So a submission still spends at most two settings statements, and it is the same two
   // however many settings this project grows.
   // Enforced by test/worker/notify/route-wiring.test.ts, which posts a real comment at
   // this route and pins both the statement count and the fact that exactly one of them

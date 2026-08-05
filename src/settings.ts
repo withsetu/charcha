@@ -19,9 +19,11 @@
 // CLAUDE.md's rule is a *constant* query count, not a low one, because the 50-query
 // invocation budget throws rather than slows down. `readSettings` in src/db is the batched
 // read; this module is what turns its raw strings into values the rest of the Worker can
-// use. `allowed_origins` is deliberately not in the submission-path list — it is resolved
-// before the request is accepted at all and is shared with `GET /comments`, so folding it
-// in would make the read path pay for the notification settings.
+// use. `allowed_origins` joined the submission-path list in #224, having been deliberately
+// outside it: the browser check reads it before the request is accepted, but that check
+// only fires when an `Origin` header arrived, and the submitted `url` has to be checked
+// against the owner's addresses either way. `DECLARED_ORIGIN_SETTINGS` is the other read —
+// those two rows alone — so `GET /comments` still never pays for the notification settings.
 //
 // **Everything here is untrusted input, whoever wrote it.** The dashboard is the only
 // writer, but `wrangler d1 execute` reaches this table and a row can predate a validator.

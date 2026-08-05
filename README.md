@@ -301,9 +301,12 @@ Then three things, none of which take long:
 1. **Sign in to the dashboard**, at `/admin` on the same address —
    `https://your-worker.example.workers.dev/admin`. The password is
    `CHARCHA_DASHBOARD_PASSWORD`.
-2. **Open Allowed origins** and add your site's address — `https://example.com`, scheme
-   included, no trailing path. Until you do, comments from your site are refused; a
-   fresh deployment starts out allowing only its own address.
+2. **Tell it your site's address**, on the Setup tab — `https://example.com`, scheme
+   included, no trailing path. Until you do, comments from your site are refused: a fresh
+   deployment has been told about no address but its own, and Charcha will not take
+   comments for a site nobody has said is yours. The dashboard says so in as many words
+   while it is true. (**Allowed origins** takes the same kind of address and does the same
+   job for a second one — a staging host, say. Either is enough.)
 3. **Paste [the snippet](#adding-it-to-a-page) into your page**, with your Worker's
    address in place of the example one.
 
@@ -414,25 +417,42 @@ that configured nothing it mostly means those layers never ran. A spam service c
 the text against a real corpus and answering "clean" is a different statement, and it is
 the only one that counts here.
 
-### Allowed origins, and why a comment can be refused
+### The addresses you declare, and why a comment can be refused
 
-Charcha only accepts comments from pages on addresses you have listed. A page anywhere
-else gets:
+Charcha checks two things about every comment, and both come from the addresses you have
+declared — **your site's address** on the Setup tab, plus anything under **Allowed
+origins**:
 
-```
-HTTP 403
-That origin is not allowed to comment on this site.
-```
+- **Which page posted it.** A page on another address gets
+  `HTTP 403 That origin is not allowed to comment on this site.` This one is a browser
+  rule, so it binds browsers and nothing else.
+- **Which page it says it is on.** A submission reporting an address you have not declared
+  gets `HTTP 403 This site is not accepting comments from that address.` This one binds
+  everything, including a script that sends no browser headers at all — without it, the
+  address stored against a comment is whatever the sender claimed
+  ([#224](https://github.com/withsetu/charcha/issues/224)).
 
-That list lives in **your Charcha dashboard**, under **Allowed origins**. It is
-**not** Turnstile's *Hostname Management* screen — that one governs where the Turnstile
-widget may render, and editing it does nothing here. The two are easy to confuse and
-have been ([#57](https://github.com/withsetu/charcha/issues/57)).
+Those settings live in **your Charcha dashboard**. They are **not** Turnstile's
+*Hostname Management* screen — that one governs where the Turnstile widget may render, and
+editing it does nothing here. The two are easy to confuse and have been
+([#57](https://github.com/withsetu/charcha/issues/57)).
 
-A fresh deployment starts with an empty list and still works: **your Worker's own
-address is always allowed**, without being listed and without anything being written to
-the database. That is what makes a one-click deploy usable before you have touched any
-setting — but your site is a different address, so it has to be added.
+Two conveniences, so you do not have to list your site twice:
+
+- **`www` and the apex are one declaration.** Declare `https://example.com` and
+  `https://www.example.com` is accepted too, and the other way round.
+- **Your Worker's own address is always allowed**, without being listed and without
+  anything being written to the database. That is what makes a one-click deploy usable
+  before you have touched any setting.
+
+What is *not* implied is a wildcard: declaring `https://example.com` does not admit
+`https://blog.example.com`. A subdomain you want is a subdomain you list.
+
+**A deployment that has declared no address at all accepts no comments** except for pages
+on the Worker's own address. That is deliberate — Charcha has nothing to check a reported
+address against, and guessing is how a stranger's URL ends up in your moderation queue —
+and the Setup tab carries the loudest notice on the screen while it is the case, naming the
+one setting that fixes it.
 
 ## Adding it to a page
 
@@ -510,10 +530,19 @@ Charcha is running, and nothing about your deployment, for the reasons
 almost certainly fine: check `/health` and `/admin`.
 
 **Every comment is refused with `That origin is not allowed to comment on this site.`**
-Your site's address is not in **Allowed origins**. Add it in the dashboard at `/admin`
-— scheme included, no trailing path, one per line. See
-[Allowed origins](#allowed-origins-and-why-a-comment-can-be-refused) for why this is
-not Turnstile's hostname list, which is the wrong screen and the one people find first.
+Your site's address is not one this deployment has been told about. Set it in the dashboard
+at `/admin` — on the Setup tab, or under **Allowed origins** — scheme included, no trailing
+path, one per line. See
+[the addresses you declare](#the-addresses-you-declare-and-why-a-comment-can-be-refused)
+for why this is not Turnstile's hostname list, which is the wrong screen and the one people
+find first.
+
+**Every comment is refused with `This site is not accepting comments from that address.`**
+The same fix, and it is the other of the two checks: this one is about the address the page
+*reported*, so it fires for `curl` and for a browser alike. Your Worker's logs name which
+check fired — look for `"event":"submitted_url_refused"` and its `reason`:
+`nothing-declared` means no address has been set on this deployment at all,
+`undeclared-origin` means the address reported is not one of yours.
 
 **The dashboard returns 401 on every page, including the login.** The deployment
 has no `CHARCHA_DASHBOARD_PASSWORD`. That is the designed behaviour rather than a
