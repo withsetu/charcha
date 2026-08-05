@@ -14,6 +14,12 @@ import { DOCS, OutboundLink, Section } from '../primitives'
  * refuses to print (#207). Without this clause the loudest warning on the screen would be
  * shown to a deployment that is accepting comments perfectly well — which is the
  * comment-that-suppresses-the-check failure aimed at a warning instead of a comment.
+ *
+ * **"Perfectly well" is a claim about the Worker and it has to stay true there.** Both
+ * gates resolve that secret — the reported-address check through `readSiteSettings` and the
+ * browser check through `readDeclaredOrigins` — which is asserted by
+ * test/worker/submit/declared-origin.test.ts. A change that dropped the fallback from
+ * either one would make this clause hide a deployment that really is refusing everything.
  * Enforced by test/dashboard/setup.test.tsx.
  */
 export function hasDeclaredAddress(settings: Settings): boolean {

@@ -347,19 +347,28 @@ export function declaredOrigins(settings: Pick<SiteSettings, 'allowedOrigins' | 
  * importing it back would be a module cycle whose two constant lists read each other before
  * either exists. See the note on `resolveOrigin`.
  *
- * The deprecated `CHARCHA_SITE_URL` secret is deliberately not consulted here. It is
- * consulted on the submission path, which resolves the same rows through
- * `resolveSiteSettings` and hands `declaredOrigins` the result — so a deployment still
- * running on the secret keeps accepting its own comments, and what it does not get is the
- * secret's origin echoed in a CORS header. One is a comment that would be lost; the other
- * is a browser rule that the owner fixes by saving the value the Setup tab is already
- * asking them to save.
+ * **It resolves the site address exactly as the submission path does, deprecated secret and
+ * all, and the alternative was worse than the duplication it avoids.** Leaving
+ * `CHARCHA_SITE_URL` out here would give a deployment still running on that secret two
+ * different answers to "which addresses are the owner's": the reported `url` would be
+ * accepted and a browser on that same site refused, with the Setup tab showing the
+ * migration notice for a value that half-works. The rule is one answer, in both places,
+ * for as long as the fallback exists (#209 removes it).
  * Enforced by test/worker/cors.test.ts.
  */
-export async function readDeclaredOrigins(db: D1Database): Promise<readonly string[]> {
+export async function readDeclaredOrigins(
+  db: D1Database,
+  env: SettingsFallbackEnv,
+): Promise<readonly string[]> {
   const values = await readSettings(db, DECLARED_ORIGIN_SETTINGS)
   return declaredOrigins({
     allowedOrigins: parseAllowedOrigins(values.get(ALLOWED_ORIGINS_SETTING) ?? null),
-    siteUrl: usable(values.get(SITE_URL_SETTING), MAX_SITE_URL_LENGTH),
+    siteUrl: rowOrSecret(
+      values,
+      SITE_URL_SETTING,
+      'CHARCHA_SITE_URL',
+      env.CHARCHA_SITE_URL,
+      MAX_SITE_URL_LENGTH,
+    ),
   })
 }

@@ -16,6 +16,7 @@ import {
   wwwSibling,
 } from '../../src/cors'
 import { SITE_URL_SETTING, readDeclaredOrigins } from '../../src/settings'
+import type { SettingsFallbackEnv } from '../../src/settings'
 
 const db = env.DB
 
@@ -27,8 +28,8 @@ const DEPLOYMENT = 'https://charcha.example.workers.dev'
  * matched against from src/settings.ts. Injected rather than imported by cors.ts, so the
  * origin policy stays free of the settings module and there is one reader (#224).
  */
-function decide(request: Request, database: D1Database = db) {
-  return resolveOrigin(database, request, readDeclaredOrigins)
+function decide(request: Request, database: D1Database = db, env: SettingsFallbackEnv = {}) {
+  return resolveOrigin(database, request, (binding) => readDeclaredOrigins(binding, env))
 }
 
 async function setSetting(key: string, value: string) {
@@ -369,6 +370,24 @@ describe('the other spelling of the same declaration', () => {
     expect(wwwSibling('not a url')).toBeNull()
   })
 
+  it('has none for an address, which has no other spelling', () => {
+    // **Found by review, and the shape is worth knowing.** Assigning `hostname` is a
+    // *silent no-op* when the parser refuses the value, and it refuses both of these —
+    // a trailing numeric label makes `www.127.0.0.1` invalid, and brackets are not a
+    // label. Without the check that the result actually changed, this would answer with
+    // its own input and claim it was the other spelling.
+    expect(wwwSibling('https://127.0.0.1')).toBeNull()
+    expect(wwwSibling('https://[::1]')).toBeNull()
+  })
+
+  it('never answers with the origin it was given', () => {
+    // The contract in one assertion, rather than in the two cases above only: whatever
+    // goes in, what comes out is either a *different* origin or nothing.
+    for (const origin of ['https://maya.build', 'https://www.maya.build', 'https://127.0.0.1']) {
+      expect(wwwSibling(origin)).not.toBe(origin)
+    }
+  })
+
   it('does not treat a deeper subdomain as an apex', () => {
     // `blog.maya.build` gets `www.blog.maya.build`, never `maya.build`. Walking a label
     // off any host is a wildcard by another name.
@@ -424,18 +443,28 @@ describe('matching an origin against what the owner declared', () => {
   it('refuses everything when nothing is declared', () => {
     expect(matchDeclaredOrigin('https://maya.build', [])).toBeNull()
   })
+
+  it('refuses a spelling the exact comparison would have refused', () => {
+    // **Found by review.** `matchOrigin` compares against a canonicalised list, so it
+    // refuses these outright — while `wwwSibling` re-parses, which canonicalises, so
+    // without a guard the www branch would admit exactly what the branch above it turned
+    // away. A browser never sends any of these.
+    expect(matchDeclaredOrigin('https://WWW.MAYA.BUILD', ['https://maya.build'])).toBeNull()
+    expect(matchDeclaredOrigin('https://www.maya.build:443', ['https://maya.build'])).toBeNull()
+    expect(matchDeclaredOrigin('https://www.maya.build/x', ['https://maya.build'])).toBeNull()
+  })
 })
 
 describe('the origins one deployment has declared', () => {
   it('is empty when nothing has been set — fail closed, card rule 5', async () => {
-    expect(await readDeclaredOrigins(db)).toEqual([])
+    expect(await readDeclaredOrigins(db, {})).toEqual([])
   })
 
   it('is the allowlist and the site address together', async () => {
     await setAllowedOrigins('https://staging.maya.build')
     await setSetting(SITE_URL_SETTING, 'https://maya.build')
 
-    expect([...(await readDeclaredOrigins(db))].sort()).toEqual([
+    expect([...(await readDeclaredOrigins(db, {}))].sort()).toEqual([
       'https://maya.build',
       'https://staging.maya.build',
     ])
@@ -444,13 +473,13 @@ describe('the origins one deployment has declared', () => {
   it('takes the origin of the site address, not the whole URL', async () => {
     await setSetting(SITE_URL_SETTING, 'https://maya.build/blog/')
 
-    expect(await readDeclaredOrigins(db)).toEqual(['https://maya.build'])
+    expect(await readDeclaredOrigins(db, {})).toEqual(['https://maya.build'])
   })
 
   it('drops a site address that is not a web address at all', async () => {
     await setSetting(SITE_URL_SETTING, 'javascript:alert(1)')
 
-    expect(await readDeclaredOrigins(db)).toEqual([])
+    expect(await readDeclaredOrigins(db, {})).toEqual([])
   })
 
   it('reads both rows in one statement, so the check costs one seek', async () => {
@@ -461,7 +490,7 @@ describe('the origins one deployment has declared', () => {
       sent.push(sql)
       return prepare(sql)
     })
-    await readDeclaredOrigins(db)
+    await readDeclaredOrigins(db, {})
     spy.mockRestore()
 
     expect(sent).toHaveLength(1)
@@ -517,6 +546,19 @@ describe('what the submitted url has to be', () => {
   it('is refused when there is no url at all', () => {
     // A `data-thread` submission with no url has nothing to check. Fail closed.
     expect(submittedUrlRefusal(null, { declared: ['https://maya.build'], self })).toBe('no-url')
+  })
+
+  it('does not stretch this deployment’s own origin to its www spelling', () => {
+    // **The www rule is about what the owner *declared*, and `self` was not declared —
+    // it is derived from `request.url` (#57).** `resolveOrigin` makes an equality
+    // argument for it, and an equality argument does not survive being widened to a
+    // second host nobody routed here. Found by review, where the two functions disagreed.
+    expect(
+      submittedUrlRefusal(`https://www.chaipecharcha.example.workers.dev/notes/leaving`, {
+        declared: [],
+        self,
+      }),
+    ).toBe('nothing-declared')
   })
 
   it('is refused when this deployment’s own origin cannot be derived', () => {

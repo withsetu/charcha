@@ -204,7 +204,17 @@ export function wwwSibling(origin: string): string | null {
     if (host === '' || host === 'www') return null
     parsed.hostname = `www.${host}`
   }
-  return normaliseOrigin(parsed.origin)
+
+  // **The assignment above is a silent no-op for a host the parser will not accept**, and
+  // an IP literal is exactly that: `www.` cannot be prefixed to `127.0.0.1` (a trailing
+  // numeric label is refused) or to `[::1]` (brackets are not a label), so `parsed` comes
+  // back unchanged and this would answer with its own input. Returning the input as
+  // somebody's "other spelling" would make one origin match itself twice through a
+  // function whose contract is that there *is* a second spelling. There is no second
+  // spelling of an address, so: null.
+  // Enforced by test/worker/cors.test.ts.
+  const sibling = normaliseOrigin(parsed.origin)
+  return sibling === origin ? null : sibling
 }
 
 /**
@@ -218,6 +228,14 @@ export function wwwSibling(origin: string): string | null {
  * `matchOrigin` does both comparisons, so the empty and literal-`null` origins are refused
  * by the same guard on both, and there is still exactly one place that decides what
  * "listed" means.
+ *
+ * **The canonical-form check is what keeps the two comparisons the same comparison.**
+ * `matchOrigin` compares the given string against a canonicalised list, so it refuses
+ * `https://WWW.MAYA.BUILD` and `https://www.maya.build:443` outright — while `wwwSibling`
+ * re-parses, which *canonicalises*, so without this guard the sibling path would admit
+ * spellings the exact path had just refused. A browser only ever sends the canonical form,
+ * so nothing legitimate is turned away; what is refused is a hand-made header, on the one
+ * branch that would otherwise have been laxer than the rule above it.
  * Enforced by test/worker/cors.test.ts.
  */
 export function matchDeclaredOrigin(
@@ -227,6 +245,7 @@ export function matchDeclaredOrigin(
   const exact = matchOrigin(requestOrigin, declared)
   if (exact !== null) return exact
   if (requestOrigin === null) return null
+  if (normaliseOrigin(requestOrigin) !== requestOrigin) return null
 
   const sibling = wwwSibling(requestOrigin)
   if (sibling === null) return null
@@ -467,8 +486,16 @@ export function submittedUrlRefusal(
   if (pageUrl === null) return 'no-url'
 
   const { declared, self } = origins
-  const all = self === null ? declared : [...declared, self]
-  if (matchDeclaredOrigin(normaliseOrigin(pageUrl), all) !== null) return null
+  const origin = normaliseOrigin(pageUrl)
+
+  // **The www rule applies to what the owner declared, and `self` is matched exactly.**
+  // `resolveOrigin` makes the argument for this deployment's own origin and it is an
+  // equality argument — "the request's own address matched its own address" — which does
+  // not survive being widened to a second host nobody routed here. Two comparisons rather
+  // than one list, so this file cannot say one thing about `self` in one function and the
+  // other thing two functions down.
+  if (matchOrigin(origin, self === null ? [] : [self]) !== null) return null
+  if (matchDeclaredOrigin(origin, declared) !== null) return null
 
   return declared.length === 0 ? 'nothing-declared' : 'undeclared-origin'
 }

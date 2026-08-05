@@ -18,6 +18,7 @@ import { ALLOWED_ORIGINS_SETTING } from '../../../src/cors'
 import { writeSetting } from '../../../src/db'
 import { SITE_URL_SETTING } from '../../../src/settings'
 import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
+import { app } from '../../../src/index'
 
 const db = env.DB
 
@@ -213,6 +214,57 @@ describe('a deployment that declared its site address', () => {
     })
 
     expect(response.status).toBe(202)
+  })
+})
+
+describe('this deployment’s own address, once another one is declared', () => {
+  it('is still accepted, and is the one address a submission may claim beyond the owner’s', async () => {
+    // **Stated rather than left to be discovered.** `selfOrigin` is in the accepted set
+    // unconditionally (#57), so a caller may report a page on *this Worker's* address even
+    // on a configured deployment. That is deliberate and its ceiling is small: the address
+    // is the owner's own, this Worker serves exactly two documents and neither carries an
+    // embed, and the queue builds its link from `site_url` and the derived key rather than
+    // from this column (#203). What it is not is an attacker-chosen address, which is the
+    // property #224 exists for and the assertion below is the whole of it.
+    await declare(SITE_URL_SETTING, 'https://maya.build')
+
+    const response = await post(`${DEPLOYMENT}/notes/leaving`)
+
+    expect(response.status).toBe(202)
+    expect(await pageUrls()).toEqual([`${DEPLOYMENT}/notes/leaving`])
+  })
+
+  it('does not stretch to its own www spelling, which nobody routed here', async () => {
+    await declare(SITE_URL_SETTING, 'https://maya.build')
+
+    const response = await post('https://www.chaipecharcha.example.workers.dev/notes/leaving')
+
+    expect(response.status).toBe(403)
+    expect(await countComments()).toBe(0)
+  })
+})
+
+describe('a deployment still served by the deprecated site-address secret', () => {
+  it('accepts that site at both gates, so the two cannot disagree', async () => {
+    // #207's fallback: `CHARCHA_SITE_URL` still resolves when no row was ever saved. The
+    // reported-address check reads it through `readSiteSettings`, and the browser check
+    // through `readDeclaredOrigins` — found by review, where only the first one did.
+    const request = new Request(`${DEPLOYMENT}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://old.example' },
+      body: JSON.stringify({
+        authorName: 'Rahul Kanwar',
+        body: 'Posted from the site whose address is still coming out of a secret.',
+        url: 'https://old.example/notes/leaving',
+        [HONEYPOT_FIELD]: '',
+        [ELAPSED_FIELD]: 31_000,
+      }),
+    })
+
+    const response = await app.fetch(request, { ...env, CHARCHA_SITE_URL: 'https://old.example' })
+
+    expect(response.status).toBe(202)
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://old.example')
   })
 })
 
