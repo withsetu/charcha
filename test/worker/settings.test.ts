@@ -50,6 +50,7 @@ describe('readSiteSettings', () => {
 
     expect(settings).toEqual({
       moderationPolicy: 'hold-all',
+      allowedOrigins: [],
       siteUrl: null,
       notifyFrom: null,
       notifyTo: null,

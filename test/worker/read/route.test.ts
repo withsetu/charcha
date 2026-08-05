@@ -119,6 +119,9 @@ describe('GET /comments — the read half of the embed contract', () => {
     // The read derives its key with src/page-key.ts exactly as the submission path
     // does. If the two ever disagreed, a reader would post to one thread and then
     // be shown another — and every test on either side would still pass.
+    // The site has to be one this deployment was told about, or the write is refused
+    // before it reaches the key at all (#224).
+    await allowOrigin(site)
     const posted = await exports.default.fetch(`${worker}/comments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -339,8 +342,11 @@ describe('CORS — the origin allowlist over HTTP', () => {
   })
 
   it('still accepts a write that carries no Origin, so curl and the importer work', async () => {
-    // Refusing here would stop no attack — anything that can omit the header was
-    // never subject to CORS — and would break every non-browser caller.
+    // Refusing *on the header* would stop no attack — anything that can omit it was never
+    // subject to CORS — and would break every non-browser caller. What such a caller is
+    // now held to instead is the address it reports: declared here, refused otherwise
+    // (#224, test/worker/submit/declared-origin.test.ts).
+    await allowOrigin(site)
     const response = await exports.default.fetch(`${worker}/comments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

@@ -10,6 +10,13 @@ const db = env.DB
 const t0 = 1_753_300_000
 const SECRET = 'a-test-hmac-secret'
 
+/**
+ * The address these submissions report, declared (#224). Passed as a dep rather than
+ * written to `settings` because this file drives the pipeline directly, exactly as
+ * src/submit/route.ts does with what it read.
+ */
+const DECLARED = ['https://maya.build']
+
 function submission(overrides: Record<string, unknown> = {}) {
   return {
     url: 'https://maya.build/notes/hello',
@@ -48,6 +55,7 @@ describe('the submission pipeline stores an IP hash (#65)', () => {
       spamCheck: allowAllSpamCheck,
       request: request('203.0.113.9'),
       now: t0,
+      declaredOrigins: DECLARED,
       ipSecret: SECRET,
     })
 
@@ -61,6 +69,7 @@ describe('the submission pipeline stores an IP hash (#65)', () => {
       spamCheck: allowAllSpamCheck,
       request: request('203.0.113.9'),
       now: t0,
+      declaredOrigins: DECLARED,
       ipSecret: SECRET,
     })
 
@@ -75,6 +84,7 @@ describe('the submission pipeline stores an IP hash (#65)', () => {
       spamCheck: allowAllSpamCheck,
       request: request('203.0.113.9'),
       now: t0,
+      declaredOrigins: DECLARED,
     })
 
     expect(await storedIpHash()).toBeNull()
@@ -86,6 +96,7 @@ describe('the submission pipeline stores an IP hash (#65)', () => {
       spamCheck: allowAllSpamCheck,
       request: request(null),
       now: t0,
+      declaredOrigins: DECLARED,
       ipSecret: SECRET,
     })
 
@@ -99,6 +110,7 @@ describe('the submission pipeline stores an IP hash (#65)', () => {
         spamCheck: allowAllSpamCheck,
         request: request('203.0.113.9'),
         now: t0,
+        declaredOrigins: DECLARED,
         ipSecret: SECRET,
       })
     }
@@ -130,6 +142,7 @@ describe('the per-IP rate limit actually fires now (#65 end to end)', () => {
           spamCheck,
           request: request('203.0.113.9'),
           now: t0 + i,
+          declaredOrigins: DECLARED,
           ipSecret: SECRET,
         },
       )
@@ -145,13 +158,27 @@ describe('the per-IP rate limit actually fires now (#65 end to end)', () => {
     for (let i = 0; i < DEFAULT_MAX_PER_IP; i++) {
       await runSubmission(
         { ...submission({ body: `filling the bucket ${i}` }), subject: '', t: 5000 },
-        { db, spamCheck, request: request('203.0.113.9'), now: t0 + i, ipSecret: SECRET },
+        {
+          db,
+          spamCheck,
+          request: request('203.0.113.9'),
+          now: t0 + i,
+          declaredOrigins: DECLARED,
+          ipSecret: SECRET,
+        },
       )
     }
 
     const other = await runSubmission(
       { ...submission({ body: 'a comment from somebody else entirely' }), subject: '', t: 5000 },
-      { db, spamCheck, request: request('198.51.100.7'), now: t0 + 10, ipSecret: SECRET },
+      {
+        db,
+        spamCheck,
+        request: request('198.51.100.7'),
+        now: t0 + 10,
+        declaredOrigins: DECLARED,
+        ipSecret: SECRET,
+      },
     )
 
     expect(other.outcome).toBe('pending')
@@ -169,6 +196,7 @@ describe('the writer and the rate limit must derive the same key', () => {
       spamCheck: allowAllSpamCheck,
       request: request('203.0.113.9'),
       now: t0,
+      declaredOrigins: DECLARED,
       ipSecret: `  ${SECRET}\n`,
     })
 
@@ -181,7 +209,14 @@ describe('the writer and the rate limit must derive the same key', () => {
     for (let i = 0; i < DEFAULT_MAX_PER_IP + 1; i++) {
       const result = await runSubmission(
         { ...submission({ body: `an ordinary comment number ${i}` }), subject: '', t: 5000 },
-        { db, spamCheck, request: request('203.0.113.9'), now: t0 + i, ipSecret: `${SECRET}\n` },
+        {
+          db,
+          spamCheck,
+          request: request('203.0.113.9'),
+          now: t0 + i,
+          declaredOrigins: DECLARED,
+          ipSecret: `${SECRET}\n`,
+        },
       )
       last = result.outcome
     }
@@ -194,6 +229,7 @@ describe('the writer and the rate limit must derive the same key', () => {
       spamCheck: allowAllSpamCheck,
       request: request('203.0.113.9'),
       now: t0,
+      declaredOrigins: DECLARED,
       ipSecret: '   ',
     })
 

@@ -22,8 +22,17 @@ async function countComments() {
   return row?.n ?? -1
 }
 
+/**
+ * The address these submissions report, declared (#224).
+ *
+ * Every case below is about what the pipeline does *after* the address check, so the
+ * address is declared — the check itself has its own file,
+ * test/worker/submit/declared-origin.test.ts, including what happens when it is not.
+ */
+const DECLARED = ['https://maya.build']
+
 function deps(spamCheck: SpamCheck = allowAllSpamCheck) {
-  return { db, spamCheck, request, now: t0 }
+  return { db, spamCheck, request, now: t0, declaredOrigins: DECLARED }
 }
 
 const validRoot = {
@@ -158,7 +167,7 @@ describe('runSubmission — the spam seam gets what #8 needs', () => {
 
     await runSubmission(
       { ...validRoot, hp: '', t: t0 * 1000 },
-      { db, spamCheck: capture, request, now: t0 },
+      { db, spamCheck: capture, request, now: t0, declaredOrigins: DECLARED },
     )
 
     expect(seen?.pageKey).toBe('/notes/leaving')
@@ -183,7 +192,13 @@ describe('runSubmission — the spam seam gets what #8 needs', () => {
       },
     }
 
-    await runSubmission(validRoot, { db, spamCheck: nosy, request, now: t0 })
+    await runSubmission(validRoot, {
+      db,
+      spamCheck: nosy,
+      request,
+      now: t0,
+      declaredOrigins: DECLARED,
+    })
 
     expect(sawRowsAtCheckTime).toBe(0)
   })
@@ -248,7 +263,7 @@ describe('runSubmission — replies', () => {
         url: validRoot.url,
         parentId: rootId,
       },
-      { db, spamCheck: allowAllSpamCheck, request, now: t0 + 10 },
+      { db, spamCheck: allowAllSpamCheck, request, now: t0 + 10, declaredOrigins: DECLARED },
     )
 
     expect(result.outcome).toBe('pending')
@@ -265,7 +280,7 @@ describe('runSubmission — replies', () => {
 
     const result = await runSubmission(
       { authorName: 'Maya', body: 'a visible reply echo', url: validRoot.url, parentId: rootId },
-      { db, spamCheck: allowAllSpamCheck, request, now: t0 + 10 },
+      { db, spamCheck: allowAllSpamCheck, request, now: t0 + 10, declaredOrigins: DECLARED },
     )
 
     if (result.outcome !== 'pending') throw new Error('expected pending')
@@ -325,6 +340,7 @@ describe('runSubmission — the whole submission, counted', () => {
           headers: { 'CF-Connecting-IP': '198.51.100.7' },
         }),
         now: t0,
+        declaredOrigins: DECLARED,
         ipSecret: 'ip-secret',
       },
     )

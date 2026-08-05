@@ -60,7 +60,9 @@ export function SiteAddressSection({
         <>
           <p>
             The home page of the site this deployment takes comments for. Nothing can work it out,
-            and it is what puts a link to the page on every comment in your queue.{' '}
+            and until it is set — or the address is on the allowed origins below —{' '}
+            <b>comments from that site are refused</b>. It is also what puts a link to the page on
+            every comment in your queue.{' '}
             <OutboundLink href={DOCS.siteAddress}>What reads it</OutboundLink>.
           </p>
           {load.value.fromDeprecatedSecrets.includes('site_url') && (

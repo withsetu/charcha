@@ -36,7 +36,6 @@ import {
   MAX_ALLOWED_ORIGINS,
   MAX_ALLOWED_ORIGINS_LENGTH,
   normaliseOrigin,
-  parseAllowedOrigins,
   selfOrigin,
 } from '../cors'
 import { MODERATION_POLICY_SETTING, readSettings, writeSettings } from '../db'
@@ -352,15 +351,17 @@ function checkedRows(data: {
  * Enforced by test/worker/admin/settings.test.ts.
  */
 async function settingsResponse(c: AdminContext): Promise<Response> {
-  const values = await readSettings(c.env.DB, [ALLOWED_ORIGINS_SETTING, ...SUBMISSION_SETTINGS])
+  const values = await readSettings(c.env.DB, SUBMISSION_SETTINGS)
   const resolved = resolveSiteSettings(values, c.env)
 
   return adminJson({
     // Read back through the same parser the public origin check uses, so the dashboard
     // shows what that check will actually honour rather than what the row happens to
     // contain. A stored value the reader fails closed on would otherwise be displayed
-    // as a working allowlist.
-    allowedOrigins: parseAllowedOrigins(values.get(ALLOWED_ORIGINS_SETTING) ?? null),
+    // as a working allowlist. Since #224 the allowlist is one of the rows
+    // `resolveSiteSettings` resolves, so this is that same answer rather than a second
+    // parse of the same string.
+    allowedOrigins: resolved.allowedOrigins,
     selfOrigin: selfOrigin(c.req.raw) ?? '',
     // Same rule, for the same reason: `resolveSiteSettings` runs the row through the
     // parser the submission path calls, so a row holding something unrecognisable is

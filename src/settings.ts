@@ -19,9 +19,11 @@
 // CLAUDE.md's rule is a *constant* query count, not a low one, because the 50-query
 // invocation budget throws rather than slows down. `readSettings` in src/db is the batched
 // read; this module is what turns its raw strings into values the rest of the Worker can
-// use. `allowed_origins` is deliberately not in the submission-path list — it is resolved
-// before the request is accepted at all and is shared with `GET /comments`, so folding it
-// in would make the read path pay for the notification settings.
+// use. `allowed_origins` joined the submission-path list in #224, having been deliberately
+// outside it: the browser check reads it before the request is accepted, but that check
+// only fires when an `Origin` header arrived, and the submitted `url` has to be checked
+// against the owner's addresses either way. `DECLARED_ORIGIN_SETTINGS` is the other read —
+// those two rows alone — so `GET /comments` still never pays for the notification settings.
 //
 // **Everything here is untrusted input, whoever wrote it.** The dashboard is the only
 // writer, but `wrangler d1 execute` reaches this table and a row can predate a validator.
@@ -36,6 +38,7 @@
 //
 // Enforced by test/worker/settings.test.ts.
 
+import { ALLOWED_ORIGINS_SETTING, normaliseOrigin, parseAllowedOrigins } from './cors'
 import { MODERATION_POLICY_SETTING, readSettings } from './db'
 import { parseModerationPolicy } from './moderation/policy'
 import type { ModerationPolicy } from './moderation/policy'
@@ -102,11 +105,23 @@ const MAX_LEGACY_NOTIFY_FROM_LENGTH = MAX_EMAIL_ADDRESS_LENGTH + MAX_FROM_NAME_L
  */
 export const SUBMISSION_SETTINGS = [
   MODERATION_POLICY_SETTING,
+  ALLOWED_ORIGINS_SETTING,
   SITE_URL_SETTING,
   NOTIFY_FROM_SETTING,
   NOTIFY_TO_SETTING,
   NOTIFY_FROM_NAME_SETTING,
 ] as const
+
+/**
+ * The two rows that say which addresses are the owner's (#224).
+ *
+ * A list of its own as well as being inside `SUBMISSION_SETTINGS`, because the two reads
+ * have different shapes and both must be one statement: `resolveOrigin` needs these two
+ * and nothing else, on a path shared with `GET /comments` where the notification settings
+ * would be dead weight, while the submission path needs them alongside everything else and
+ * must not pay a second seek for them.
+ */
+export const DECLARED_ORIGIN_SETTINGS = [ALLOWED_ORIGINS_SETTING, SITE_URL_SETTING] as const
 
 /**
  * The secrets #207 deprecated, which are still read when their row has never been written.
@@ -124,6 +139,15 @@ export type SettingsFallbackEnv = Partial<
 export interface SiteSettings {
   /** What happens to a comment no spam layer objected to (#173). Never null — see below. */
   moderationPolicy: ModerationPolicy
+  /**
+   * The `allowed_origins` row, parsed (#224).
+   *
+   * Read on this path as well as by `resolveOrigin` because the two questions are
+   * different: that one asks which *page* may post, and this one is half of which
+   * *addresses* a comment may claim to be from — a question a request with no `Origin`
+   * header has to answer too, and the header is the only thing CORS can see.
+   */
+  allowedOrigins: string[]
   /** The site this deployment takes comments for, or null when the owner has set none. */
   siteUrl: string | null
   /**
@@ -232,6 +256,9 @@ export function resolveSiteSettings(
 
   return {
     moderationPolicy,
+    // Through the same parser the dashboard reads back and the origin check compares
+    // against, so a row this would fail closed on is not reported as a working list.
+    allowedOrigins: parseAllowedOrigins(values.get(ALLOWED_ORIGINS_SETTING) ?? null),
     siteUrl: rowOrSecret(
       values,
       SITE_URL_SETTING,
@@ -290,4 +317,60 @@ export async function readSiteSettings(
   env: SettingsFallbackEnv,
 ): Promise<SiteSettings> {
   return resolveSiteSettings(await readSettings(db, SUBMISSION_SETTINGS), env)
+}
+
+/**
+ * Every address the owner has said is theirs (#224): the allowlist, and the origin of
+ * their site address.
+ *
+ * **The site address contributes its origin, not its URL.** An owner types a home page —
+ * `https://maya.build/blog/` is a legitimate answer — and what the origin check compares is
+ * an origin. `normaliseOrigin` is the same canonicalisation the allowlist entries went
+ * through, so the two halves cannot disagree about what one address means, and a stored
+ * value that is not a web address at all contributes nothing rather than throwing.
+ *
+ * This is deliberately not `selfOrigin`'s business: that one is derived per request from
+ * `request.url` and is added by the caller that has a request (see src/cors.ts).
+ * Enforced by test/worker/cors.test.ts.
+ */
+export function declaredOrigins(
+  settings: Pick<SiteSettings, 'allowedOrigins' | 'siteUrl'>,
+): string[] {
+  const origins = [...settings.allowedOrigins]
+  const fromSiteUrl = settings.siteUrl === null ? null : normaliseOrigin(settings.siteUrl)
+  if (fromSiteUrl !== null && !origins.includes(fromSiteUrl)) origins.push(fromSiteUrl)
+  return origins
+}
+
+/**
+ * The declared origins alone, in one statement, for `resolveOrigin`.
+ *
+ * Passed to it rather than imported by it: src/cors.ts is imported *by* this module, and
+ * importing it back would be a module cycle whose two constant lists read each other before
+ * either exists. See the note on `resolveOrigin`.
+ *
+ * **It resolves the site address exactly as the submission path does, deprecated secret and
+ * all, and the alternative was worse than the duplication it avoids.** Leaving
+ * `CHARCHA_SITE_URL` out here would give a deployment still running on that secret two
+ * different answers to "which addresses are the owner's": the reported `url` would be
+ * accepted and a browser on that same site refused, with the Setup tab showing the
+ * migration notice for a value that half-works. The rule is one answer, in both places,
+ * for as long as the fallback exists (#209 removes it).
+ * Enforced by test/worker/cors.test.ts.
+ */
+export async function readDeclaredOrigins(
+  db: D1Database,
+  env: SettingsFallbackEnv,
+): Promise<readonly string[]> {
+  const values = await readSettings(db, DECLARED_ORIGIN_SETTINGS)
+  return declaredOrigins({
+    allowedOrigins: parseAllowedOrigins(values.get(ALLOWED_ORIGINS_SETTING) ?? null),
+    siteUrl: rowOrSecret(
+      values,
+      SITE_URL_SETTING,
+      'CHARCHA_SITE_URL',
+      env.CHARCHA_SITE_URL,
+      MAX_SITE_URL_LENGTH,
+    ),
+  })
 }

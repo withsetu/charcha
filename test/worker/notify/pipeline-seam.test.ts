@@ -48,6 +48,9 @@ function spy() {
   return { events, notifier }
 }
 
+/** The address `validRoot` reports, declared, so the submission is accepted at all (#224). */
+const DECLARED = ['https://maya.build']
+
 beforeEach(async () => {
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
@@ -63,6 +66,7 @@ describe('what the pipeline hands the notifier', () => {
       spamCheck: allowAllSpamCheck,
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
       defer: run.defer,
     })
@@ -109,6 +113,7 @@ describe('what the pipeline hands the notifier', () => {
       spamCheck: verdict({ action: 'review', reason: 'turnstile:unreachable' }),
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
       defer: run.defer,
     })
@@ -129,6 +134,7 @@ describe('what the pipeline hands the notifier', () => {
       spamCheck: verdict({ action: 'reject', reason: 'honeypot:filled' }),
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
       defer: run.defer,
     })
@@ -168,6 +174,7 @@ describe('a notification can never cost the reader their comment', () => {
       spamCheck: allowAllSpamCheck,
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
       defer: run.defer,
     })
@@ -191,6 +198,7 @@ describe('a notification can never cost the reader their comment', () => {
       spamCheck: allowAllSpamCheck,
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
       defer: run.defer,
     })
@@ -208,6 +216,7 @@ describe('a notification can never cost the reader their comment', () => {
       spamCheck: allowAllSpamCheck,
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
       defer: () => {
         throw new Error('waitUntil is unavailable')
@@ -230,6 +239,7 @@ describe('the seam is inert until both halves are wired', () => {
       spamCheck: allowAllSpamCheck,
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       notifier,
     })
 
@@ -245,6 +255,7 @@ describe('the seam is inert until both halves are wired', () => {
       spamCheck: allowAllSpamCheck,
       request,
       now: t0,
+      declaredOrigins: DECLARED,
       defer: run.defer,
     })
 

@@ -1,27 +1,46 @@
 import { env } from 'cloudflare:workers'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ALLOWED_ORIGINS_SETTING,
   MAX_ALLOWED_ORIGINS,
   MAX_ALLOWED_ORIGINS_LENGTH,
+  matchDeclaredOrigin,
   matchOrigin,
   parseAllowedOrigins,
   readAllowedOrigins,
   resolveOrigin,
   selfOrigin,
+  submittedUrlRefusal,
+  UNDECLARED_URL_MESSAGE,
   unlistedOriginResponse,
+  wwwSibling,
 } from '../../src/cors'
+import { SITE_URL_SETTING, readDeclaredOrigins } from '../../src/settings'
+import type { SettingsFallbackEnv } from '../../src/settings'
 
 const db = env.DB
 
 /** The address a deployed Charcha answers on, as the Worker sees it in `request.url`. */
 const DEPLOYMENT = 'https://charcha.example.workers.dev'
 
-async function setAllowedOrigins(value: string) {
+/**
+ * The same pairing the Worker makes: the policy in src/cors.ts, and the rows it is
+ * matched against from src/settings.ts. Injected rather than imported by cors.ts, so the
+ * origin policy stays free of the settings module and there is one reader (#224).
+ */
+function decide(request: Request, database: D1Database = db, env: SettingsFallbackEnv = {}) {
+  return resolveOrigin(request, () => readDeclaredOrigins(database, env))
+}
+
+async function setSetting(key: string, value: string) {
   await db
     .prepare('insert or replace into settings (key, value, updated_at) values (?1, ?2, ?3)')
-    .bind(ALLOWED_ORIGINS_SETTING, value, 1_753_300_000)
+    .bind(key, value, 1_753_300_000)
     .run()
+}
+
+async function setAllowedOrigins(value: string) {
+  await setSetting(ALLOWED_ORIGINS_SETTING, value)
 }
 
 beforeEach(async () => {
@@ -171,8 +190,7 @@ describe("this deployment's own origin", () => {
 
 describe('a fresh deployment, with nothing in settings at all', () => {
   it('accepts a request from its own origin — the state after a deploy is not "refuses everything"', async () => {
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: DEPLOYMENT },
@@ -183,8 +201,7 @@ describe('a fresh deployment, with nothing in settings at all', () => {
   })
 
   it('still refuses every other origin — fail closed, card rule 5', async () => {
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: 'https://maya.build' },
@@ -195,8 +212,7 @@ describe('a fresh deployment, with nothing in settings at all', () => {
   })
 
   it('records nothing anywhere, so no request can widen the allowlist for the next one', async () => {
-    await resolveOrigin(
-      db,
+    await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: DEPLOYMENT },
@@ -208,12 +224,12 @@ describe('a fresh deployment, with nothing in settings at all', () => {
   })
 
   it('does not spend a D1 query on the settings row it does not need', async () => {
-    const decision = await resolveOrigin(
-      unreadableDb,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: DEPLOYMENT },
       }),
+      unreadableDb,
     )
 
     expect(decision.allowedOrigin).toBe(DEPLOYMENT)
@@ -222,8 +238,7 @@ describe('a fresh deployment, with nothing in settings at all', () => {
 
 describe('an origin that only claims to be this deployment', () => {
   it('is refused when the Origin names another host', async () => {
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: 'https://evil.example' },
@@ -246,8 +261,7 @@ describe('an origin that only claims to be this deployment', () => {
     // trust while testing nothing. The real protection against that is not a test at
     // all: no browser lets a page set `Host`, and a client that can set it can omit
     // `Origin` and was never subject to CORS.
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: {
@@ -262,8 +276,7 @@ describe('an origin that only claims to be this deployment', () => {
   })
 
   it('is refused for the same host on another scheme, even though it is nearly this one', async () => {
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: 'http://charcha.example.workers.dev' },
@@ -278,8 +291,7 @@ describe('a deployment the owner has configured', () => {
   it('accepts the origins they listed', async () => {
     await setAllowedOrigins('https://maya.build')
 
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: 'https://maya.build' },
@@ -292,8 +304,7 @@ describe('a deployment the owner has configured', () => {
   it('still accepts its own origin, which no list has to name', async () => {
     await setAllowedOrigins('https://maya.build')
 
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: DEPLOYMENT },
@@ -306,8 +317,7 @@ describe('a deployment the owner has configured', () => {
   it('refuses an origin they did not list', async () => {
     await setAllowedOrigins('https://maya.build')
 
-    const decision = await resolveOrigin(
-      db,
+    const decision = await decide(
       new Request(`${DEPLOYMENT}/comments`, {
         method: 'POST',
         headers: { origin: 'https://evil.example' },
@@ -328,5 +338,251 @@ describe('the refusal a site owner reads while setting this up', () => {
 
   it('carries no allow-origin header, so the page that was refused cannot read it', () => {
     expect(unlistedOriginResponse().headers.get('access-control-allow-origin')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #224 — one declaration covers www and the apex, and the submitted url is checked
+// against what the owner declared.
+// ---------------------------------------------------------------------------
+
+describe('the other spelling of the same declaration', () => {
+  it('adds www to an apex', () => {
+    expect(wwwSibling('https://maya.build')).toBe('https://www.maya.build')
+  })
+
+  it('removes it from a www host', () => {
+    expect(wwwSibling('https://www.maya.build')).toBe('https://maya.build')
+  })
+
+  it('keeps the scheme and the port, which are part of the origin', () => {
+    expect(wwwSibling('http://maya.build:8080')).toBe('http://www.maya.build:8080')
+  })
+
+  it('has none for a host that is only "www"', () => {
+    // Stripping it would leave an empty host, and adding another would invent
+    // `www.www.` — neither is the same declaration.
+    expect(wwwSibling('https://www')).toBeNull()
+  })
+
+  it('has none for something that is not an origin at all', () => {
+    expect(wwwSibling('null')).toBeNull()
+    expect(wwwSibling('not a url')).toBeNull()
+  })
+
+  it('has none for an address, which has no other spelling', () => {
+    // **Found by review, and the shape is worth knowing.** Assigning `hostname` is a
+    // *silent no-op* when the parser refuses the value, and it refuses both of these —
+    // a trailing numeric label makes `www.127.0.0.1` invalid, and brackets are not a
+    // label. Without the check that the result actually changed, this would answer with
+    // its own input and claim it was the other spelling.
+    expect(wwwSibling('https://127.0.0.1')).toBeNull()
+    expect(wwwSibling('https://[::1]')).toBeNull()
+  })
+
+  it('never answers with the origin it was given', () => {
+    // The contract in one assertion, rather than in the two cases above only: whatever
+    // goes in, what comes out is either a *different* origin or nothing.
+    for (const origin of ['https://maya.build', 'https://www.maya.build', 'https://127.0.0.1']) {
+      expect(wwwSibling(origin)).not.toBe(origin)
+    }
+  })
+
+  it('does not treat a deeper subdomain as an apex', () => {
+    // `blog.maya.build` gets `www.blog.maya.build`, never `maya.build`. Walking a label
+    // off any host is a wildcard by another name.
+    expect(wwwSibling('https://blog.maya.build')).toBe('https://www.blog.maya.build')
+  })
+})
+
+describe('matching an origin against what the owner declared', () => {
+  it('matches exactly, as the browser rule does', () => {
+    expect(matchDeclaredOrigin('https://maya.build', ['https://maya.build'])).toBe(
+      'https://maya.build',
+    )
+  })
+
+  it('accepts the www spelling of a declared apex', () => {
+    expect(matchDeclaredOrigin('https://www.maya.build', ['https://maya.build'])).toBe(
+      'https://www.maya.build',
+    )
+  })
+
+  it('accepts the apex of a declared www', () => {
+    expect(matchDeclaredOrigin('https://maya.build', ['https://www.maya.build'])).toBe(
+      'https://maya.build',
+    )
+  })
+
+  it('answers with the origin as it was given, never the sibling', () => {
+    // It is echoed into `Access-Control-Allow-Origin`, which a browser compares against
+    // the origin it sent. The sibling is how it matched, not what it is.
+    expect(matchDeclaredOrigin('https://www.maya.build', ['https://maya.build'])).not.toBe(
+      'https://maya.build',
+    )
+  })
+
+  it('does not admit an arbitrary subdomain of a declared apex', () => {
+    // That is a wildcard, and src/cors.ts refuses wildcards for a stated reason.
+    expect(matchDeclaredOrigin('https://blog.maya.build', ['https://maya.build'])).toBeNull()
+    expect(matchDeclaredOrigin('https://a.b.maya.build', ['https://maya.build'])).toBeNull()
+  })
+
+  it('does not let www carry a different scheme or port in', () => {
+    expect(matchDeclaredOrigin('http://www.maya.build', ['https://maya.build'])).toBeNull()
+    expect(matchDeclaredOrigin('https://www.maya.build:8443', ['https://maya.build'])).toBeNull()
+  })
+
+  it('refuses a lookalike that merely contains a declared host', () => {
+    expect(matchDeclaredOrigin('https://wwwmaya.build', ['https://maya.build'])).toBeNull()
+    expect(
+      matchDeclaredOrigin('https://www.maya.build.evil.example', ['https://maya.build']),
+    ).toBeNull()
+  })
+
+  it('refuses everything when nothing is declared', () => {
+    expect(matchDeclaredOrigin('https://maya.build', [])).toBeNull()
+  })
+
+  it('refuses a spelling the exact comparison would have refused', () => {
+    // **Found by review.** `matchOrigin` compares against a canonicalised list, so it
+    // refuses these outright — while `wwwSibling` re-parses, which canonicalises, so
+    // without a guard the www branch would admit exactly what the branch above it turned
+    // away. A browser never sends any of these.
+    expect(matchDeclaredOrigin('https://WWW.MAYA.BUILD', ['https://maya.build'])).toBeNull()
+    expect(matchDeclaredOrigin('https://www.maya.build:443', ['https://maya.build'])).toBeNull()
+    expect(matchDeclaredOrigin('https://www.maya.build/x', ['https://maya.build'])).toBeNull()
+  })
+})
+
+describe('the origins one deployment has declared', () => {
+  it('is empty when nothing has been set — fail closed, card rule 5', async () => {
+    expect(await readDeclaredOrigins(db, {})).toEqual([])
+  })
+
+  it('is the allowlist and the site address together', async () => {
+    await setAllowedOrigins('https://staging.maya.build')
+    await setSetting(SITE_URL_SETTING, 'https://maya.build')
+
+    expect([...(await readDeclaredOrigins(db, {}))].sort()).toEqual([
+      'https://maya.build',
+      'https://staging.maya.build',
+    ])
+  })
+
+  it('takes the origin of the site address, not the whole URL', async () => {
+    await setSetting(SITE_URL_SETTING, 'https://maya.build/blog/')
+
+    expect(await readDeclaredOrigins(db, {})).toEqual(['https://maya.build'])
+  })
+
+  it('drops a site address that is not a web address at all', async () => {
+    await setSetting(SITE_URL_SETTING, 'javascript:alert(1)')
+
+    expect(await readDeclaredOrigins(db, {})).toEqual([])
+  })
+
+  it('reads both rows in one statement, so the check costs one seek', async () => {
+    await setSetting(SITE_URL_SETTING, 'https://maya.build')
+    const sent: string[] = []
+    const prepare = db.prepare.bind(db)
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      sent.push(sql)
+      return prepare(sql)
+    })
+    await readDeclaredOrigins(db, {})
+    spy.mockRestore()
+
+    expect(sent).toHaveLength(1)
+  })
+})
+
+describe('what the submitted url has to be', () => {
+  const self = 'https://chaipecharcha.example.workers.dev'
+
+  it('is refused when the owner has declared nothing', () => {
+    expect(submittedUrlRefusal('https://maya.build/notes/leaving', { declared: [], self })).toBe(
+      'nothing-declared',
+    )
+  })
+
+  it('is accepted on this deployment’s own address with nothing declared (#57)', () => {
+    expect(submittedUrlRefusal(`${self}/notes/leaving`, { declared: [], self })).toBeNull()
+  })
+
+  it('is accepted on a declared address', () => {
+    expect(
+      submittedUrlRefusal('https://maya.build/notes/leaving', {
+        declared: ['https://maya.build'],
+        self,
+      }),
+    ).toBeNull()
+  })
+
+  it('is refused on an address the owner did not declare', () => {
+    expect(
+      submittedUrlRefusal('https://evil.example/notes/leaving', {
+        declared: ['https://maya.build'],
+        self,
+      }),
+    ).toBe('undeclared-origin')
+  })
+
+  it('separates the two refusals, so the log can tell a misconfiguration from an attack', () => {
+    expect(
+      submittedUrlRefusal('https://evil.example/x', { declared: ['https://maya.build'], self }),
+    ).not.toBe(submittedUrlRefusal('https://evil.example/x', { declared: [], self }))
+  })
+
+  it('accepts the www spelling of a declared apex', () => {
+    expect(
+      submittedUrlRefusal('https://www.maya.build/notes/leaving', {
+        declared: ['https://maya.build'],
+        self,
+      }),
+    ).toBeNull()
+  })
+
+  it('is refused when there is no url at all', () => {
+    // A `data-thread` submission with no url has nothing to check. Fail closed.
+    expect(submittedUrlRefusal(null, { declared: ['https://maya.build'], self })).toBe('no-url')
+  })
+
+  it('does not stretch this deployment’s own origin to its www spelling', () => {
+    // **The www rule is about what the owner *declared*, and `self` was not declared —
+    // it is derived from `request.url` (#57).** `resolveOrigin` makes an equality
+    // argument for it, and an equality argument does not survive being widened to a
+    // second host nobody routed here. Found by review, where the two functions disagreed.
+    expect(
+      submittedUrlRefusal(`https://www.chaipecharcha.example.workers.dev/notes/leaving`, {
+        declared: [],
+        self,
+      }),
+    ).toBe('nothing-declared')
+  })
+
+  it('is refused when this deployment’s own origin cannot be derived', () => {
+    expect(submittedUrlRefusal('https://maya.build/x', { declared: [], self: null })).toBe(
+      'nothing-declared',
+    )
+  })
+})
+
+describe('the refusal a reader gets when the url is not declared', () => {
+  it('names the dashboard and the setting to fix, for the owner reading it', () => {
+    expect(UNDECLARED_URL_MESSAGE).toContain('/admin')
+    expect(UNDECLARED_URL_MESSAGE).toMatch(/address/i)
+  })
+
+  it('rules out Turnstile’s hostname list by name, as the other refusals do', () => {
+    // #57's author added four hostnames to Turnstile's Hostname Management screen and had
+    // no way to tell they were in the wrong product.
+    expect(UNDECLARED_URL_MESSAGE).toContain('Turnstile')
+  })
+
+  it('reports nothing about how the deployment is configured', () => {
+    // One message for all three reasons. Which check fired is in the log, whose audience
+    // is the owner; the body's audience is whoever posted.
+    expect(UNDECLARED_URL_MESSAGE).not.toMatch(/nothing-declared|undeclared-origin|no-url/)
   })
 })

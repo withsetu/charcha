@@ -1,6 +1,8 @@
 import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeSetting } from '../../../src/db'
 import { renderMarkdown } from '../../../src/render/markdown'
+import { SITE_URL_SETTING } from '../../../src/settings'
 import { contentLayer, extractLinks } from '../../../src/spam/content'
 import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
 import { LOOKALIKE_REASON, hasMixedScriptHost, lookalikeOutcome } from '../../../src/spam/lookalike'
@@ -198,6 +200,9 @@ describe('driven through the deployed Worker', () => {
   beforeEach(async () => {
     await env.DB.exec('DELETE FROM comments')
     await env.DB.exec('DELETE FROM threads')
+    await env.DB.exec('DELETE FROM settings')
+    // Declared, so the submission reaches the layers at all (#224).
+    await writeSetting(env.DB, SITE_URL_SETTING, 'https://maya.build', 1_753_300_000)
     lines = []
     vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(' '))

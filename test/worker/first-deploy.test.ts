@@ -20,14 +20,22 @@ const db = env.DB
 /** The address Cloudflare hands a deployer on the success screen. */
 const DEPLOYMENT = 'https://chaipecharcha.example.workers.dev'
 
-function post(headers: Record<string, string>) {
+/**
+ * A submission, reporting a page on this deployment's own address by default.
+ *
+ * **That default changed with #224 and the change is the point.** A fresh deployment has
+ * declared no addresses, so it accepts comments for its own pages and refuses every other
+ * address — including the owner's real site, until they say it is theirs. `url` is a
+ * parameter here rather than a constant so both halves are driven below.
+ */
+function post(headers: Record<string, string>, url = `${DEPLOYMENT}/notes/leaving`) {
   return exports.default.fetch(`${DEPLOYMENT}/comments`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify({
       authorName: 'Rahul Kanwar',
       body: 'The part people underestimate is the export, and nobody checks it until they leave.',
-      url: 'https://maya.build/notes/leaving',
+      url,
       [HONEYPOT_FIELD]: '',
       [ELAPSED_FIELD]: 31_000,
     }),
@@ -56,11 +64,32 @@ describe('a fresh deployment, nothing configured, no SQL run by hand', () => {
     expect(await countSettings()).toBe(0)
   })
 
-  it('accepts a comment posted from its own origin, and stores it', async () => {
+  it('accepts a comment posted from its own origin, for a page on its own address', async () => {
     const response = await post({ origin: DEPLOYMENT })
 
     expect(response.status).toBe(202)
     expect(await countComments()).toBe(1)
+  })
+
+  it('refuses a comment for any other address until the owner declares one (#224)', async () => {
+    // **The behaviour change, stated where #57 is stated.** This is not #57 returning: a
+    // deployment in this state says so on the Setup tab, in the loudest register that tab
+    // has, and names the one setting that fixes it — see
+    // src/dashboard/components/setup/sections/declared.tsx. What #57 was is a deployment
+    // that refused everything and explained nothing.
+    const response = await post({ origin: DEPLOYMENT }, 'https://maya.build/notes/leaving')
+
+    expect(response.status).toBe(403)
+    expect(await countComments()).toBe(0)
+  })
+
+  it('says which setting to fix when it refuses one', async () => {
+    const body = await (
+      await post({ origin: DEPLOYMENT }, 'https://maya.build/notes/leaving')
+    ).text()
+
+    expect(body).toContain('/admin')
+    expect(body).toMatch(/site’s address/)
   })
 
   it('echoes the allow-origin header back, so the browser hands the answer over', async () => {

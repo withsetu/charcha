@@ -9,6 +9,7 @@
 import type { Context } from 'hono'
 import { createNotifier } from '../notify'
 import { readCappedText } from '../request-body'
+import { declaredOrigins } from '../settings'
 import type { SiteSettings } from '../settings'
 import { withFragmentHeaders } from '../response-headers'
 // Generic isolate-scoped observability, despite the path — see src/spam/log.ts. Its
@@ -34,8 +35,14 @@ function unreadable(): Response {
  * reader-facing message, matching the existing route house style.
  *
  * The status code carries the taxonomy so the embed can branch without parsing a
- * body: 201 published, 202 accepted-and-pending, 400 the reader's input, 403 a
- * spam rejection. A failed submission never shares a status with a successful one.
+ * body: 201 published, 202 accepted-and-pending, 400 the reader's input, 403 refused.
+ * A failed submission never shares a status with a successful one.
+ *
+ * **`rejected` has two producers and one status, deliberately.** A spam rejection and an
+ * address this deployment does not take comments for (#224) are both a 403 the reader
+ * cannot act on, and splitting them would be a status code that tells a script which of
+ * the two it hit. What differs is the message — the spam one is deliberately generic, the
+ * address one names the setting for the owner reading it — and, in the log, the reason.
  *
  * **It does not add the #98 headers, and a caller other than handleSubmit would
  * therefore ship without them.** They are added once, around this function, for the
@@ -67,8 +74,9 @@ export interface SubmitRouteConfig {
    * It is passed in rather than read here because the spam check is assembled from the
    * same read — layer 8's site URL is one of these rows — and doing it twice would be two
    * statements for one answer. Absent means an unconfigured deployment: `hold-all`, no
-   * notifications, and layer 8 off, which is the default everywhere and the fail-closed
-   * direction for each of the three.
+   * notifications, layer 8 off, and — since #224 — no declared address, so no comment is
+   * accepted for any address but this deployment's own. Every one of those is the
+   * fail-closed direction.
    */
   settings?: SiteSettings
   /** Injectable for tests; defaults to the wall clock in unix seconds. */
@@ -196,6 +204,11 @@ async function submitAnswer(
     // The moderation policy, from the same read the notifier's addresses came from
     // (#207) — see SubmitRouteConfig.settings.
     moderationPolicy: config.settings?.moderationPolicy,
+    // The addresses the owner declared as theirs (#224), from that same read. Derived
+    // here rather than in the pipeline so the pipeline takes a list and nothing else, and
+    // an absent `settings` — an unconfigured deployment, or a caller that did not read —
+    // resolves to none, which refuses. Fail closed, card rule 5.
+    declaredOrigins: config.settings === undefined ? [] : declaredOrigins(config.settings),
     // Email notifications (#125). Both halves are assembled here rather than passed
     // in as config, unlike `spamCheck`: the key is on the Context and the `waitUntil`
     // exists nowhere else, and neither is a seam a caller replaces. Since #207 the two

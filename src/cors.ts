@@ -7,11 +7,18 @@
 //
 // **What this is, and what it is not.** CORS is a browser rule, not a server-side
 // authorisation check: anything that is not a browser — curl, a script, the v1.1
-// build-time renderer — sends no `Origin` and ignores every header in this file. So
-// the allowlist is a misuse guard, not a security boundary; the defence against a
-// script is #8's spam layers and the moderation queue, and it always was. What this
-// does stop is another site's *page* posting into this deployment's queue from a
-// reader's browser, which is the case a reader cannot see and did not consent to.
+// build-time renderer — sends no `Origin` and ignores every header in this file. So the
+// allowlist is a misuse guard rather than a security boundary; the defence against a
+// script is #8's spam layers and the moderation queue. What this does stop is another
+// site's *page* posting into this deployment's queue from a reader's browser, which is the
+// case a reader cannot see and did not consent to.
+//
+// **Since #224 the settings this file reads are also matched against something a script
+// cannot opt out of**: the address a submission *reports*. `submittedUrlRefusal` below is
+// that check, and it is the one that holds for a caller with no `Origin` header at all —
+// the gap that made `threads.page_url` attacker-chosen. The two are complementary and
+// neither replaces the other: one asks which page posted, the other which site the comment
+// claims to be on, and a request can pass either while failing the other.
 //
 // **The preflight is not that gate, and assuming it was is the bug this file was
 // written with.** The embed sends `application/json`, which is not CORS-safelisted,
@@ -143,13 +150,106 @@ export function parseAllowedOrigins(value: string | null): string[] {
 /**
  * The owner's allowlist, or none.
  *
- * One indexed read of a single-row primary-key lookup, and only on requests that
- * carry an `Origin` — see the caller. A deployment that has configured nothing gets
- * an empty list, which allows nothing.
+ * One indexed read of a single-row primary-key lookup. A deployment that has configured
+ * nothing gets an empty list, which allows nothing.
+ *
+ * **Not what the request paths read any more.** Since #224 the allowlist is one half of
+ * what the owner has declared — the site address is the other — and both halves are read
+ * together, in one statement, by `readDeclaredOrigins` in src/settings.ts. This remains
+ * because the dashboard's write path is about the allowlist alone and its tests read back
+ * exactly the row they wrote.
  * Enforced by test/worker/cors.test.ts.
  */
 export async function readAllowedOrigins(db: D1Database): Promise<string[]> {
   return parseAllowedOrigins(await readSetting(db, ALLOWED_ORIGINS_SETTING))
+}
+
+/**
+ * The same declaration spelled the other way: `https://www.maya.build` for
+ * `https://maya.build`, and back again. Null when there is no other spelling.
+ *
+ * **One label, added or removed, and nothing else.** A site is reachable at its apex and
+ * at www, an owner types one of them, and being refused on the other is #57 by another
+ * door — so the pair is treated as one declaration at match time rather than by rewriting
+ * what the owner stored, which the Setup tab still shows them verbatim.
+ *
+ * **It is not a subdomain rule, and the asymmetry is deliberate.** Declaring
+ * `https://maya.build` admits `https://www.maya.build` and nothing else; it does not admit
+ * `https://blog.maya.build`, because that is a wildcard and `matchOrigin` refuses
+ * wildcards for a stated reason. Going the other way is the same single label:
+ * `https://blog.maya.build` gets `https://www.blog.maya.build`, never `https://maya.build`,
+ * so no host ever matches something *shorter* than what a label-stripping rule would
+ * produce from it.
+ *
+ * The scheme and the port ride along untouched, so a declared `https://maya.build` still
+ * does not admit `http://www.maya.build`.
+ * Enforced by test/worker/cors.test.ts.
+ */
+export function wwwSibling(origin: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(origin)
+  } catch {
+    return null
+  }
+  if (parsed.origin === 'null') return null
+
+  const host = parsed.hostname
+  if (host.startsWith('www.')) {
+    const apex = host.slice(4)
+    // `www.` alone would leave nothing behind, and an empty host is not a declaration.
+    if (apex === '' || apex === 'www.') return null
+    parsed.hostname = apex
+  } else {
+    if (host === '' || host === 'www') return null
+    parsed.hostname = `www.${host}`
+  }
+
+  // **The assignment above is a silent no-op for a host the parser will not accept**, and
+  // an IP literal is exactly that: `www.` cannot be prefixed to `127.0.0.1` (a trailing
+  // numeric label is refused) or to `[::1]` (brackets are not a label), so `parsed` comes
+  // back unchanged and this would answer with its own input. Returning the input as
+  // somebody's "other spelling" would make one origin match itself twice through a
+  // function whose contract is that there *is* a second spelling. There is no second
+  // spelling of an address, so: null.
+  // Enforced by test/worker/cors.test.ts.
+  const sibling = normaliseOrigin(parsed.origin)
+  return sibling === origin ? null : sibling
+}
+
+/**
+ * The origin to accept, or null — the owner's declarations, with www and the apex
+ * counted as one (#224).
+ *
+ * The answer is the origin **as it was given**, never the sibling that matched it: this is
+ * echoed into `Access-Control-Allow-Origin`, which a browser compares against the origin it
+ * sent, so answering with the other spelling would refuse the request it just allowed.
+ *
+ * `matchOrigin` does both comparisons, so the empty and literal-`null` origins are refused
+ * by the same guard on both, and there is still exactly one place that decides what
+ * "listed" means.
+ *
+ * **The canonical-form check is what keeps the two comparisons the same comparison.**
+ * `matchOrigin` compares the given string against a canonicalised list, so it refuses
+ * `https://WWW.MAYA.BUILD` and `https://www.maya.build:443` outright — while `wwwSibling`
+ * re-parses, which *canonicalises*, so without this guard the sibling path would admit
+ * spellings the exact path had just refused. A browser only ever sends the canonical form,
+ * so nothing legitimate is turned away; what is refused is a hand-made header, on the one
+ * branch that would otherwise have been laxer than the rule above it.
+ * Enforced by test/worker/cors.test.ts.
+ */
+export function matchDeclaredOrigin(
+  requestOrigin: string | null,
+  declared: readonly string[],
+): string | null {
+  const exact = matchOrigin(requestOrigin, declared)
+  if (exact !== null) return exact
+  if (requestOrigin === null) return null
+  if (normaliseOrigin(requestOrigin) !== requestOrigin) return null
+
+  const sibling = wwwSibling(requestOrigin)
+  if (sibling === null) return null
+  return matchOrigin(sibling, declared) === null ? null : requestOrigin
 }
 
 /**
@@ -295,25 +395,109 @@ export function selfOrigin(request: Request): string | null {
  *     against 5M reads, so a write reachable from a read lets traffic exhaust the
  *     day's comments.
  *
- * The same-origin answer comes before the allowlist read, so it costs no D1 query. The
- * owner's list is still the whole of the cross-origin policy: the seed makes a fresh
- * deployment work, and the setting is what makes it work for their site.
+ * The same-origin answer comes before the declared-origins read, so it costs no D1 query.
+ * What the owner declared is still the whole of the cross-origin policy: the seed makes a
+ * fresh deployment work, and the settings are what make it work for their site.
+ *
+ * **`readDeclared` is injected rather than imported, and that is a module-graph fact
+ * rather than a seam anybody replaces.** Since #224 the declaration is two rows — the
+ * allowlist and the site address — and the site address's key is owned by src/settings.ts,
+ * which already imports this file. Importing it back would be a cycle whose module-scope
+ * constants read each other before either is initialised. So the caller passes the reader
+ * (`readDeclaredOrigins`) already bound to this request's bindings, the read stays lazy, and
+ * a request with no `Origin` still pays for nothing. The binding is not a parameter here for
+ * the same reason: this function has no use for a database except to hand it to that reader.
+ *
+ * **The site address is in that list on purpose.** The dashboard's loud notice names
+ * exactly one action — set your site's address — and if setting it did not also let that
+ * site's pages through CORS, the notice would be telling an owner to do something that
+ * does not work.
  * Enforced by test/worker/cors.test.ts.
  */
-export async function resolveOrigin(db: D1Database, request: Request): Promise<OriginDecision> {
+export async function resolveOrigin(
+  request: Request,
+  readDeclared: () => Promise<readonly string[]>,
+): Promise<OriginDecision> {
   const requestOrigin = request.headers.get('origin')
   if (requestOrigin === null) return { requestOrigin: null, allowedOrigin: null }
 
   // Through matchOrigin rather than a bare `===`, so the empty and literal-"null"
-  // origins are refused by the same guard that refuses them against a real list.
+  // origins are refused by the same guard that refuses them against a real list. Exact,
+  // not `matchDeclaredOrigin`: the argument for this branch is that the request's own
+  // address matched its own `Origin`, and an equality argument does not survive being
+  // widened to a second host nobody routed here.
   const self = selfOrigin(request)
   const sameOrigin = self === null ? null : matchOrigin(requestOrigin, [self])
   if (sameOrigin !== null) return { requestOrigin, allowedOrigin: sameOrigin }
 
   return {
     requestOrigin,
-    allowedOrigin: matchOrigin(requestOrigin, await readAllowedOrigins(db)),
+    allowedOrigin: matchDeclaredOrigin(requestOrigin, await readDeclared()),
   }
+}
+
+/**
+ * What the owner has said is theirs, for one request.
+ *
+ * Two sources, because they are two different acts: `declared` is what they typed into the
+ * dashboard (the allowlist and the site address, resolved by src/settings.ts), and `self`
+ * is this deployment's own address, which is theirs by derivation and was never typed
+ * anywhere (#57).
+ */
+export interface DeclaredOrigins {
+  /** The `allowed_origins` and `site_url` settings, as origins. Empty means none. */
+  declared: readonly string[]
+  /** This deployment's own origin, or null when `request.url` will not normalise. */
+  self: string | null
+}
+
+/**
+ * Why the submitted `url` was refused, or null when it was not (#224).
+ *
+ * **This is the check `allowed_origins` was always read as making and never made.** CORS
+ * binds browsers only: `resolveOrigin` returns early on a missing `Origin` header, so a
+ * request that simply omits it — curl, a script, anything that is not a browser — used to
+ * reach the write with `url` unexamined. `derivePageKey` drops the origin from the thread
+ * key, so such a comment landed on the legitimate thread for that path while
+ * `threads.page_url` kept whatever address it claimed, and every consumer of that column
+ * had to work around it.
+ *
+ * **Fail closed, including when nothing is declared.** A deployment that has declared no
+ * addresses accepts no comments for any address but its own. That is card rule 5 rather
+ * than #57 repeated: #57 was a deployment that refused everything and *explained nothing*,
+ * and what makes this safe is the notice the Setup tab carries while it is true
+ * (src/dashboard/components/setup/sections/declared.tsx).
+ *
+ * **Three reasons rather than a boolean**, because the log has to separate a
+ * misconfiguration from an attack — a deployment nobody has configured yet, an address
+ * that is not one of the owner's, and a submission with no address at all. The *reader*
+ * is told none of it: see `undeclaredUrlResponse`.
+ * Enforced by test/worker/cors.test.ts and test/worker/submit/declared-origin.test.ts.
+ */
+export type SubmittedUrlRefusal = 'no-url' | 'nothing-declared' | 'undeclared-origin'
+
+export function submittedUrlRefusal(
+  pageUrl: string | null,
+  origins: DeclaredOrigins,
+): SubmittedUrlRefusal | null {
+  // Checked first, and separately: "the owner declared nothing" is a fact about the
+  // deployment, and it must not be reported for a submission that carried no address to
+  // check in the first place.
+  if (pageUrl === null) return 'no-url'
+
+  const { declared, self } = origins
+  const origin = normaliseOrigin(pageUrl)
+
+  // **The www rule applies to what the owner declared, and `self` is matched exactly.**
+  // `resolveOrigin` makes the argument for this deployment's own origin and it is an
+  // equality argument — "the request's own address matched its own address" — which does
+  // not survive being widened to a second host nobody routed here. Two comparisons rather
+  // than one list, so this file cannot say one thing about `self` in one function and the
+  // other thing two functions down.
+  if (matchOrigin(origin, self === null ? [] : [self]) !== null) return null
+  if (matchDeclaredOrigin(origin, declared) !== null) return null
+
+  return declared.length === 0 ? 'nothing-declared' : 'undeclared-origin'
 }
 
 /**
@@ -324,6 +508,13 @@ export async function resolveOrigin(db: D1Database, request: Request): Promise<O
  * curl, the importer and the v1.1 build-time renderer while stopping no attack,
  * since anything that can omit the header was never subject to CORS in the first
  * place.
+ *
+ * **That is still true, and it is no longer the whole story.** What such a caller is held
+ * to instead is `submittedUrlRefusal`: it may omit the header, and it may not claim to be
+ * on an address the owner never declared. An importer and a build-time renderer both carry
+ * URLs from the owner's own site, so both land inside that rule rather than needing an
+ * exemption from it — a Disqus export of a domain the owner has since left is the case to
+ * think about when #15 is built, and the answer there is a declaration, not a bypass.
  * Enforced by test/worker/read/route.test.ts.
  */
 export function isUnlistedBrowserOrigin(decision: OriginDecision): boolean {
@@ -377,6 +568,30 @@ export function unlistedOriginResponse(): Response {
     },
   )
 }
+
+/**
+ * The refusal for a comment whose reported address is not one the owner declared (#224).
+ *
+ * **One answer for all three reasons, and that is the deliberate part.** Which check fired
+ * — nothing declared, the wrong address, no address at all — goes to the log, where the
+ * audience is the site owner. Putting it in the body would report this deployment's
+ * configuration state to anyone willing to post a comment, which is the readout #145 took
+ * off `/` for the same reason.
+ *
+ * It names the site address rather than the allowlist, because that is the one action the
+ * dashboard's notice names too and the one that also lets a browser on that site through
+ * `resolveOrigin`. The allowlist is named second for an owner who has one.
+ *
+ * A message rather than a `Response`, unlike the two refusals above it: this one is
+ * returned by the submission pipeline, which owns no HTTP, and src/submit/route.ts maps
+ * the outcome onto the 403 and the #98 headers that every other answer on that path gets.
+ * Enforced by test/worker/cors.test.ts and test/worker/submit/declared-origin.test.ts.
+ */
+export const UNDECLARED_URL_MESSAGE =
+  'This site is not accepting comments from that address. ' +
+  'Site owner: set your site’s address on the Setup tab of your Charcha dashboard at ' +
+  '/admin, or add the address to Allowed origins. That is a Charcha setting, not ' +
+  'Turnstile’s hostname list.'
 
 /**
  * The preflight answer for `OPTIONS` on a public endpoint.

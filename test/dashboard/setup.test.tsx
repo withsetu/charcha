@@ -134,6 +134,7 @@ describe('the tab is state, action and link, not a textbook (#216)', () => {
    * because slack is what the last cut left and what grew back into it.
    */
   const BUDGET_UNCONFIGURED: Record<string, number> = {
+    'No comments are being accepted': 1,
     'Dashboard password': 2,
     'Moderation policy': 5,
     'Turnstile bot check': 3,
@@ -171,7 +172,7 @@ describe('the tab is state, action and link, not a textbook (#216)', () => {
    * The figures include field hints and radio-option descriptions, which are control copy
    * rather than prose: eight of the configured sixteen are those.
    */
-  const TOTAL_UNCONFIGURED = 23
+  const TOTAL_UNCONFIGURED = 24
   const TOTAL_CONFIGURED = 16
 
   function totalParagraphs(): number {
@@ -334,6 +335,7 @@ describe('the tab is state, action and link, not a textbook (#216)', () => {
       'Dashboard password',
       'Email notifications',
       'Moderation policy',
+      'No comments are being accepted',
       'Per-commenter rate limiting',
       'Spam classifier',
       'Third-party spam service',
@@ -450,6 +452,9 @@ describe('the spam classifier, which trains itself and says nothing until it can
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
     ).toEqual([
+      // The #224 notice leads whenever no address has been declared, which is what this
+      // fixture's settings body says.
+      'No comments are being accepted',
       'Moderation policy',
       'Turnstile bot check',
       'Email notifications',
@@ -980,6 +985,9 @@ describe('the dashboard password, when it is shorter than the floor (#120)', () 
     await screen.findByText('Dashboard password')
     const headings = screen.getAllByRole('heading', { level: 2 })
     expect(headings.map((heading) => heading.textContent)).toEqual([
+      // Only the #224 notice outranks it, and only while this deployment is refusing
+      // every comment.
+      'No comments are being accepted',
       'Dashboard password',
       'Moderation policy',
       'Turnstile bot check',
@@ -1107,6 +1115,9 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
     ).toEqual([
+      // The #224 notice leads whenever no address has been declared, which is what this
+      // fixture's settings body says.
+      'No comments are being accepted',
       'Moderation policy',
       'Turnstile bot check',
       'Email notifications',
@@ -1230,6 +1241,95 @@ describe('Turnstile, which this tab recommends rather than merely lists (#174)',
     await screen.findByText('Turnstile bot check')
     expect(panelText()).toContain('data-turnstile-sitekey')
     expect(panelText()).toContain('Set both or neither')
+  })
+})
+
+describe('the notice that says no comments are being accepted (#224)', () => {
+  /** The heading, which is the state; the alert below it is the action. */
+  const HEADING = 'No comments are being accepted'
+
+  it('is the first thing on the tab when no address has been declared', async () => {
+    // Above the short-password warning, deliberately: a guessable credential is a risk, and
+    // this is a deployment losing every comment right now, invisibly — the queue just stays
+    // empty. Position is the only prominence a tab of equal sections has.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    await screen.findByText(HEADING)
+    const panel = screen.getByText(HEADING).closest('div.space-y-4')
+    expect(panel?.firstElementChild?.textContent).toContain(HEADING)
+  })
+
+  it('names the one action, and links to what is accepted', async () => {
+    answering(() => json(200, report()))
+    mount()
+
+    const section = (await screen.findByText(HEADING)).closest('section') as HTMLElement
+    expect(section.textContent).toContain('Set your site’s address')
+    expect(section.textContent).toContain('every comment is being refused')
+    expect(within(section).getByRole('link', { name: /Which addresses are accepted/ })).toBeTruthy()
+  })
+
+  it('is the loudest thing on the screen, not one line among ten', async () => {
+    // The register the short-password warning uses, one step up: a destructive alert with
+    // its own badge. Asserted through the rendered attributes rather than class names, so
+    // this survives a restyle but not a demotion to an ordinary paragraph.
+    answering(() => json(200, report({}, true)))
+    mount()
+
+    const section = (await screen.findByText(HEADING)).closest('section') as HTMLElement
+    expect(section.querySelector('[data-slot="alert"]')?.className).toContain('destructive')
+    expect(section.querySelector('[data-variant="destructive"]')).toBeTruthy()
+  })
+
+  it('disappears completely once the site address is saved (#158 — no nagging)', async () => {
+    answering(
+      () => json(200, report({}, true)),
+      () => json(200, settingsBody({ siteUrl: 'https://maya.build' })),
+    )
+    mount()
+
+    await screen.findByText('Dashboard password')
+    expect(screen.queryByText(HEADING)).toBeNull()
+  })
+
+  it('disappears when an origin is listed instead', async () => {
+    answering(
+      () => json(200, report()),
+      () => json(200, settingsBody({ allowedOrigins: ['https://maya.build'] })),
+    )
+    mount()
+
+    await screen.findByText('Allowed origins')
+    expect(screen.queryByText(HEADING)).toBeNull()
+  })
+
+  it('does not fire on a deployment still served by the deprecated site-address secret', async () => {
+    // The field is empty because the dashboard will not print a secret's value (#207), and
+    // that deployment is accepting comments perfectly well. A warning here would be the
+    // loudest false alarm on the tab.
+    answering(
+      () => json(200, report()),
+      () => json(200, settingsBody({ siteUrl: '', fromDeprecatedSecrets: ['site_url'] })),
+    )
+    mount()
+
+    await screen.findByText('Allowed origins')
+    expect(screen.queryByText(HEADING)).toBeNull()
+  })
+
+  it('does not claim anything while the settings read is still in flight', async () => {
+    // An unresolved read is not "nothing is declared". Announcing a total outage from a
+    // loading state would be a false alarm on every page load.
+    stubFetch((call) => {
+      if (call.path === '/admin/api/setup') return json(200, report())
+      if (call.path === '/admin/api/settings') return apiError(500, 'UNAVAILABLE', 'No.')
+      return unhandled(call)
+    })
+    mount()
+
+    await screen.findByText('Could not read the allowed origins')
+    expect(screen.queryByText(HEADING)).toBeNull()
   })
 })
 
