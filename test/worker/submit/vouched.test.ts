@@ -64,6 +64,8 @@ async function post(options: {
         headers: { 'cf-connecting-ip': '203.0.113.9' },
       }),
       now: t0,
+      // #224: the address this submission reports, declared, as the route derives it.
+      declaredOrigins: ['https://maya.build'],
       moderationPolicy,
       // Passed by default, so the identity the returning-commenter path needs actually
       // exists and the tests below distinguish "not trusted" from "not identifiable".

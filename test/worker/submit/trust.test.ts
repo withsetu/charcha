@@ -14,7 +14,7 @@
 import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { MODERATION_POLICY_SETTING, writeSetting } from '../../../src/db'
-import { readSiteSettings } from '../../../src/settings'
+import { SITE_URL_SETTING, declaredOrigins, readSiteSettings } from '../../../src/settings'
 import { runSubmission } from '../../../src/submit/pipeline'
 import { allowAllSpamCheck } from '../../../src/submit/spam'
 import type { SpamCheck, SpamVerdict } from '../../../src/submit/spam'
@@ -60,7 +60,7 @@ async function post(options: PostOptions = {}) {
   bodyCounter += 1
   const email = options.email === undefined ? REGULAR : options.email
   const database = options.db ?? db
-  const { moderationPolicy } = await readSiteSettings(database, {})
+  const settings = await readSiteSettings(database, {})
   return runSubmission(
     {
       authorName: 'Rahul Kanwar',
@@ -73,7 +73,12 @@ async function post(options: PostOptions = {}) {
       spamCheck: options.spamCheck ?? allowAllSpamCheck,
       request: requestFrom(options.from ?? HER_ADDRESS),
       now: t0,
-      moderationPolicy,
+      moderationPolicy: settings.moderationPolicy,
+      // From the same read, exactly as src/submit/route.ts derives it (#224). The URL these
+      // submissions report is `https://maya.build/...`, so the file's `beforeEach` declares
+      // that address — an undeclared one is refused before the policy is ever consulted, and
+      // this suite is about the policy.
+      declaredOrigins: declaredOrigins(settings),
       ipSecret: IP_SECRET,
     },
   )
@@ -102,6 +107,8 @@ beforeEach(async () => {
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
   await db.exec('DELETE FROM settings')
+  // The one row every submission below needs to be accepted at all (#224).
+  await writeSetting(db, SITE_URL_SETTING, 'https://maya.build', t0)
 })
 
 describe('hold-all, which is what a deployment that has changed nothing does', () => {
@@ -276,6 +283,7 @@ describe('what the request body cannot do', () => {
       spamCheck: allowAllSpamCheck,
       request: requestFrom(HER_ADDRESS),
       now: t0,
+      declaredOrigins: ['https://maya.build'],
       ipSecret: IP_SECRET,
     })
 
@@ -289,6 +297,7 @@ describe('what the request body cannot do', () => {
       spamCheck: allowAllSpamCheck,
       request: requestFrom(HER_ADDRESS),
       now: t0,
+      declaredOrigins: ['https://maya.build'],
       ipSecret: IP_SECRET,
     })
 
@@ -307,6 +316,7 @@ describe('what the request body cannot do', () => {
       spamCheck: allowAllSpamCheck,
       request: requestFrom(HER_ADDRESS),
       now: t0,
+      declaredOrigins: ['https://maya.build'],
       ipSecret: IP_SECRET,
     })
 
@@ -319,6 +329,7 @@ describe('what the request body cannot do', () => {
       spamCheck: allowAllSpamCheck,
       request: requestFrom(HER_ADDRESS),
       now: t0,
+      declaredOrigins: ['https://maya.build'],
       ipSecret: IP_SECRET,
     })
 
@@ -338,6 +349,7 @@ describe('a deployment with no IP_HASH_SECRET', () => {
       spamCheck: allowAllSpamCheck,
       request: requestFrom(HER_ADDRESS),
       now: t0,
+      declaredOrigins: ['https://maya.build'],
     }
     const comment = {
       authorName: 'Rahul Kanwar',

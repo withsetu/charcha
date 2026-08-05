@@ -251,21 +251,31 @@ describe('the link to the page a comment was left on (#203)', () => {
   })
 
   it('points at the owner’s own origin when the comment reported somebody else’s', async () => {
-    // **The kill-shot for #203.** `derivePageKey` drops the origin, so a comment posted
-    // from `https://evil.example/notes/leaving` lands on the owner's thread and writes
-    // that origin into `threads.page_url`. A card built from the stored URL would put an
-    // attacker's address one click from the buttons that publish comments. Driven through
-    // the real submission path rather than seeded, so the attacker's URL travels the route
-    // it would actually travel.
+    // **The kill-shot for #203.** `derivePageKey` drops the origin, so a comment whose
+    // reported URL is `https://evil.example/notes/leaving` lands on the owner's thread and
+    // writes that origin into `threads.page_url`. A card built from the stored URL would
+    // put an attacker's address one click from the buttons that publish comments.
+    //
+    // **Seeded rather than submitted, and #224 is why.** The submission path now refuses a
+    // URL on an address the owner never declared, so it can no longer *produce* this row —
+    // and a test that drove the route would now be asserting a refusal, not a permalink.
+    // What it cannot do is unwrite the rows a deployment already has: every thread stored
+    // before that check exists with whatever origin was reported, and this endpoint reads
+    // them. Same argument as the seeded case above it: a row can predate a validator.
     await siteIs('https://maya.build')
-    await runSubmission(
-      {
-        authorName: 'Rahul Kanwar',
-        body: 'The part people underestimate is the export.',
-        url: 'https://evil.example/notes/leaving',
-      },
-      { db, spamCheck: allowAllSpamCheck, request: new Request(`${origin}/comments`), now: t0 },
-    )
+    const attacked = await getOrCreateThread(db, {
+      pageKey: '/notes/leaving',
+      pageUrl: 'https://evil.example/notes/leaving',
+      title: null,
+      now: t0,
+    })
+    await insertComment(db, {
+      threadId: attacked.id,
+      authorName: 'Rahul Kanwar',
+      body: 'The part people underestimate is the export.',
+      bodyHash: 'hleaving',
+      now: t0,
+    })
 
     const response = await get('/admin/api/queue')
     const text = await response.text()
@@ -328,7 +338,16 @@ describe('the link to the page a comment was left on (#203)', () => {
         body: 'a comment from a doubled slash',
         url: 'https://anything.example//evil.example/pwned',
       },
-      { db, spamCheck: allowAllSpamCheck, request: new Request(`${origin}/comments`), now: t0 },
+      {
+        db,
+        spamCheck: allowAllSpamCheck,
+        request: new Request(`${origin}/comments`),
+        now: t0,
+        // Declared, so the submission is accepted and the *path* collapse is what this
+        // test is left measuring (#224). The address being somebody else's is the case
+        // above, which no longer travels this route at all.
+        declaredOrigins: ['https://anything.example'],
+      },
     )
 
     const body = await (await get('/admin/api/queue')).json<QueueBody>()

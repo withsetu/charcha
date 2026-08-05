@@ -23,7 +23,7 @@ import { env, exports } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { writeSetting } from '../../../src/db'
 import { RESEND_SEND_URL } from '../../../src/notify/resend'
-import { NOTIFY_TO_SETTING } from '../../../src/settings'
+import { NOTIFY_TO_SETTING, SITE_URL_SETTING } from '../../../src/settings'
 import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
 import { reportingDefer } from '../../../src/submit/route'
 import type { WaitUntilContext } from '../../../src/submit/route'
@@ -125,6 +125,10 @@ beforeEach(async () => {
   // configuration the next one did not choose — the same reason the two tables above are
   // cleared rather than trusted to be empty.
   await db.exec('DELETE FROM settings')
+  // The address every submission below reports, declared — without it the route refuses
+  // them before the notifier is reached at all (#224). One row, and it costs no statement:
+  // it is in the same batched settings read the notification addresses come from.
+  await writeSetting(db, SITE_URL_SETTING, 'https://maya.build', 1_753_300_000)
 })
 
 afterEach(() => {

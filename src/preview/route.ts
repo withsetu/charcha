@@ -27,6 +27,7 @@ import {
   withCors,
 } from '../cors'
 import { renderMarkdown } from '../render'
+import { readDeclaredOrigins } from '../settings'
 import { withFragmentHeaders } from '../response-headers'
 import { readCappedText } from '../request-body'
 import { parseCommentBody } from '../submit/schema'

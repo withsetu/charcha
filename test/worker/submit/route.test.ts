@@ -1,6 +1,8 @@
 import { env, exports } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { writeSetting } from '../../../src/db'
 import { MAX_BODY_BYTES } from '../../../src/request-body'
+import { SITE_URL_SETTING } from '../../../src/settings'
 import { renderResult } from '../../../src/submit/route'
 
 const db = env.DB
@@ -23,6 +25,11 @@ const valid = JSON.stringify({
 beforeEach(async () => {
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
+  await db.exec('DELETE FROM settings')
+  // Every submission below reports a page on this site, and a deployment that has not been
+  // told the site is its own refuses them all (#224). What that refusal does on its own is
+  // test/worker/submit/declared-origin.test.ts.
+  await writeSetting(db, SITE_URL_SETTING, 'https://maya.build', 1_753_300_000)
 })
 
 describe('renderResult — outcome to HTTP, mapped deliberately', () => {

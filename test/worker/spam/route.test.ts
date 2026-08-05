@@ -4,6 +4,8 @@
 
 import { env, exports } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { writeSetting } from '../../../src/db'
+import { SITE_URL_SETTING } from '../../../src/settings'
 import { ELAPSED_FIELD, HONEYPOT_FIELD } from '../../../src/spam/fields'
 
 const db = env.DB
@@ -32,6 +34,10 @@ async function countComments() {
 beforeEach(async () => {
   await db.exec('DELETE FROM comments')
   await db.exec('DELETE FROM threads')
+  await db.exec('DELETE FROM settings')
+  // The address these submissions report, declared — the layers below are only reached
+  // for a comment this deployment takes comments for at all (#224).
+  await writeSetting(db, SITE_URL_SETTING, 'https://maya.build', 1_753_300_000)
 })
 
 describe('POST /comments — the spam layers are actually wired into the Worker', () => {
