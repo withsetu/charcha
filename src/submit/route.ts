@@ -9,6 +9,7 @@
 import type { Context } from 'hono'
 import { createNotifier } from '../notify'
 import { readCappedText } from '../request-body'
+import { declaredOrigins } from '../settings'
 import type { SiteSettings } from '../settings'
 import { withFragmentHeaders } from '../response-headers'
 // Generic isolate-scoped observability, despite the path — see src/spam/log.ts. Its
@@ -196,6 +197,11 @@ async function submitAnswer(
     // The moderation policy, from the same read the notifier's addresses came from
     // (#207) — see SubmitRouteConfig.settings.
     moderationPolicy: config.settings?.moderationPolicy,
+    // The addresses the owner declared as theirs (#224), from that same read. Derived
+    // here rather than in the pipeline so the pipeline takes a list and nothing else, and
+    // an absent `settings` — an unconfigured deployment, or a caller that did not read —
+    // resolves to none, which refuses. Fail closed, card rule 5.
+    declaredOrigins: config.settings === undefined ? [] : declaredOrigins(config.settings),
     // Email notifications (#125). Both halves are assembled here rather than passed
     // in as config, unlike `spamCheck`: the key is on the Context and the `waitUntil`
     // exists nowhere else, and neither is a seam a caller replaces. Since #207 the two

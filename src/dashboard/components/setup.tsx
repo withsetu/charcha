@@ -27,6 +27,7 @@ import type { Settings } from '../api'
 import { readSettings, readSetup } from '../api'
 import { type Load, ReadFailed, SectionSkeleton, useLoad } from './setup/primitives'
 import { ClassifierSection } from './setup/sections/classifier'
+import { DeclaredAddressSection, hasDeclaredAddress } from './setup/sections/declared'
 import { EmailSection } from './setup/sections/email'
 import { IpHashSection } from './setup/sections/ip-hash'
 import { ModerationSection } from './setup/sections/moderation'
@@ -80,9 +81,20 @@ export function Setup({
     // which parts of the screen were editable, which is a paragraph the badges and the
     // controls under them say by being there (#216).
     <div className="space-y-4">
-      {/* The password keeps the top when it has something to say: a credential every
-          destructive action goes through outranks a policy. Lifted out of the `ready`
-          block so the moderation policy does not wait on a read it does not use. */}
+      {/* **Above the password, and that is the only ordering claim on this tab that is
+          about severity rather than about kind.** A short password is a credential that
+          could be guessed; no declared address is a deployment that is refusing every
+          comment right now, and the owner cannot see the refusals — the queue simply stays
+          empty. It renders on the settings read alone, so a failed `setup` read cannot
+          hide it. */}
+      {settings.kind === 'ready' && !hasDeclaredAddress(settings.value) && (
+        <DeclaredAddressSection />
+      )}
+
+      {/* The password keeps the top of what is left when it has something to say: a
+          credential every destructive action goes through outranks a policy. Lifted out of
+          the `ready` block so the moderation policy does not wait on a read it does not
+          use. */}
       {secrets.kind === 'ready' && secrets.value.shortPassword && <DashboardPasswordSection />}
 
       {/* Then the moderation policy, above the optional features because it is not one of

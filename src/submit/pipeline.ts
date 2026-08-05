@@ -8,6 +8,8 @@
 // against a real D1 binding.
 // Enforced by test/worker/submit/pipeline.test.ts.
 
+import { UNDECLARED_URL_MESSAGE, selfOrigin, submittedUrlRefusal } from '../cors'
+import type { SubmittedUrlRefusal } from '../cors'
 import type { CommentStrings } from '../render'
 import { renderComments } from '../render'
 import { getOrCreateThread, insertComment, isReplyTarget, readCommenterTrust } from '../db'
@@ -16,6 +18,8 @@ import type { ModerationPolicy } from '../moderation/policy'
 import type { Notifier } from '../notify'
 import { derivePageKey, messageForPageKeyRejection } from '../page-key'
 import { clientIp, hashIp, usableIpSecret } from '../spam/ip'
+// Generic isolate-scoped observability, despite the path — see src/spam/log.ts.
+import { announceOnce } from '../spam/log'
 import { computeBodyHash } from './hash'
 import { parseComment } from './schema'
 import type { SpamCheck, SpamVerdict } from './spam'
@@ -48,6 +52,19 @@ export interface SubmitDeps {
    * Enforced by test/worker/submit/trust.test.ts.
    */
   moderationPolicy?: ModerationPolicy
+  /**
+   * Every address the owner has declared as theirs (#224), read by the caller from the
+   * same batched settings statement the policy comes from.
+   *
+   * **Absent means none, and none means no comment is accepted for any address but this
+   * deployment's own.** That is the fail-closed direction and it is the whole point of the
+   * change: a caller that forgot to resolve this refuses comments loudly rather than
+   * accepting a stranger's claim about which site they are on. What makes it survivable is
+   * the notice the Setup tab carries while it is true — see
+   * src/dashboard/components/setup/sections/declared.tsx.
+   * Enforced by test/worker/submit/declared-origin.test.ts.
+   */
+  declaredOrigins?: readonly string[]
   strings?: CommentStrings
   /**
    * The HMAC key for `comments.ip_hash`. Absent means no hash is stored at all,
@@ -120,6 +137,22 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
     significantParams: deps.significantParams,
   })
   if (!key.ok) return { outcome: 'invalid', message: messageForPageKeyRejection(key.reason) }
+
+  // **The address the comment claims to be from has to be one the owner declared (#224).**
+  // It runs here, on the canonical URL `derivePageKey` just produced rather than on the raw
+  // field, and before the spam seam — so a refused submission costs no subrequest, no
+  // Turnstile verification and no third-party check, exactly as the ordering in
+  // src/spam/index.ts argues for its own layers. It is not one of those layers: they judge
+  // a comment, and this decides whether this deployment takes comments for that site at
+  // all.
+  const refusal = submittedUrlRefusal(key.pageUrl, {
+    declared: deps.declaredOrigins ?? [],
+    self: selfOrigin(deps.request),
+  })
+  if (refusal !== null) {
+    logUndeclaredUrl(refusal, key.pageKey)
+    return { outcome: 'rejected', message: UNDECLARED_URL_MESSAGE }
+  }
 
   // The spam seam runs before any write, so a rejected comment costs nothing —
   // no thread row, no comment row. #8 implements the layers; the default allows.
@@ -206,6 +239,45 @@ export async function runSubmission(input: unknown, deps: SubmitDeps): Promise<S
   return stored.status === 'approved'
     ? { outcome: 'published', html }
     : { outcome: 'pending', html }
+}
+
+/**
+ * What the owner sees when a submission was refused for its address (#224).
+ *
+ * **The reason token is the whole reason this line exists.** The response says one thing
+ * for all three cases on purpose, so without a log there is no way to tell a deployment
+ * nobody has configured from one being probed — which is the observability rule CLAUDE.md
+ * states for the spam pipeline, applied to the check that sits in front of it. The token is
+ * namespaced the way `turnstile: no-token-unverified-deployment` is.
+ *
+ * `pageKey` and nothing else, matching `logVerdict` in src/spam/log.ts: no body, no author,
+ * no email, no address and no address hash. A log line outlives the retention sweep (#19).
+ *
+ * `nothing-declared` announces itself once per isolate as well, because that one is a fact
+ * about the deployment rather than about a comment, and it is the state an owner most needs
+ * a sentence about. The per-comment line still fires every time — a refusal is rare on a
+ * configured deployment, and on an unconfigured one it is the only trace of what was lost.
+ * Enforced by test/worker/submit/declared-origin.test.ts.
+ */
+function logUndeclaredUrl(reason: SubmittedUrlRefusal, pageKey: string): void {
+  console.log(
+    JSON.stringify({
+      event: 'submitted_url_refused',
+      check: 'declared-origin',
+      reason,
+      pageKey,
+    }),
+  )
+
+  if (reason === 'nothing-declared') {
+    announceOnce('submit-no-declared-origins', {
+      event: 'settings_config',
+      setting: 'site_url',
+      problem:
+        'this deployment has declared no addresses of its own, so every comment is being refused',
+      fix: 'save your site’s address on the Setup tab of your Charcha dashboard at /admin',
+    })
+  }
 }
 
 /**
