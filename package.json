@@ -82,7 +82,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
-    "happy-dom": "^20.11.1",
+    "happy-dom": "^21.0.4",
     "lucide-react": "^1.26.0",
     "prettier": "^3.9.6",
     "radix-ui": "^1.6.7",
